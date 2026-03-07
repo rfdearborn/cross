@@ -1,7 +1,7 @@
 [project]
 name = "cross"
 version = "0.1.0"
-description = "Agent monitoring proxy — intercepts AI agent API traffic for monitoring, relay, and gating"
+description = "Agent monitoring proxy and session manager — PTY wrapping, network interception, Slack relay, and gating"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.0",
@@ -15,7 +15,7 @@ dev = ["mitmproxy>=12.0.0"]
 slack = ["slack-sdk>=3.0.0"]
 
 [project.scripts]
-cross = "cross.__main__:main"
+cross = "cross.cli:main"
 
 [build-system]
 requires = ["hatchling"]
