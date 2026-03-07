@@ -6,18 +6,14 @@ import json
 import logging
 
 import httpx
-from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
-from starlette.routing import Route
 
 from cross.config import settings
 from cross.events import EventBus, RequestEvent, ErrorEvent
 from cross.sse import SSEParser
 
 logger = logging.getLogger("cross.proxy")
-
-event_bus = EventBus()
 
 _client: httpx.AsyncClient | None = None
 
@@ -54,14 +50,23 @@ def _extract_request_event(method: str, path: str, body: bytes | None) -> Reques
                 if isinstance(content, str):
                     event.last_message_preview = content[:200]
                 elif isinstance(content, list):
-                    types = [b.get("type", "?") for b in content]
-                    event.last_message_preview = f"[{', '.join(types)}]"
+                    # Extract the user's actual text, skipping system-injected blocks
+                    for b in content:
+                        if b.get("type") == "text":
+                            text = b.get("text", "")
+                            if text and not text.startswith("<system-reminder>"):
+                                event.last_message_preview = text[:200]
+                                break
+                    if not event.last_message_preview:
+                        types = [b.get("type", "?") for b in content]
+                        event.last_message_preview = f"[{', '.join(types)}]"
         except (json.JSONDecodeError, KeyError):
             pass
     return event
 
 
-async def _proxy(request: Request) -> Response:
+async def handle_proxy_request(request: Request, event_bus: EventBus) -> Response:
+    """Handle a proxy request, publishing events to the given EventBus."""
     body = await request.body()
     path = request.url.path
     if request.url.query:
@@ -87,13 +92,14 @@ async def _proxy(request: Request) -> Response:
             pass
 
     if is_streaming:
-        return await _proxy_streaming(client, request.method, path, headers, body)
+        return await _proxy_streaming(client, event_bus, request.method, path, headers, body)
     else:
-        return await _proxy_simple(client, request.method, path, headers, body)
+        return await _proxy_simple(client, event_bus, request.method, path, headers, body)
 
 
 async def _proxy_simple(
     client: httpx.AsyncClient,
+    event_bus: EventBus,
     method: str,
     path: str,
     headers: dict,
@@ -101,14 +107,12 @@ async def _proxy_simple(
 ) -> Response:
     resp = await client.request(method, path, headers=headers, content=body)
 
-    # Publish error events
     if resp.status_code >= 400:
         await event_bus.publish(ErrorEvent(
             status_code=resp.status_code,
             body=resp.text[:500],
         ))
 
-    # Forward response headers, excluding transfer-encoding (starlette handles it)
     resp_headers = dict(resp.headers)
     resp_headers.pop("transfer-encoding", None)
     resp_headers.pop("content-encoding", None)
@@ -122,6 +126,7 @@ async def _proxy_simple(
 
 async def _proxy_streaming(
     client: httpx.AsyncClient,
+    event_bus: EventBus,
     method: str,
     path: str,
     headers: dict,
@@ -137,22 +142,17 @@ async def _proxy_streaming(
     async def generate():
         try:
             async for line in upstream.aiter_lines():
-                # Parse SSE events and publish to bus
                 events = parser.feed_line(line)
                 for ev in events:
                     await event_bus.publish(ev)
-
-                # Re-emit the line to the client
                 yield line + "\n"
 
-            # Feed a final empty line to flush any pending event
             events = parser.feed_line("")
             for ev in events:
                 await event_bus.publish(ev)
         finally:
             await upstream.aclose()
 
-    # Forward response headers
     resp_headers = dict(upstream.headers)
     resp_headers.pop("transfer-encoding", None)
     resp_headers.pop("content-encoding", None)
@@ -164,22 +164,6 @@ async def _proxy_streaming(
     )
 
 
-async def on_startup():
-    # Import and register plugins
-    from cross.plugins.logger import LoggerPlugin
-    plugin = LoggerPlugin()
-    event_bus.subscribe(plugin.handle)
-    logger.info(f"Cross proxy starting on {settings.listen_host}:{settings.listen_port}")
-    logger.info(f"Forwarding to {settings.anthropic_base_url}")
-
-
-async def on_shutdown():
+async def shutdown():
     if _client:
         await _client.aclose()
-
-
-app = Starlette(
-    routes=[Route("/{path:path}", _proxy, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])],
-    on_startup=[on_startup],
-    on_shutdown=[on_shutdown],
-)

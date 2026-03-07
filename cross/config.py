@@ -7,7 +7,12 @@ class Settings(BaseSettings):
     listen_port: int = 8080
     log_file: str = "data/cross.log"
 
-    model_config = {"env_prefix": "CROSS_"}
+    # Slack
+    slack_bot_token: str = ""
+    slack_app_token: str = ""
+    slack_channel_prefix: str = ""  # optional org prefix
+
+    model_config = {"env_prefix": "CROSS_", "env_file": ".env"}
 
 
 settings = Settings()
