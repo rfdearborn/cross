@@ -1,0 +1,10 @@
+cross.log
+data/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+dist/
+build/
+.env
+.tmp/
