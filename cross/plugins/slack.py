@@ -26,10 +26,11 @@ logger = logging.getLogger("cross.plugins.slack")
 class SlackPlugin:
     """Manages Slack channels/threads and relays agent events."""
 
-    def __init__(self, inject_callback=None, event_loop=None):
+    def __init__(self, inject_callback=None, spawn_callback=None, event_loop=None):
         self._web = WebClient(token=settings.slack_bot_token)
         self._socket: SocketModeClient | None = None
         self._event_loop = event_loop
+        self._spawn_callback = spawn_callback
         # channel name -> channel ID
         self._channels: dict[str, str] = {}
         # session_id -> (channel_id, thread_ts)
@@ -50,6 +51,8 @@ class SlackPlugin:
         self._permission_pending: dict[str, tuple[str, str]] = {}
         # Track messages injected from Slack to suppress proxy echo
         self._injected_texts: dict[str, str] = {}  # session_id -> last injected text
+        # Slack-initiated sessions: project -> (channel_id, message_ts) for threading
+        self._pending_thread_ts: dict[str, tuple[str, str]] = {}
 
     def start(self):
         """Connect to Slack via Socket Mode."""
@@ -87,12 +90,23 @@ class SlackPlugin:
         with self._lock:
             self._sessions[session_id] = data
 
-        channel_id = self._ensure_channel(project)
-        resp = self._web.chat_postMessage(
-            channel=channel_id,
-            text=f"*{agent}* session started in `{project}` (`{cwd}`)",
-        )
-        thread_ts = resp["ts"]
+        # Check if this is a Slack-initiated session (thread under the @mention)
+        pending = self._pending_thread_ts.pop(project, None)
+        if pending:
+            channel_id, thread_ts = pending
+            self._web.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=f"*{agent}* session started in `{project}` (`{cwd}`)",
+            )
+        else:
+            channel_id = self._ensure_channel(project)
+            resp = self._web.chat_postMessage(
+                channel=channel_id,
+                text=f"*{agent}* session started in `{project}` (`{cwd}`)",
+            )
+            thread_ts = resp["ts"]
+
         with self._lock:
             self._threads[session_id] = (channel_id, thread_ts)
 
@@ -310,13 +324,43 @@ class SlackPlugin:
         if event.get("bot_id"):
             return
 
-        # Only handle threaded messages (replies)
-        thread_ts = event.get("thread_ts")
-        if not thread_ts:
-            return
-
         text = event.get("text", "").strip()
         if not text:
+            return
+
+        thread_ts = event.get("thread_ts")
+        channel_id = event.get("channel")
+
+        # Non-threaded message mentioning the bot → spawn new session
+        if not thread_ts:
+            if not self._spawn_callback or not self._bot_user_id:
+                return
+            # Require @mention of the bot
+            if f"<@{self._bot_user_id}>" not in event.get("text", ""):
+                return
+            # Strip the mention from the message
+            text = text.replace(f"<@{self._bot_user_id}>", "").strip()
+            if not text:
+                return
+            # Look up project from channel
+            project = self._project_for_channel(channel_id)
+            if not project:
+                return
+            logger.info(f"Slack new session in {project}: {text[:100]}")
+            msg_ts = event.get("ts")
+            self._web.reactions_add(
+                channel=channel_id,
+                timestamp=msg_ts,
+                name="robot_face",
+            )
+            # Store thread info so session threads under the original message
+            self._pending_thread_ts[project] = (channel_id, msg_ts)
+            import asyncio
+            if self._event_loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._spawn_callback(project, text),
+                    self._event_loop,
+                )
             return
 
         # Find which session this thread belongs to
@@ -481,6 +525,36 @@ class SlackPlugin:
         except Exception as e:
             logger.warning(f"Error searching channels: {e}")
         return None
+
+    def _project_for_channel(self, channel_id: str) -> str | None:
+        """Reverse lookup: channel ID -> project name."""
+        name = None
+
+        # Check cache first
+        with self._lock:
+            for cached_name, cid in self._channels.items():
+                if cid == channel_id:
+                    name = cached_name
+                    break
+
+        # Cache miss — look up from Slack API
+        if not name:
+            try:
+                info = self._web.conversations_info(channel=channel_id)
+                name = info["channel"]["name"]
+                with self._lock:
+                    self._channels[name] = channel_id
+            except Exception as e:
+                logger.warning(f"Failed to look up channel {channel_id}: {e}")
+                return None
+
+        # Channel name is "{prefix}-cross-{project}" — extract project
+        parts = name.split("-")
+        try:
+            idx = parts.index("cross")
+            return "-".join(parts[idx + 1:])
+        except ValueError:
+            return None
 
     def _channel_name(self, project: str) -> str:
         """Generate channel name: {prefix}-cross-{project}."""
