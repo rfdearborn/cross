@@ -408,7 +408,7 @@ async def _proxy_streaming(
                         # Record for future context
                         _recent_tools.append({"name": tool_event.name, "input": tool_event.input})
 
-                        # Publish gate decision
+                        # Publish gate decision (include tool_input so sentinel can see blocked calls)
                         await event_bus.publish(
                             GateDecisionEvent(
                                 tool_use_id=tool_event.tool_use_id,
@@ -418,6 +418,7 @@ async def _proxy_streaming(
                                 rule_id=result.rule_id,
                                 evaluator=result.evaluator,
                                 confidence=result.confidence,
+                                tool_input=tool_event.input,
                             )
                         )
 

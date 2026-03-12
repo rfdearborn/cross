@@ -174,8 +174,11 @@ async def _proxy_handler(request: Request) -> Response:
 # --- App lifecycle ---
 
 
+_sentinel = None  # LLMSentinel instance, if configured
+
+
 async def on_startup():
-    global _slack, _gate_chain
+    global _slack, _gate_chain, _sentinel
 
     # Register logger plugin
     log_plugin = LoggerPlugin()
@@ -220,6 +223,34 @@ async def on_startup():
         _gate_chain = GateChain(gates=[gate], review_gate=review_gate, review_threshold=review_threshold)
         logger.info(f"Gating enabled with {len(gate.rules)} denylist rules")
 
+    # Set up LLM sentinel (async periodic reviewer)
+    if settings.llm_sentinel_enabled:
+        from cross.llm import LLMConfig, resolve_api_key
+        from cross.sentinels.llm_reviewer import LLMSentinel
+
+        sentinel_config = LLMConfig(
+            model=settings.llm_sentinel_model,
+            api_key=settings.llm_sentinel_api_key,
+            base_url=settings.llm_sentinel_base_url,
+            temperature=settings.llm_sentinel_temperature,
+            max_tokens=settings.llm_sentinel_max_tokens,
+            reasoning=settings.llm_sentinel_reasoning,
+        )
+        if resolve_api_key(sentinel_config):
+            _sentinel = LLMSentinel(
+                config=sentinel_config,
+                event_bus=event_bus,
+                interval_seconds=settings.llm_sentinel_interval_seconds,
+            )
+            event_bus.subscribe(_sentinel.observe)
+            _sentinel.start()
+            logger.info(
+                f"LLM sentinel active (model={settings.llm_sentinel_model}, "
+                f"interval={settings.llm_sentinel_interval_seconds}s)"
+            )
+        else:
+            logger.info("LLM sentinel enabled but no API key available — sentinel inactive")
+
     # Register Slack plugin
     if settings.slack_bot_token and settings.slack_app_token:
         from cross.plugins.slack import SlackPlugin
@@ -239,6 +270,8 @@ async def on_startup():
 
 
 async def on_shutdown():
+    if _sentinel:
+        _sentinel.stop()
     if _slack:
         _slack.stop()
     # Clean up LLM httpx client

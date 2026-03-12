@@ -11,9 +11,11 @@ from cross.config import settings
 from cross.events import (
     CrossEvent,
     ErrorEvent,
+    GateDecisionEvent,
     MessageDeltaEvent,
     MessageStartEvent,
     RequestEvent,
+    SentinelReviewEvent,
     TextEvent,
     ToolUseEvent,
 )
@@ -112,3 +114,33 @@ class LoggerPlugin:
                     }
                 )
                 logger.warning(f"  ERROR {event.status_code}: {event.body[:200]}")
+
+            case GateDecisionEvent():
+                self._write(
+                    {
+                        "type": "gate_decision",
+                        "tool_use_id": event.tool_use_id,
+                        "tool_name": event.tool_name,
+                        "action": event.action,
+                        "reason": event.reason,
+                        "rule_id": event.rule_id,
+                        "evaluator": event.evaluator,
+                    }
+                )
+                logger.info(f"  gate: {event.tool_name} → {event.action} [{event.evaluator}]")
+
+            case SentinelReviewEvent():
+                self._write(
+                    {
+                        "type": "sentinel_review",
+                        "action": event.action,
+                        "summary": event.summary,
+                        "concerns": event.concerns,
+                        "event_count": event.event_count,
+                        "evaluator": event.evaluator,
+                    }
+                )
+                if event.action in ("alert", "escalate", "halt_session"):
+                    logger.warning(f"  sentinel {event.action}: {event.concerns[:200]}")
+                else:
+                    logger.info(f"  sentinel {event.action}: {event.summary[:200]}")

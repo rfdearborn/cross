@@ -71,10 +71,29 @@ class GateDecisionEvent:
     rule_id: str = ""
     evaluator: str = ""
     confidence: float = 1.0
+    tool_input: dict[str, Any] | None = None  # included so sentinel can see what was blocked
+
+
+@dataclass
+class SentinelReviewEvent:
+    """Fired when the sentinel completes a periodic review."""
+
+    action: str  # "allow", "alert", "escalate", "halt_session"
+    summary: str = ""
+    concerns: str = ""
+    event_count: int = 0
+    evaluator: str = ""
 
 
 CrossEvent = (
-    RequestEvent | ToolUseEvent | TextEvent | MessageStartEvent | MessageDeltaEvent | ErrorEvent | GateDecisionEvent
+    RequestEvent
+    | ToolUseEvent
+    | TextEvent
+    | MessageStartEvent
+    | MessageDeltaEvent
+    | ErrorEvent
+    | GateDecisionEvent
+    | SentinelReviewEvent
 )
 
 EventHandler = Callable[[CrossEvent], Awaitable[None]]
