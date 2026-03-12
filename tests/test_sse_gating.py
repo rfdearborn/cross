@@ -11,17 +11,16 @@ Simulates realistic SSE streams and verifies:
 
 import json
 import time
-from unittest.mock import AsyncMock
 
 import pytest
 
 from cross.chain import GateChain
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
-from cross.events import EventBus, GateDecisionEvent, ToolUseEvent
-from cross.proxy import _is_tool_use_block_start, _blocked_tool_ids, _blocked_tool_timestamps
-
+from cross.events import ToolUseEvent
+from cross.proxy import _blocked_tool_ids, _blocked_tool_timestamps, _is_tool_use_block_start
 
 # --- Helpers to build SSE lines ---
+
 
 def _sse(event_type: str, data: dict) -> list[str]:
     """Build SSE lines for a single event (event + data + blank)."""
@@ -33,67 +32,92 @@ def _sse(event_type: str, data: dict) -> list[str]:
 
 
 def _message_start(msg_id: str = "msg_01", model: str = "claude-3") -> list[str]:
-    return _sse("message_start", {
-        "type": "message_start",
-        "message": {"id": msg_id, "model": model, "role": "assistant"},
-    })
+    return _sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {"id": msg_id, "model": model, "role": "assistant"},
+        },
+    )
 
 
 def _text_block_start(index: int = 0) -> list[str]:
-    return _sse("content_block_start", {
-        "type": "content_block_start",
-        "index": index,
-        "content_block": {"type": "text", "text": ""},
-    })
+    return _sse(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "text", "text": ""},
+        },
+    )
 
 
 def _text_delta(text: str, index: int = 0) -> list[str]:
-    return _sse("content_block_delta", {
-        "type": "content_block_delta",
-        "index": index,
-        "delta": {"type": "text_delta", "text": text},
-    })
+    return _sse(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": text},
+        },
+    )
 
 
 def _text_block_stop(index: int = 0) -> list[str]:
-    return _sse("content_block_stop", {
-        "type": "content_block_stop",
-        "index": index,
-    })
+    return _sse(
+        "content_block_stop",
+        {
+            "type": "content_block_stop",
+            "index": index,
+        },
+    )
 
 
 def _tool_block_start(index: int, tool_name: str, tool_id: str) -> list[str]:
-    return _sse("content_block_start", {
-        "type": "content_block_start",
-        "index": index,
-        "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name},
-    })
+    return _sse(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name},
+        },
+    )
 
 
 def _tool_input_delta(index: int, partial_json: str) -> list[str]:
-    return _sse("content_block_delta", {
-        "type": "content_block_delta",
-        "index": index,
-        "delta": {"type": "input_json_delta", "partial_json": partial_json},
-    })
+    return _sse(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": partial_json},
+        },
+    )
 
 
 def _tool_block_stop(index: int) -> list[str]:
-    return _sse("content_block_stop", {
-        "type": "content_block_stop",
-        "index": index,
-    })
+    return _sse(
+        "content_block_stop",
+        {
+            "type": "content_block_stop",
+            "index": index,
+        },
+    )
 
 
 def _message_delta(stop_reason: str = "end_turn") -> list[str]:
-    return _sse("message_delta", {
-        "type": "message_delta",
-        "delta": {"stop_reason": stop_reason},
-        "usage": {"output_tokens": 42},
-    })
+    return _sse(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason},
+            "usage": {"output_tokens": 42},
+        },
+    )
 
 
 # --- Test gates ---
+
 
 class AlwaysAllowGate(Gate):
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
@@ -102,6 +126,7 @@ class AlwaysAllowGate(Gate):
 
 class BlockBashGate(Gate):
     """Blocks any tool named 'Bash'."""
+
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
         if request.tool_name == "Bash":
             return EvaluationResponse(
@@ -114,6 +139,7 @@ class BlockBashGate(Gate):
 
 class RequestCapturingGate(Gate):
     """Captures gate requests for inspection."""
+
     def __init__(self):
         super().__init__(name="capturing")
         self.requests: list[GateRequest] = []
@@ -125,6 +151,7 @@ class RequestCapturingGate(Gate):
 
 # --- Simulation helper ---
 
+
 async def _simulate_sse_gating(
     sse_lines: list[str],
     gate_chain: GateChain,
@@ -135,10 +162,8 @@ async def _simulate_sse_gating(
     Returns the list of SSE lines that would be sent to the client.
     """
     from cross.sse import SSEParser
-    from cross.events import EventBus
 
     parser = SSEParser()
-    event_bus = EventBus()
     output_lines: list[str] = []
     buffer: list[str] = []
     buffering = False
@@ -177,8 +202,10 @@ async def _simulate_sse_gating(
                 result = await gate_chain.evaluate(gate_request)
 
                 if result.action == Action.BLOCK or any_blocked:
-                    reason = result.reason if result.action == Action.BLOCK else (
-                        "Preceding tool in same message was blocked"
+                    reason = (
+                        result.reason
+                        if result.action == Action.BLOCK
+                        else ("Preceding tool in same message was blocked")
                     )
                     _blocked_tool_ids[tool_event.tool_use_id] = reason
                     _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
@@ -198,13 +225,20 @@ async def _simulate_sse_gating(
 
 # --- Tests ---
 
+
 class TestIsToolUseBlockStart:
     def test_tool_use_start(self):
-        line = f'data: {json.dumps({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "t1", "name": "Bash"}})}'
+        data = {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "Bash"},
+        }
+        line = f"data: {json.dumps(data)}"
         assert _is_tool_use_block_start(line) is True
 
     def test_text_block_start(self):
-        line = f'data: {json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})}'
+        data = {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        line = f"data: {json.dumps(data)}"
         assert _is_tool_use_block_start(line) is False
 
     def test_non_data_line(self):
@@ -217,7 +251,7 @@ class TestIsToolUseBlockStart:
         assert _is_tool_use_block_start("") is False
 
     def test_content_block_delta(self):
-        line = f'data: {json.dumps({"type": "content_block_delta", "index": 1})}'
+        line = f"data: {json.dumps({'type': 'content_block_delta', 'index': 1})}"
         assert _is_tool_use_block_start(line) is False
 
 
@@ -265,7 +299,12 @@ class TestToolUseBuffering:
         output = await _simulate_sse_gating(lines, chain)
         # message_start (3 lines) + tool block (all flushed after allow) + message_delta (3 lines)
         # The tool_block_start is buffered so NOT in immediate output; it gets flushed as part of buffer
-        tool_lines = _tool_block_start(0, "Read", "toolu_read1") + _tool_input_delta(0, '{"file_path":') + _tool_input_delta(0, ' "/tmp/test.txt"}') + _tool_block_stop(0)
+        tool_lines = (
+            _tool_block_start(0, "Read", "toolu_read1")
+            + _tool_input_delta(0, '{"file_path":')
+            + _tool_input_delta(0, ' "/tmp/test.txt"}')
+            + _tool_block_stop(0)
+        )
         assert len(output) == len(_message_start()) + len(tool_lines) + len(_message_delta("tool_use"))
 
     @pytest.mark.anyio

@@ -8,7 +8,6 @@ import os
 import pty
 import select
 import signal
-import struct
 import sys
 import termios
 import tty
@@ -100,6 +99,7 @@ class PTYSession:
 
     def _install_sigwinch(self):
         """Forward terminal resize events to the PTY."""
+
         def handle_winsize(signum, frame):
             self._copy_winsize(sys.stdin.fileno(), self.master_fd)
             # Also send SIGWINCH to the child process group

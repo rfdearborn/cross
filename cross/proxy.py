@@ -18,7 +18,7 @@ from starlette.responses import Response, StreamingResponse
 from cross.chain import GateChain
 from cross.config import settings
 from cross.evaluator import Action, GateRequest
-from cross.events import EventBus, GateDecisionEvent, RequestEvent, ErrorEvent, ToolUseEvent
+from cross.events import ErrorEvent, EventBus, GateDecisionEvent, RequestEvent, ToolUseEvent
 from cross.sse import SSEParser
 
 logger = logging.getLogger("cross.proxy")
@@ -193,10 +193,12 @@ async def _proxy_simple(
     resp = await client.request(method, path, headers=headers, content=body)
 
     if resp.status_code >= 400:
-        await event_bus.publish(ErrorEvent(
-            status_code=resp.status_code,
-            body=resp.text[:500],
-        ))
+        await event_bus.publish(
+            ErrorEvent(
+                status_code=resp.status_code,
+                body=resp.text[:500],
+            )
+        )
 
     content = resp.content
 
@@ -255,18 +257,17 @@ async def _gate_non_streaming_response(
         result = await gate_chain.evaluate(gate_request)
 
         if result.action in (Action.BLOCK, Action.ESCALATE) or any_blocked:
-            reason = result.reason if result.action in (Action.BLOCK, Action.ESCALATE) else (
-                "Preceding tool in same message was blocked"
+            reason = (
+                result.reason
+                if result.action in (Action.BLOCK, Action.ESCALATE)
+                else ("Preceding tool in same message was blocked")
             )
             tool_id = block.get("id", "")
             _blocked_tool_ids[tool_id] = reason
             _blocked_tool_timestamps[tool_id] = time.time()
             any_blocked = True
             blocked_indices.append(i)
-            logger.warning(
-                f"BLOCKED tool {block.get('name')} "
-                f"(id={block.get('id')}): {reason}"
-            )
+            logger.warning(f"BLOCKED tool {block.get('name')} (id={block.get('id')}): {reason}")
 
     if blocked_indices:
         # Remove blocked tool_use blocks from response (reverse order to preserve indices)
@@ -283,10 +284,7 @@ def _is_tool_use_block_start(line: str) -> bool:
         return False
     try:
         data = json.loads(line[6:])
-        return (
-            data.get("type") == "content_block_start"
-            and data.get("content_block", {}).get("type") == "tool_use"
-        )
+        return data.get("type") == "content_block_start" and data.get("content_block", {}).get("type") == "tool_use"
     except (json.JSONDecodeError, AttributeError):
         return False
 
@@ -366,10 +364,7 @@ async def _proxy_streaming(
 
                     # Safety: flush buffer if it grows too large
                     if len(buffer) > _MAX_BUFFER_LINES:
-                        logger.warning(
-                            f"Buffer exceeded {_MAX_BUFFER_LINES} lines, "
-                            f"flushing without gate evaluation"
-                        )
+                        logger.warning(f"Buffer exceeded {_MAX_BUFFER_LINES} lines, flushing without gate evaluation")
                         for ev in events:
                             await event_bus.publish(ev)
                         for buffered_line in buffer:
@@ -401,34 +396,36 @@ async def _proxy_streaming(
                         result = await gate_chain.evaluate(gate_request)
 
                         # Publish gate decision
-                        await event_bus.publish(GateDecisionEvent(
-                            tool_use_id=tool_event.tool_use_id,
-                            tool_name=tool_event.name,
-                            action=result.action.name.lower(),
-                            reason=result.reason,
-                            rule_id=result.rule_id,
-                            evaluator=result.evaluator,
-                            confidence=result.confidence,
-                        ))
+                        await event_bus.publish(
+                            GateDecisionEvent(
+                                tool_use_id=tool_event.tool_use_id,
+                                tool_name=tool_event.name,
+                                action=result.action.name.lower(),
+                                reason=result.reason,
+                                rule_id=result.rule_id,
+                                evaluator=result.evaluator,
+                                confidence=result.confidence,
+                            )
+                        )
 
                         if result.action in (Action.BLOCK, Action.ESCALATE) or any_blocked:
                             # Block (or escalate — treated as block until escalation path exists)
-                            reason = result.reason if result.action in (Action.BLOCK, Action.ESCALATE) else (
-                                f"Preceding tool in same message was blocked"
+                            reason = (
+                                result.reason
+                                if result.action in (Action.BLOCK, Action.ESCALATE)
+                                else ("Preceding tool in same message was blocked")
                             )
                             _blocked_tool_ids[tool_event.tool_use_id] = reason
                             _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
                             logger.warning(
-                                f"BLOCKED tool {tool_event.name} "
-                                f"(id={tool_event.tool_use_id}): {result.reason}"
+                                f"BLOCKED tool {tool_event.name} (id={tool_event.tool_use_id}): {result.reason}"
                             )
                             any_blocked = True
                             # Don't publish the ToolUseEvent
                         elif result.action == Action.ALERT:
                             # Alert: flush buffer (allow execution) but log
                             logger.warning(
-                                f"ALERT on tool {tool_event.name} "
-                                f"(id={tool_event.tool_use_id}): {result.reason}"
+                                f"ALERT on tool {tool_event.name} (id={tool_event.tool_use_id}): {result.reason}"
                             )
                             await event_bus.publish(tool_event)
                             for buffered_line in buffer:

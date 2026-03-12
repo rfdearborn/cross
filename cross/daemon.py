@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
-import logging
 import asyncio
+import logging
 import os
 import shutil
 import subprocess
@@ -39,6 +38,7 @@ _pending_injects: dict[str, str] = {}
 
 
 # --- Local API routes (for wrap processes) ---
+
 
 async def api_register_session(request: Request) -> JSONResponse:
     """POST /cross/sessions — wrap process registers a new session."""
@@ -162,13 +162,16 @@ async def _spawn_session(project: str, initial_message: str):
 
 # --- Proxy routes ---
 
+
 async def _proxy_handler(request: Request) -> Response:
     """Forward to the actual proxy logic."""
     from cross.proxy import handle_proxy_request
+
     return await handle_proxy_request(request, event_bus, gate_chain=_gate_chain)
 
 
 # --- App lifecycle ---
+
 
 async def on_startup():
     global _slack, _gate_chain
@@ -181,6 +184,7 @@ async def on_startup():
     # Set up gate chain
     if settings.gating_enabled:
         from pathlib import Path
+
         from cross.gates.denylist import DenylistGate
 
         rules_dir = Path(settings.rules_dir).expanduser()
@@ -191,6 +195,7 @@ async def on_startup():
     # Register Slack plugin
     if settings.slack_bot_token and settings.slack_app_token:
         from cross.plugins.slack import SlackPlugin
+
         _slack = SlackPlugin(
             inject_callback=_inject_to_session,
             spawn_callback=_spawn_session,

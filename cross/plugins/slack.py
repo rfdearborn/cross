@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+
 from slack_sdk import WebClient
 from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
@@ -154,6 +155,7 @@ class SlackPlugin:
 
         # Debounce — don't spam channel for the same permission prompt
         import time
+
         now = time.time()
         last = self._last_permission_post.get(session_id, 0)
         if now - last < self._PERMISSION_DEBOUNCE_SECS:
@@ -356,6 +358,7 @@ class SlackPlugin:
             # Store thread info so session threads under the original message
             self._pending_thread_ts[project] = (channel_id, msg_ts)
             import asyncio
+
             if self._event_loop:
                 asyncio.run_coroutine_threadsafe(
                     self._spawn_callback(project, text),
@@ -385,6 +388,7 @@ class SlackPlugin:
             # Deny the permission prompt, wait for Claude to process, then send feedback
             self._inject(session_id, "3")
             import time
+
             time.sleep(0.5)
             self._inject(session_id, text + "\r")
 
@@ -457,6 +461,7 @@ class SlackPlugin:
             logger.warning("No inject callback configured")
             return
         import asyncio
+
         if self._event_loop:
             asyncio.run_coroutine_threadsafe(
                 self._inject_callback(session_id, text),
@@ -501,8 +506,11 @@ class SlackPlugin:
         try:
             resp = self._web.users_list()
             user_ids = [
-                u["id"] for u in resp.get("members", [])
-                if not u.get("is_bot") and not u.get("deleted") and u["id"] != "USLACKBOT"
+                u["id"]
+                for u in resp.get("members", [])
+                if not u.get("is_bot")
+                and not u.get("deleted")
+                and u["id"] != "USLACKBOT"
                 and u["id"] != self._bot_user_id
             ]
             if user_ids:
@@ -552,7 +560,7 @@ class SlackPlugin:
         parts = name.split("-")
         try:
             idx = parts.index("cross")
-            return "-".join(parts[idx + 1:])
+            return "-".join(parts[idx + 1 :])
         except ValueError:
             return None
 
@@ -564,7 +572,6 @@ class SlackPlugin:
         parts.append("cross")
         parts.append(_slugify(project))
         return "-".join(parts)[:80]
-
 
 
 def _is_permission_prompt(text: str) -> bool:

@@ -6,13 +6,13 @@ import re
 
 # Matches ANSI escape sequences comprehensively
 _ANSI_RE = re.compile(
-    r"\x1b"           # ESC character
+    r"\x1b"  # ESC character
     r"(?:"
-    r"\[[0-9;?]*[A-Za-z]"    # CSI sequences: ESC [ params letter
+    r"\[[0-9;?]*[A-Za-z]"  # CSI sequences: ESC [ params letter
     r"|\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC sequences
-    r"|[()][AB012]"           # Character set selection
-    r"|[=>]"                  # Keypad modes
-    r"|."                     # Other single-char escapes
+    r"|[()][AB012]"  # Character set selection
+    r"|[=>]"  # Keypad modes
+    r"|."  # Other single-char escapes
     r")"
 )
 

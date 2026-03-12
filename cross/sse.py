@@ -21,6 +21,7 @@ from cross.events import (
 @dataclass
 class _ContentBlock:
     """Tracks state for a content block being streamed."""
+
     index: int
     block_type: str  # "text" or "tool_use"
     # For tool_use blocks
@@ -78,10 +79,12 @@ class SSEParser:
 
         if event_type == "message_start":
             msg = data.get("message", {})
-            events.append(MessageStartEvent(
-                message_id=msg.get("id", ""),
-                model=msg.get("model", ""),
-            ))
+            events.append(
+                MessageStartEvent(
+                    message_id=msg.get("id", ""),
+                    model=msg.get("model", ""),
+                )
+            )
 
         elif event_type == "content_block_start":
             index = data.get("index", 0)
@@ -114,20 +117,24 @@ class SSEParser:
                         tool_input = json.loads(input_json) if input_json else {}
                     except json.JSONDecodeError:
                         tool_input = {"_raw": input_json}
-                    events.append(ToolUseEvent(
-                        name=cb.tool_name,
-                        tool_use_id=cb.tool_use_id,
-                        input=tool_input,
-                    ))
+                    events.append(
+                        ToolUseEvent(
+                            name=cb.tool_name,
+                            tool_use_id=cb.tool_use_id,
+                            input=tool_input,
+                        )
+                    )
                 elif cb.block_type == "text":
                     events.append(TextEvent(text="".join(cb.text_parts)))
 
         elif event_type == "message_delta":
             delta = data.get("delta", {})
             usage = data.get("usage", {})
-            events.append(MessageDeltaEvent(
-                stop_reason=delta.get("stop_reason"),
-                output_tokens=usage.get("output_tokens", 0),
-            ))
+            events.append(
+                MessageDeltaEvent(
+                    stop_reason=delta.get("stop_reason"),
+                    output_tokens=usage.get("output_tokens", 0),
+                )
+            )
 
         return events

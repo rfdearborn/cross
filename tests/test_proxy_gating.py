@@ -2,7 +2,7 @@
 
 import json
 
-from cross.proxy import _intercept_blocked_tool_results, _blocked_tool_ids, _blocked_tool_timestamps
+from cross.proxy import _blocked_tool_ids, _blocked_tool_timestamps, _intercept_blocked_tool_results
 
 
 class TestBlockedToolInterception:
@@ -18,16 +18,22 @@ class TestBlockedToolInterception:
     def test_replaces_blocked_tool_result(self):
         _blocked_tool_ids["toolu_123"] = "Blocked by denylist"
 
-        body = json.dumps({
-            "messages": [{
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "toolu_123",
-                    "content": "file deleted successfully",
-                }]
-            }]
-        }).encode()
+        body = json.dumps(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_123",
+                                "content": "file deleted successfully",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ).encode()
 
         result = _intercept_blocked_tool_results(body)
         data = json.loads(result)
@@ -43,16 +49,22 @@ class TestBlockedToolInterception:
     def test_leaves_unblocked_tool_results_alone(self):
         _blocked_tool_ids["toolu_999"] = "blocked"
 
-        body = json.dumps({
-            "messages": [{
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "toolu_456",
-                    "content": "ok",
-                }]
-            }]
-        }).encode()
+        body = json.dumps(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_456",
+                                "content": "ok",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ).encode()
 
         result = _intercept_blocked_tool_results(body)
         data = json.loads(result)
@@ -69,15 +81,19 @@ class TestBlockedToolInterception:
     def test_handles_multiple_tool_results(self):
         _blocked_tool_ids["toolu_a"] = "blocked a"
 
-        body = json.dumps({
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "bad"},
-                    {"type": "tool_result", "tool_use_id": "toolu_b", "content": "good"},
+        body = json.dumps(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "toolu_a", "content": "bad"},
+                            {"type": "tool_result", "tool_use_id": "toolu_b", "content": "good"},
+                        ],
+                    }
                 ]
-            }]
-        }).encode()
+            }
+        ).encode()
 
         result = _intercept_blocked_tool_results(body)
         data = json.loads(result)

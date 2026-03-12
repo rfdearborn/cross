@@ -10,13 +10,11 @@ import queue
 import shutil
 import sys
 import threading
-import time
 
 import httpx
 import websockets.sync.client
 
 from cross.ansi import strip_ansi
-
 from cross.config import settings
 from cross.session import registry
 
@@ -74,6 +72,7 @@ def _run_proxy():
     import uvicorn
     from starlette.applications import Starlette
     from starlette.routing import Route
+
     from cross.events import EventBus
     from cross.plugins.logger import LoggerPlugin
 
@@ -81,6 +80,7 @@ def _run_proxy():
 
     async def proxy_handler(request):
         from cross.proxy import handle_proxy_request
+
         return await handle_proxy_request(request, bus)
 
     async def on_startup():
@@ -194,9 +194,7 @@ def _on_pty_output(data: bytes, output_queue: queue.Queue):
     output_queue.put({"type": "pty_output", "text": text})
 
 
-def _start_ws_relay(
-    daemon_url: str, info, output_queue: queue.Queue, log: logging.Logger
-) -> threading.Thread | None:
+def _start_ws_relay(daemon_url: str, info, output_queue: queue.Queue, log: logging.Logger) -> threading.Thread | None:
     """Connect WebSocket to daemon for bidirectional I/O relay."""
     ws_url = daemon_url.replace("http://", "ws://") + f"/cross/sessions/{info.session_id}/io"
 

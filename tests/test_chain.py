@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
 from cross.chain import GateChain
+from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
 
 
 class AllowGate(Gate):
@@ -16,14 +16,18 @@ class AllowGate(Gate):
 class BlockGate(Gate):
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
         return EvaluationResponse(
-            action=Action.BLOCK, reason="blocked", evaluator=self.name,
+            action=Action.BLOCK,
+            reason="blocked",
+            evaluator=self.name,
         )
 
 
 class AlertGate(Gate):
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
         return EvaluationResponse(
-            action=Action.ALERT, reason="alert", evaluator=self.name,
+            action=Action.ALERT,
+            reason="alert",
+            evaluator=self.name,
         )
 
 
@@ -129,7 +133,9 @@ class TestChainAdd:
 class HaltSessionGate(Gate):
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
         return EvaluationResponse(
-            action=Action.HALT_SESSION, reason="halt", evaluator=self.name,
+            action=Action.HALT_SESSION,
+            reason="halt",
+            evaluator=self.name,
         )
 
 

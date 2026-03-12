@@ -15,8 +15,10 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
+
 import yaml
 
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
@@ -29,6 +31,7 @@ _DEFAULT_RULES_PATH = Path(__file__).parent.parent / "rules" / "default.yaml"
 @dataclass
 class DenylistRule:
     """A single matching rule."""
+
     name: str
     tools: list[str]  # tool names to match, or ["*"] for all
     action: Action = Action.BLOCK
@@ -88,15 +91,17 @@ def _parse_rules(data: dict, source: str = "") -> list[DenylistRule]:
         if variables and patterns:
             patterns = _substitute_variables(patterns, variables)
 
-        rules.append(DenylistRule(
-            name=rule_data.get("name", "unnamed"),
-            tools=rule_data.get("tools", ["*"]),
-            action=action,
-            field=rule_data.get("field", ""),
-            patterns=patterns,
-            contains=rule_data.get("contains", []),
-            description=rule_data.get("description", ""),
-        ))
+        rules.append(
+            DenylistRule(
+                name=rule_data.get("name", "unnamed"),
+                tools=rule_data.get("tools", ["*"]),
+                action=action,
+                field=rule_data.get("field", ""),
+                patterns=patterns,
+                contains=rule_data.get("contains", []),
+                description=rule_data.get("description", ""),
+            )
+        )
 
     return rules
 

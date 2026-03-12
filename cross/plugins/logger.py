@@ -36,18 +36,20 @@ class LoggerPlugin:
     async def handle(self, event: CrossEvent):
         match event:
             case RequestEvent():
-                self._write({
-                    "type": "request",
-                    "method": event.method,
-                    "path": event.path,
-                    "model": event.model,
-                    "messages_count": event.messages_count,
-                    "stream": event.stream,
-                    "tools": event.tool_names[:15],
-                    "tools_count": len(event.tool_names),
-                    "last_message_role": event.last_message_role,
-                    "last_message_preview": event.last_message_preview,
-                })
+                self._write(
+                    {
+                        "type": "request",
+                        "method": event.method,
+                        "path": event.path,
+                        "model": event.model,
+                        "messages_count": event.messages_count,
+                        "stream": event.stream,
+                        "tools": event.tool_names[:15],
+                        "tools_count": len(event.tool_names),
+                        "last_message_role": event.last_message_role,
+                        "last_message_preview": event.last_message_preview,
+                    }
+                )
                 # Also log to console for visibility
                 tools_str = f" tools={len(event.tool_names)}" if event.tool_names else ""
                 logger.info(
@@ -57,20 +59,24 @@ class LoggerPlugin:
                 )
 
             case MessageStartEvent():
-                self._write({
-                    "type": "message_start",
-                    "message_id": event.message_id,
-                    "model": event.model,
-                })
+                self._write(
+                    {
+                        "type": "message_start",
+                        "message_id": event.message_id,
+                        "model": event.model,
+                    }
+                )
                 logger.info(f"  message_start id={event.message_id} model={event.model}")
 
             case ToolUseEvent():
-                self._write({
-                    "type": "tool_use",
-                    "name": event.name,
-                    "tool_use_id": event.tool_use_id,
-                    "input": event.input,
-                })
+                self._write(
+                    {
+                        "type": "tool_use",
+                        "name": event.name,
+                        "tool_use_id": event.tool_use_id,
+                        "input": event.input,
+                    }
+                )
                 # Log tool input preview
                 input_str = json.dumps(event.input)
                 if len(input_str) > 200:
@@ -79,27 +85,30 @@ class LoggerPlugin:
 
             case TextEvent():
                 preview = event.text[:200] + "..." if len(event.text) > 200 else event.text
-                self._write({
-                    "type": "text",
-                    "text": event.text,
-                })
+                self._write(
+                    {
+                        "type": "text",
+                        "text": event.text,
+                    }
+                )
                 logger.info(f"  text: {preview}")
 
             case MessageDeltaEvent():
-                self._write({
-                    "type": "message_delta",
-                    "stop_reason": event.stop_reason,
-                    "output_tokens": event.output_tokens,
-                })
-                logger.info(
-                    f"  message_delta: stop_reason={event.stop_reason} "
-                    f"output_tokens={event.output_tokens}"
+                self._write(
+                    {
+                        "type": "message_delta",
+                        "stop_reason": event.stop_reason,
+                        "output_tokens": event.output_tokens,
+                    }
                 )
+                logger.info(f"  message_delta: stop_reason={event.stop_reason} output_tokens={event.output_tokens}")
 
             case ErrorEvent():
-                self._write({
-                    "type": "error",
-                    "status_code": event.status_code,
-                    "body": event.body,
-                })
+                self._write(
+                    {
+                        "type": "error",
+                        "status_code": event.status_code,
+                        "body": event.body,
+                    }
+                )
                 logger.warning(f"  ERROR {event.status_code}: {event.body[:200]}")
