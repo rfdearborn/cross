@@ -42,6 +42,8 @@ class GateRequest:
     user_intent: str = ""
     tool_index_in_message: int = 0
     tool_count_in_message: int = 0
+    # Set by chain when invoking review gate (stage 2)
+    prior_result: "EvaluationResponse | None" = None
 
 
 @dataclass

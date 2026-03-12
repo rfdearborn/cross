@@ -17,6 +17,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from cross.chain import GateChain
 from cross.config import settings
+from cross.evaluator import Action
 from cross.events import EventBus
 from cross.plugins.logger import LoggerPlugin
 
@@ -189,7 +190,34 @@ async def on_startup():
 
         rules_dir = Path(settings.rules_dir).expanduser()
         gate = DenylistGate(rules_dir=rules_dir)
-        _gate_chain = GateChain(gates=[gate])
+
+        # LLM review gate (stage 2) — reviews denylist-flagged calls
+        review_gate = None
+        review_threshold = Action.BLOCK
+        if settings.llm_gate_enabled:
+            from cross.gates.llm_review import LLMReviewGate
+            from cross.llm import LLMConfig, resolve_api_key
+
+            llm_config = LLMConfig(
+                model=settings.llm_gate_model,
+                api_key=settings.llm_gate_api_key,
+                base_url=settings.llm_gate_base_url,
+                temperature=settings.llm_gate_temperature,
+                max_tokens=settings.llm_gate_max_tokens,
+                reasoning=settings.llm_gate_reasoning,
+            )
+            if resolve_api_key(llm_config):
+                review_gate = LLMReviewGate(config=llm_config, timeout_ms=settings.llm_gate_timeout_ms)
+                try:
+                    review_threshold = Action[settings.llm_gate_threshold.upper()]
+                except KeyError:
+                    logger.warning(f"Invalid llm_gate_threshold '{settings.llm_gate_threshold}', using BLOCK")
+                model_name = settings.llm_gate_model
+                logger.info(f"LLM review gate active (model={model_name}, threshold={review_threshold.name})")
+            else:
+                logger.info("LLM gate enabled but no API key available — denylist operates standalone")
+
+        _gate_chain = GateChain(gates=[gate], review_gate=review_gate, review_threshold=review_threshold)
         logger.info(f"Gating enabled with {len(gate.rules)} denylist rules")
 
     # Register Slack plugin
@@ -213,6 +241,10 @@ async def on_startup():
 async def on_shutdown():
     if _slack:
         _slack.stop()
+    # Clean up LLM httpx client
+    from cross.llm import close_client
+
+    await close_client()
 
 
 # --- Build the combined app ---

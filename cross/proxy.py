@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections import deque
+from typing import Any
 
 import httpx
 from starlette.requests import Request
@@ -28,6 +30,9 @@ _client: httpx.AsyncClient | None = None
 # Blocked tool_use_ids -> (reason, timestamp) for injecting error tool_results on next request
 _blocked_tool_ids: dict[str, str] = {}
 _blocked_tool_timestamps: dict[str, float] = {}
+
+# Recent tool calls for LLM gate context (bounded deque)
+_recent_tools: deque[dict[str, Any]] = deque(maxlen=max(settings.llm_gate_context_tools, 1))
 
 # Safety limits for SSE buffering
 _MAX_BUFFER_LINES = 500  # Flush buffer if it exceeds this many lines
@@ -253,8 +258,12 @@ async def _gate_non_streaming_response(
             user_intent=user_intent,
             agent=model,
             tool_index_in_message=i,
+            recent_tools=list(_recent_tools),
         )
         result = await gate_chain.evaluate(gate_request)
+
+        # Record for future context
+        _recent_tools.append({"name": block.get("name", ""), "input": block.get("input")})
 
         if result.action in (Action.BLOCK, Action.ESCALATE) or any_blocked:
             reason = (
@@ -391,9 +400,13 @@ async def _proxy_streaming(
                             user_intent=user_intent,
                             agent=model,
                             tool_index_in_message=tool_index,
+                            recent_tools=list(_recent_tools),
                         )
                         tool_index += 1
                         result = await gate_chain.evaluate(gate_request)
+
+                        # Record for future context
+                        _recent_tools.append({"name": tool_event.name, "input": tool_event.input})
 
                         # Publish gate decision
                         await event_bus.publish(
