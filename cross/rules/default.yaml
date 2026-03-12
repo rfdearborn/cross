@@ -1,0 +1,230 @@
+# Cross Default Denylist Rules
+# https://github.com/rfdearborn/cross
+#
+# These rules flag tool calls for review. When an LLM gate is configured,
+# matches are reviewed automatically; otherwise they block directly.
+#
+# Users can add/modify rules in ~/.cross/rules.d/*.yaml
+# To disable a default rule by name, add:  disable: [rule-name]
+#
+# Rule fields:
+#   name:        unique identifier (for overrides/disable)
+#   tools:       tool names to match, or ["*"] for all
+#   field:       input field to check ("command", "file_path", or "" for all)
+#   action:      block | alert (default: block)
+#   description: human explanation
+#   patterns:    regex patterns (case-insensitive, any match triggers)
+#   contains:    substrings (case-insensitive, any match triggers)
+#
+# Use {{variable}} in patterns to reference shared fragments from `variables`.
+
+variables:
+  # Dangerous rm targets: /, /*, /etc, ~/,  ~, $HOME, ${HOME}, ., .., ./
+  dangerous_path: '(/\s*$|/\*|/[a-z]|~/|~\s*$|\$HOME|\$\{HOME\}|\.\s*$|\.\.\s*$|\./\s*$)'
+  # Sensitive file extensions for exfiltration rules
+  secret_ext: '\.(env|pem|key|secret|npmrc|netrc)'
+
+rules:
+  # ── Destructive file operations ──
+
+  - name: destructive-rm
+    tools: [Bash]
+    field: command
+    action: block
+    description: Recursive forced deletes targeting root, home, or cwd
+    patterns:
+      # rm -rf / rm -fr (merged flags)
+      - 'rm\s+-\w*r\w*f\w*\s+{{dangerous_path}}'
+      - 'rm\s+-\w*f\w*r\w*\s+{{dangerous_path}}'
+      # rm -r -f / rm -f -r (split flags)
+      - 'rm\s+-\w*r\w*\s+-\w*f\w*\s+{{dangerous_path}}'
+      - 'rm\s+-\w*f\w*\s+-\w*r\w*\s+{{dangerous_path}}'
+      # rm --recursive --force (long flags)
+      - 'rm\s+--recursive\s+--force\s+{{dangerous_path}}'
+      - 'rm\s+--force\s+--recursive\s+{{dangerous_path}}'
+      # Mixed long+short
+      - 'rm\s+--recursive\s+-\w*f\w*\s+{{dangerous_path}}'
+      - 'rm\s+-\w*f\w*\s+--recursive\s+{{dangerous_path}}'
+      - 'rm\s+--force\s+-\w*r\w*\s+{{dangerous_path}}'
+      - 'rm\s+-\w*r\w*\s+--force\s+{{dangerous_path}}'
+
+  - name: destructive-alt
+    tools: [Bash]
+    field: command
+    action: block
+    description: Alternative file destruction commands
+    patterns:
+      - 'find\s+/\s+.*-delete\b'
+      - 'find\s+/\s+.*-exec\s+rm\b'
+      - 'python[23]?\s+-c\s+.*shutil\.rmtree'
+      - 'perl\s+-e\s+.*rmtree'
+      - 'rsync\b.*--delete\b.*\s/\s*$'
+
+  - name: destructive-disk
+    tools: [Bash]
+    field: command
+    action: block
+    description: Disk-level destructive operations
+    patterns:
+      - '\bdd\b.*\bof=/dev/'
+      - '\bdd\b.*\bif=/dev/zero'
+      - '>\s*/dev/(sd|hd|nvme|vd|mmcblk)'
+      - '\bshred\b.*\s/dev/'
+      - '\bwipefs\b.*\s/dev/'
+    contains:
+      - "mkfs."
+
+  - name: fork-bomb
+    tools: [Bash]
+    field: command
+    action: block
+    description: Fork bombs
+    patterns:
+      - ':\(\)\s*\{\s*:\|:\s*&\s*\}\s*;'
+
+  - name: shell-wrapper-destructive
+    tools: [Bash]
+    field: command
+    action: block
+    description: Destructive commands hidden inside shell wrappers (bash -c, eval)
+    patterns:
+      - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\brm\s+-\w*r\w*f'
+      - '\beval\s+.*\brm\s+-\w*r\w*f'
+      - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\bmkfs\.'
+      - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\bdd\b.*\bof=/dev/'
+
+  # ── Credential exfiltration ──
+
+  - name: credential-exfil
+    tools: [Bash]
+    field: command
+    action: block
+    description: Credential exfiltration via HTTP/network
+    patterns:
+      # curl/wget with sensitive file content
+      - 'curl\b.*\$\(cat\b.*{{secret_ext}}\b'
+      - 'curl\b.*[`\$\(].*password'
+      - 'curl\b.*-[dF]\s*\S*@\S*{{secret_ext}}'
+      - 'curl\b.*--data-binary\s*@.*{{secret_ext}}'
+      - 'curl\b.*-T\s+\S*{{secret_ext}}'
+      - 'wget\b.*api[_-]?key'
+      # Piping secrets to network tools
+      - 'cat\b.*{{secret_ext}}.*\|\s*(curl|wget|nc|ncat)\b'
+      - 'base64\b.*\.(env|pem|key).*\|\s*(curl|wget)\b'
+      # Piping well-known credential paths
+      - 'cat\b.*(\.aws/credentials|\.docker/config|\.npmrc|\.netrc|\.config/gh/).*\|\s*(curl|wget|nc|ncat)\b'
+      # scp/rsync/nc exfiltration
+      - '(scp|rsync|nc|ncat)\b.*{{secret_ext}}\b'
+      # Pipe to interpreter (remote code execution)
+      - 'curl\b.*\|\s*(ba)?sh\b'
+      - 'curl\b.*\|\s*(z|fi|c|da|a|tc|k)?sh\b'
+      - 'curl\b.*\|\s*(python[23]?|perl|ruby|node)\b'
+      - 'wget\b.*-O\s*-?.*\|\s*(ba)?sh\b'
+      - 'wget\b.*-O\s*-?.*\|\s*(python[23]?|perl|ruby|node)\b'
+
+  # ── Reverse shells ──
+
+  - name: reverse-shell
+    tools: [Bash]
+    field: command
+    action: block
+    description: Reverse shell patterns
+    patterns:
+      - 'bash\s+-i\s+>&\s*/dev/tcp/'
+      - '\b(nc|ncat)\s+(-[a-zA-Z]*e|--exec)'
+      - 'python[23]?\s+-c\s+.*socket.*connect'
+      - 'perl\s+-e\s+.*socket.*connect'
+      - 'ruby\s+-rsocket\s+-e'
+      - 'ruby\s+-e\s+.*TCPSocket'
+      - 'socat\b.*exec.*tcp'
+      - 'php\s+-r\s+.*fsockopen'
+      - 'node\s+-e\s+.*net\b.*\b(Socket|connect|createConnection)'
+      - 'openssl\s+s_client\b.*connect.*\|\s*/bin/(ba)?sh'
+      - '/dev/tcp/\d+\.\d+\.\d+\.\d+/'
+
+  # ── System path writes (file tools) ──
+
+  - name: system-path-write
+    tools: [Write, Edit]
+    field: file_path
+    action: block
+    description: Writes to system directories
+    contains:
+      - "/etc/"
+      - "/usr/"
+      - "/System/"
+      - "/var/"
+      - "/boot/"
+      - "/sbin/"
+      - "/bin/"
+      - "/Library/"
+    patterns:
+      - '^/lib'
+
+  # ── System path writes (bash) ──
+
+  - name: system-path-write-bash
+    tools: [Bash]
+    field: command
+    action: block
+    description: Bash writes to system directories via redirection/cp/mv/tee/install/ln/sed
+    patterns:
+      - '>\s*/(etc|usr|System|boot|sbin|bin|Library)/'
+      - '\b(cp|mv|install|ln)\b.*\s/(etc|usr|System|boot|sbin|bin|var|Library)/'
+      - '\btee\b.*\s/(etc|usr|sbin|bin|var)/'
+      - '\bsed\b.*-i.*/(etc|usr|sbin|bin)/'
+
+  # ── Dangerous chmod ──
+
+  - name: dangerous-chmod
+    tools: [Bash]
+    field: command
+    action: block
+    description: Recursive chmod 777/a+rwx on root, home, or cwd
+    patterns:
+      - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+[/~\.]'
+      - 'chmod\s+777\s+-R\s+[/~\.]'
+      - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?a\+rwx\s+[/~\.]'
+      - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?ugo\+rwx\s+[/~\.]'
+
+  # ── Sensitive file reads (alert, not block) ──
+
+  - name: sensitive-file-read
+    tools: [Read]
+    field: file_path
+    action: alert
+    description: Alert on reading sensitive credential files
+    contains:
+      - ".ssh/id_"
+      - ".ssh/authorized_keys"
+      - ".ssh/config"
+      - ".gnupg/"
+      - ".aws/credentials"
+      - ".aws/config"
+      - ".kube/config"
+      - ".docker/config.json"
+      - ".npmrc"
+      - ".netrc"
+      - ".config/gh/hosts"
+      - "/etc/shadow"
+      - ".env"
+
+  - name: sensitive-file-read-bash
+    tools: [Bash]
+    field: command
+    action: alert
+    description: Alert on bash access to sensitive credential files
+    contains:
+      - ".ssh/id_"
+      - ".ssh/authorized_keys"
+      - ".ssh/config"
+      - ".gnupg/"
+      - ".aws/credentials"
+      - ".aws/config"
+      - ".kube/config"
+      - ".docker/config.json"
+      - ".npmrc"
+      - ".netrc"
+      - ".config/gh/hosts"
+      - "/etc/shadow"
+      - ".env"

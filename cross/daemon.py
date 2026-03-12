@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from cross.chain import GateChain
 from cross.config import settings
 from cross.events import EventBus
 from cross.plugins.logger import LoggerPlugin
@@ -24,6 +25,7 @@ logger = logging.getLogger("cross.daemon")
 
 # Shared state
 event_bus = EventBus()
+_gate_chain: GateChain | None = None
 _slack = None  # SlackPlugin instance, if configured
 
 # Session tracking: session_id -> session metadata
@@ -163,18 +165,28 @@ async def _spawn_session(project: str, initial_message: str):
 async def _proxy_handler(request: Request) -> Response:
     """Forward to the actual proxy logic."""
     from cross.proxy import handle_proxy_request
-    return await handle_proxy_request(request, event_bus)
+    return await handle_proxy_request(request, event_bus, gate_chain=_gate_chain)
 
 
 # --- App lifecycle ---
 
 async def on_startup():
-    global _slack
+    global _slack, _gate_chain
 
     # Register logger plugin
     log_plugin = LoggerPlugin()
     event_bus.subscribe(log_plugin.handle)
     logger.info(f"Daemon starting on port {settings.listen_port}")
+
+    # Set up gate chain
+    if settings.gating_enabled:
+        from pathlib import Path
+        from cross.gates.denylist import DenylistGate
+
+        rules_dir = Path(settings.rules_dir).expanduser()
+        gate = DenylistGate(rules_dir=rules_dir)
+        _gate_chain = GateChain(gates=[gate])
+        logger.info(f"Gating enabled with {len(gate.rules)} denylist rules")
 
     # Register Slack plugin
     if settings.slack_bot_token and settings.slack_app_token:

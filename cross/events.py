@@ -55,7 +55,23 @@ class ErrorEvent:
     body: str
 
 
-CrossEvent = RequestEvent | ToolUseEvent | TextEvent | MessageStartEvent | MessageDeltaEvent | ErrorEvent
+@dataclass
+class GateDecisionEvent:
+    """Fired when the gate chain makes a decision about a tool_use."""
+    tool_use_id: str
+    tool_name: str
+    action: str  # "allow", "block", "alert", "escalate", "abstain"
+    reason: str = ""
+    rule_id: str = ""
+    evaluator: str = ""
+    confidence: float = 1.0
+
+
+CrossEvent = (
+    RequestEvent | ToolUseEvent | TextEvent
+    | MessageStartEvent | MessageDeltaEvent
+    | ErrorEvent | GateDecisionEvent
+)
 
 EventHandler = Callable[[CrossEvent], Awaitable[None]]
 
