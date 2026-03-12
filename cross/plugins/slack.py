@@ -16,7 +16,8 @@ from cross.config import settings
 from cross.events import (
     CrossEvent,
     ErrorEvent,
-    RequestEvent,
+    GateDecisionEvent,
+    SentinelReviewEvent,
     TextEvent,
     ToolUseEvent,
 )
@@ -50,8 +51,6 @@ class SlackPlugin:
         self._last_tool_desc: dict[str, str] = {}
         # Sessions with pending permission prompts: session_id -> (channel_id, message_ts)
         self._permission_pending: dict[str, tuple[str, str]] = {}
-        # Track messages injected from Slack to suppress proxy echo
-        self._injected_texts: dict[str, str] = {}  # session_id -> last injected text
         # Slack-initiated sessions: project -> (channel_id, message_ts) for threading
         self._pending_thread_ts: dict[str, tuple[str, str]] = {}
 
@@ -219,8 +218,9 @@ class SlackPlugin:
     async def handle_event(self, event: CrossEvent):
         """Handle events from the network proxy EventBus.
 
-        Called from async context (proxy), but we use sync WebClient
-        so it's safe to call from any thread.
+        Only relays high-signal events: gate decisions (block/alert/escalate),
+        sentinel reviews (alert/escalate/halt), and errors. Full conversation
+        relay is handled by the JSONL logger, not Slack.
         """
         with self._lock:
             if not self._threads:
@@ -235,29 +235,8 @@ class SlackPlugin:
         channel_id, thread_ts = thread_info
 
         match event:
-            case RequestEvent() if event.stream and event.last_message_role == "user":
-                # Only relay user messages from real conversation turns (streaming),
-                # not internal system requests (non-streaming haiku calls)
-                preview = event.last_message_preview or ""
-                if preview and not preview.startswith("[tool_result"):
-                    # Suppress echo of messages injected from Slack
-                    last_injected = self._injected_texts.pop(session_id, None)
-                    if last_injected and preview.startswith(last_injected[:100]):
-                        return
-                    if len(preview) > 3000:
-                        preview = preview[:3000] + "\n..."
-                    self._web.chat_postMessage(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        text=f"*You:* {preview}",
-                    )
-
             case ToolUseEvent():
-                input_str = json.dumps(event.input, indent=2)
-                if len(input_str) > 500:
-                    input_str = input_str[:500] + "\n..."
-
-                # Track tool description for permission prompt context
+                # Track tool description for permission prompt context (not posted to Slack)
                 tool_desc = f"`{event.name}`"
                 if event.name == "Bash":
                     cmd = event.input.get("command", "")
@@ -266,11 +245,6 @@ class SlackPlugin:
                     path = event.input.get("file_path", "")
                     tool_desc = f"`{event.name}`: `{path}`"
                 self._last_tool_desc[session_id] = tool_desc
-                self._web.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text=f"*{event.name}*\n```\n{input_str}\n```",
-                )
 
             case TextEvent():
                 # If permission was pending, it's now resolved (approved from terminal)
@@ -287,13 +261,35 @@ class SlackPlugin:
                     except Exception as e:
                         logger.warning(f"Failed to update permission message: {e}")
 
-                text = event.text
-                if len(text) > 3000:
-                    text = text[:3000] + "\n..."
+            case GateDecisionEvent() if event.action in ("block", "escalate", "alert"):
+                icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔"}.get(event.action, "❓")
+                text = f"{icon} *Gate {event.action.upper()}*: `{event.tool_name}`"
+                if event.reason:
+                    text += f"\n>{event.reason[:300]}"
+                if event.tool_input:
+                    input_str = json.dumps(event.tool_input, indent=2)
+                    if len(input_str) > 500:
+                        input_str = input_str[:500] + "\n..."
+                    text += f"\n```\n{input_str}\n```"
                 self._web.chat_postMessage(
                     channel=channel_id,
                     thread_ts=thread_ts,
-                    text=f"*Claude:* {text}",
+                    text=text,
+                    reply_broadcast=event.action in ("block", "escalate"),
+                )
+
+            case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
+                icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
+                text = f"{icon} *Sentinel {event.action.upper()}* ({event.event_count} events reviewed)"
+                if event.summary:
+                    text += f"\n*Summary:* {event.summary[:300]}"
+                if event.concerns and event.concerns.lower() != "none":
+                    text += f"\n*Concerns:* {event.concerns[:500]}"
+                self._web.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=text,
+                    reply_broadcast=event.action in ("escalate", "halt_session"),
                 )
 
             case ErrorEvent():
@@ -406,7 +402,6 @@ class SlackPlugin:
 
         # Regular message injection
         logger.info(f"Slack -> session {session_id}: {text[:100]}")
-        self._injected_texts[session_id] = text
         self._inject(session_id, text + "\r")
 
     def _handle_interactive(self, payload: dict):
