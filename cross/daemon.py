@@ -258,10 +258,12 @@ async def on_startup():
     # Register Slack plugin
     if settings.slack_bot_token and settings.slack_app_token:
         from cross.plugins.slack import SlackPlugin
+        from cross.proxy import resolve_gate_approval
 
         _slack = SlackPlugin(
             inject_callback=_inject_to_session,
             spawn_callback=_spawn_session,
+            resolve_approval_callback=resolve_gate_approval,
             event_loop=asyncio.get_running_loop(),
         )
         try:
