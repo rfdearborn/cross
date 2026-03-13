@@ -1399,10 +1399,11 @@ class TestProxyStreaming:
 
         output = await _collect_streaming_output(result)
 
-        # Blocked tool's data lines should not appear
+        # Blocked tool's SSE lines ARE flushed (so Claude Code can show the tool call)
+        # but the tool_result will be intercepted on the next request
         output_text = "".join(output)
-        assert "rm -rf" not in output_text
-        # Tool should be in the blocked list
+        assert "rm -rf" in output_text
+        # Tool should be in the blocked list for tool_result interception
         assert "toolu_1" in _blocked_tool_ids
 
     @pytest.mark.anyio

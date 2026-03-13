@@ -7,6 +7,7 @@ Blocked tools are suppressed; the next client request gets a synthetic error too
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -37,6 +38,18 @@ _recent_tools: deque[dict[str, Any]] = deque(maxlen=max(settings.llm_gate_contex
 # Safety limits for SSE buffering
 _MAX_BUFFER_LINES = 500  # Flush buffer if it exceeds this many lines
 _BLOCKED_TOOL_TTL = 300.0  # Seconds before stale blocked tool entries are cleaned up
+
+# Gate approval infrastructure (for ESCALATE → human review)
+_pending_approvals: dict[str, asyncio.Event] = {}
+_approval_results: dict[str, tuple[bool, str]] = {}  # tool_use_id -> (approved, username)
+
+
+def resolve_gate_approval(tool_use_id: str, approved: bool, username: str = ""):
+    """Called (from any thread) when a human approves/denies a gate escalation."""
+    _approval_results[tool_use_id] = (approved, username)
+    event = _pending_approvals.get(tool_use_id)
+    if event:
+        event.set()
 
 
 def get_client() -> httpx.AsyncClient:
@@ -415,20 +428,83 @@ async def _proxy_streaming(
                             )
                         )
 
-                        if result.action in (Action.BLOCK, Action.ESCALATE) or any_blocked:
-                            # Block (or escalate — treated as block until escalation path exists)
+                        if result.action == Action.ESCALATE and not any_blocked:
+                            # Hold stream and wait for human approval via Slack
+                            approval_event = asyncio.Event()
+                            _pending_approvals[tool_event.tool_use_id] = approval_event
+                            logger.info(
+                                f"ESCALATED tool {tool_event.name} ({tool_event.tool_use_id}), "
+                                f"waiting for human approval (timeout={settings.gate_approval_timeout}s)"
+                            )
+
+                            try:
+                                await asyncio.wait_for(
+                                    approval_event.wait(),
+                                    timeout=settings.gate_approval_timeout,
+                                )
+                                approved, username = _approval_results.pop(tool_event.tool_use_id, (False, ""))
+                            except asyncio.TimeoutError:
+                                approved, username = False, ""
+                                logger.warning(
+                                    f"Gate approval timed out for {tool_event.name} ({tool_event.tool_use_id})"
+                                )
+                            finally:
+                                _pending_approvals.pop(tool_event.tool_use_id, None)
+
+                            if approved:
+                                logger.info(f"APPROVED tool {tool_event.name} by {username}")
+                                # Publish approval so sentinel sees the full flow
+                                await event_bus.publish(
+                                    GateDecisionEvent(
+                                        tool_use_id=tool_event.tool_use_id,
+                                        tool_name=tool_event.name,
+                                        action="allow",
+                                        reason=f"Approved by human reviewer (@{username})",
+                                        evaluator="human",
+                                        tool_input=tool_event.input,
+                                    )
+                                )
+                            else:
+                                reason = (
+                                    f"Denied by human reviewer (@{username})"
+                                    if username
+                                    else "Timed out waiting for human approval"
+                                )
+                                _blocked_tool_ids[tool_event.tool_use_id] = reason
+                                _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
+                                logger.warning(f"DENIED tool {tool_event.name} ({tool_event.tool_use_id}): {reason}")
+                                await event_bus.publish(
+                                    GateDecisionEvent(
+                                        tool_use_id=tool_event.tool_use_id,
+                                        tool_name=tool_event.name,
+                                        action="block",
+                                        reason=reason,
+                                        evaluator="human",
+                                        tool_input=tool_event.input,
+                                    )
+                                )
+
+                            # Flush buffer either way — Claude Code needs to see the tool_use
+                            # so it can send a tool_result that the proxy can intercept
+                            await event_bus.publish(tool_event)
+                            for buffered_line in buffer:
+                                yield buffered_line + "\n"
+
+                        elif result.action == Action.BLOCK or any_blocked:
+                            # Block: flush buffer so Claude Code sees the tool, then
+                            # intercept the tool_result on the next request with the error
                             reason = (
                                 result.reason
-                                if result.action in (Action.BLOCK, Action.ESCALATE)
-                                else ("Preceding tool in same message was blocked")
+                                if result.action == Action.BLOCK
+                                else "Preceding tool in same message was blocked"
                             )
                             _blocked_tool_ids[tool_event.tool_use_id] = reason
                             _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
-                            logger.warning(
-                                f"BLOCKED tool {tool_event.name} (id={tool_event.tool_use_id}): {result.reason}"
-                            )
+                            logger.warning(f"BLOCKED tool {tool_event.name} (id={tool_event.tool_use_id}): {reason}")
                             any_blocked = True
-                            # Don't publish the ToolUseEvent
+                            await event_bus.publish(tool_event)
+                            for buffered_line in buffer:
+                                yield buffered_line + "\n"
                         elif result.action == Action.ALERT:
                             # Alert: flush buffer (allow execution) but log
                             logger.warning(
