@@ -14,6 +14,7 @@ import copy
 import logging
 import time
 
+from cross.config import settings
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
 
 logger = logging.getLogger("cross.chain")
@@ -130,6 +131,19 @@ class GateChain:
         if resp.action == Action.ABSTAIN:
             logger.info("Review gate abstained, keeping stage-1 result")
             return None
+
+        # Shadow mode: LLM decides, but escalate to human with LLM's reasoning
+        if settings.llm_gate_shadow:
+            shadow_reason = f"[Shadow] LLM gate would {resp.action.name}: {resp.reason}"
+            logger.info(f"Shadow mode — escalating to human. {shadow_reason[:150]}")
+            return EvaluationResponse(
+                action=Action.ESCALATE,
+                reason=shadow_reason,
+                evaluator=f"{resp.evaluator}:shadow",
+                confidence=resp.confidence,
+                duration_ms=resp.duration_ms,
+                metadata={"shadow_verdict": resp.action.name, "shadow_reason": resp.reason},
+            )
 
         logger.info(
             f"Review gate overrides stage-1 ({stage1_result.action.name} → {resp.action.name}): {resp.reason[:100]}"

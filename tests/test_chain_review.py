@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import unittest.mock
 
 import pytest
 
 from cross.chain import GateChain
+from cross.config import settings
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
 
 # --- Test helpers ---
@@ -298,3 +300,88 @@ class TestChainBackwardCompat:
         chain.add(StubGate(Action.BLOCK))
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
         assert result.action == Action.BLOCK
+
+
+class TestShadowMode:
+    """Shadow mode: LLM decides but all verdicts are escalated to human."""
+
+    @pytest.mark.anyio
+    async def test_shadow_escalates_llm_allow(self):
+        """LLM says ALLOW → shadow mode escalates to human with LLM's reasoning."""
+        chain = GateChain(
+            gates=[StubGate(Action.BLOCK, name="denylist", reason="flagged")],
+            review_gate=StubGate(Action.ALLOW, name="llm", reason="False positive, safe to run"),
+        )
+        with unittest.mock.patch.object(settings, "llm_gate_shadow", True):
+            result = await chain.evaluate(GateRequest(tool_name="Bash"))
+
+        assert result.action == Action.ESCALATE
+        assert "Shadow" in result.reason
+        assert "ALLOW" in result.reason
+        assert "False positive" in result.reason
+        assert result.metadata["shadow_verdict"] == "ALLOW"
+
+    @pytest.mark.anyio
+    async def test_shadow_escalates_llm_block(self):
+        """LLM says BLOCK → shadow mode escalates to human with LLM's reasoning."""
+        chain = GateChain(
+            gates=[StubGate(Action.BLOCK, name="denylist", reason="flagged")],
+            review_gate=StubGate(Action.BLOCK, name="llm", reason="Confirmed dangerous"),
+        )
+        with unittest.mock.patch.object(settings, "llm_gate_shadow", True):
+            result = await chain.evaluate(GateRequest(tool_name="Bash"))
+
+        assert result.action == Action.ESCALATE
+        assert "BLOCK" in result.reason
+        assert "Confirmed dangerous" in result.reason
+        assert result.metadata["shadow_verdict"] == "BLOCK"
+
+    @pytest.mark.anyio
+    async def test_shadow_escalates_llm_escalate(self):
+        """LLM says ESCALATE → shadow mode still wraps as shadow escalation."""
+        chain = GateChain(
+            gates=[StubGate(Action.BLOCK, name="denylist")],
+            review_gate=StubGate(Action.ESCALATE, name="llm", reason="Needs human review"),
+        )
+        with unittest.mock.patch.object(settings, "llm_gate_shadow", True):
+            result = await chain.evaluate(GateRequest(tool_name="Bash"))
+
+        assert result.action == Action.ESCALATE
+        assert "Shadow" in result.reason
+        assert result.evaluator == "llm:shadow"
+
+    @pytest.mark.anyio
+    async def test_shadow_off_uses_llm_verdict_directly(self):
+        """With shadow off, LLM verdict applies directly (normal behavior)."""
+        chain = GateChain(
+            gates=[StubGate(Action.BLOCK, name="denylist", reason="flagged")],
+            review_gate=StubGate(Action.ALLOW, name="llm", reason="False positive"),
+        )
+        with unittest.mock.patch.object(settings, "llm_gate_shadow", False):
+            result = await chain.evaluate(GateRequest(tool_name="Bash"))
+
+        assert result.action == Action.ALLOW
+
+    @pytest.mark.anyio
+    async def test_shadow_does_not_affect_abstain(self):
+        """If LLM abstains, shadow mode doesn't apply — stage 1 result stands."""
+        chain = GateChain(
+            gates=[StubGate(Action.BLOCK, name="denylist", reason="flagged")],
+            review_gate=StubGate(Action.ABSTAIN, name="llm"),
+        )
+        with unittest.mock.patch.object(settings, "llm_gate_shadow", True):
+            result = await chain.evaluate(GateRequest(tool_name="Bash"))
+
+        assert result.action == Action.BLOCK  # stage 1 stands
+
+    @pytest.mark.anyio
+    async def test_shadow_does_not_affect_below_threshold(self):
+        """Calls that don't trigger LLM review are unaffected by shadow mode."""
+        chain = GateChain(
+            gates=[StubGate(Action.ALLOW, name="denylist")],
+            review_gate=StubGate(Action.ALLOW, name="llm"),
+        )
+        with unittest.mock.patch.object(settings, "llm_gate_shadow", True):
+            result = await chain.evaluate(GateRequest(tool_name="Bash"))
+
+        assert result.action == Action.ALLOW  # below threshold, no review
