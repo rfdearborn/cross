@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from cross.evaluator import Action
-from cross.events import EventBus, GateDecisionEvent, SentinelReviewEvent, ToolUseEvent
+from cross.events import EventBus, GateDecisionEvent, RequestEvent, SentinelReviewEvent, ToolUseEvent
 from cross.llm import LLMConfig
 from cross.sentinels.llm_reviewer import (
     LLMSentinel,
@@ -110,6 +110,12 @@ class TestFormatEventForReview:
         result = _format_event_for_review(event)
         assert "..." in result
 
+    def test_user_request_event(self):
+        event = {"type": "user_request", "intent": "Please delete all logs", "model": "claude-3"}
+        result = _format_event_for_review(event)
+        assert "[user]" in result
+        assert "delete all logs" in result
+
     def test_unknown_event_type(self):
         event = {"type": "custom", "data": "test"}
         result = _format_event_for_review(event)
@@ -183,6 +189,45 @@ class TestSentinelObserve:
         )
         await sentinel.observe(event)
         assert sentinel._events[0]["input"] == {"command": "rm -rf /"}
+
+    @pytest.mark.anyio
+    async def test_observes_user_request(self, sentinel):
+        event = RequestEvent(
+            method="POST",
+            path="/v1/messages",
+            model="claude-3",
+            last_message_role="user",
+            last_message_preview="Please read the config file",
+        )
+        await sentinel.observe(event)
+        assert len(sentinel._events) == 1
+        assert sentinel._events[0]["type"] == "user_request"
+        assert sentinel._events[0]["intent"] == "Please read the config file"
+        assert sentinel._events[0]["model"] == "claude-3"
+
+    @pytest.mark.anyio
+    async def test_ignores_request_without_user_intent(self, sentinel):
+        """Requests without user intent (e.g., tool_result messages) are skipped."""
+        event = RequestEvent(
+            method="POST",
+            path="/v1/messages",
+            last_message_role="user",
+            last_message_preview=None,
+        )
+        await sentinel.observe(event)
+        assert len(sentinel._events) == 0
+
+    @pytest.mark.anyio
+    async def test_ignores_non_user_request(self, sentinel):
+        """Requests where last message is not from user are skipped."""
+        event = RequestEvent(
+            method="POST",
+            path="/v1/messages",
+            last_message_role="assistant",
+            last_message_preview="I will do that",
+        )
+        await sentinel.observe(event)
+        assert len(sentinel._events) == 0
 
     @pytest.mark.anyio
     async def test_ignores_other_events(self, sentinel):
