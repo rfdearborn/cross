@@ -356,19 +356,12 @@ async def _proxy_streaming(
                         await event_bus.publish(ev)
                     continue
 
-                # Flush any pending line that wasn't pulled into a buffer
-                if pending_line is not None:
-                    yield pending_line + "\n"
-                    pending_line = None
-
-                # Hold event: lines until we see the next data: line
-                if line.startswith("event: "):
-                    pending_line = line
-                    for ev in events:
-                        await event_bus.publish(ev)
-                    continue
-
+                # When buffering, ALL lines (event: and data:) go into the buffer
                 if buffering:
+                    # Pull any held event: line into the buffer too
+                    if pending_line is not None:
+                        buffer.append(pending_line)
+                        pending_line = None
                     buffer.append(line)
 
                     # Safety: flush buffer if it grows too large
@@ -455,7 +448,22 @@ async def _proxy_streaming(
                     # else: still accumulating tool_use deltas
                     continue
 
-                # Not buffering — stream text and other events through immediately
+                # --- Not buffering ---
+
+                # Flush any pending line that wasn't pulled into a buffer
+                if pending_line is not None:
+                    yield pending_line + "\n"
+                    pending_line = None
+
+                # Hold event: lines until we see the next data: line
+                # (so we can pull them into a buffer if the next line starts a tool_use)
+                if line.startswith("event: "):
+                    pending_line = line
+                    for ev in events:
+                        await event_bus.publish(ev)
+                    continue
+
+                # Stream text and other events through immediately
                 for ev in events:
                     await event_bus.publish(ev)
                 yield line + "\n"

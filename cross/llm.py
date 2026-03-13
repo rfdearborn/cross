@@ -174,6 +174,10 @@ async def _complete_anthropic(
         body.update(reasoning_params)
         # Extended thinking requires temperature=1 on Anthropic
         body["temperature"] = 1.0
+        # max_tokens must exceed budget_tokens
+        budget = reasoning_params["thinking"]["budget_tokens"]
+        if body["max_tokens"] <= budget:
+            body["max_tokens"] = budget + config.max_tokens
 
     client = _get_client()
     try:
