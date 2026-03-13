@@ -48,6 +48,19 @@ rules:
       - 'rm\s+--force\s+-\w*r\w*\s+{{dangerous_path}}'
       - 'rm\s+-\w*r\w*\s+--force\s+{{dangerous_path}}'
 
+  - name: rm-outside-project
+    tools: [Bash]
+    field: command
+    action: block
+    description: Deleting files in user directories outside typical project scope
+    patterns:
+      # ~/Downloads/..., ~/Documents/..., etc. (tilde form)
+      - '\brm\b\s.*~/(Downloads|Documents|Desktop|Pictures|Music|Movies|Applications|Library)/'
+      # /Users/<user>/Downloads/... (macOS absolute)
+      - '\brm\b\s.*/Users/\w+/(Downloads|Documents|Desktop|Pictures|Music|Movies|Applications|Library)/'
+      # /home/<user>/Downloads/... (Linux absolute)
+      - '\brm\b\s.*/home/\w+/(Downloads|Documents|Desktop|Pictures|Music|Movies|Applications)/'
+
   - name: destructive-alt
     tools: [Bash]
     field: command
