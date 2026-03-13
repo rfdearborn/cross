@@ -82,6 +82,7 @@ def _register_session(plugin, mock_web, session_id="sess-1", project="myproj", a
     mock_web.chat_postMessage.return_value = {"ts": "1234567890.000001"}
     mock_web.conversations_list.return_value = {"channels": []}
     mock_web.conversations_create.return_value = {"channel": {"id": "C_CHAN"}}
+    mock_web.conversations_members.return_value = {"members": []}
     mock_web.users_list.return_value = {"members": []}
 
     plugin.session_started_from_data(
@@ -382,15 +383,16 @@ class TestEnsureChannel:
 
 
 # ---------------------------------------------------------------------------
-# _invite_workspace_users
+# _ensure_users_invited
 # ---------------------------------------------------------------------------
 
 
-class TestInviteWorkspaceUsers:
-    def test_invites_non_bot_users(self, slack_env):
+class TestEnsureUsersInvited:
+    def test_invites_missing_users(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         plugin._bot_user_id = "U_BOT"
+        mock_web.conversations_members.return_value = {"members": ["U_BOT"]}
         mock_web.users_list.return_value = {
             "members": [
                 {"id": "U_HUMAN", "is_bot": False, "deleted": False},
@@ -400,25 +402,41 @@ class TestInviteWorkspaceUsers:
             ]
         }
 
-        plugin._invite_workspace_users("C_CHAN")
+        plugin._ensure_users_invited("C_CHAN")
         mock_web.conversations_invite.assert_called_once_with(channel="C_CHAN", users="U_HUMAN")
+
+    def test_skips_already_members(self, slack_env):
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        plugin._bot_user_id = "U_BOT"
+        mock_web.conversations_members.return_value = {"members": ["U_BOT", "U_HUMAN"]}
+        mock_web.users_list.return_value = {
+            "members": [
+                {"id": "U_HUMAN", "is_bot": False, "deleted": False},
+                {"id": "U_BOT", "is_bot": True, "deleted": False},
+            ]
+        }
+
+        plugin._ensure_users_invited("C_CHAN")
+        mock_web.conversations_invite.assert_not_called()
 
     def test_no_users_to_invite(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         plugin._bot_user_id = "U_BOT"
+        mock_web.conversations_members.return_value = {"members": ["U_BOT"]}
         mock_web.users_list.return_value = {"members": []}
 
-        plugin._invite_workspace_users("C_CHAN")
+        plugin._ensure_users_invited("C_CHAN")
         mock_web.conversations_invite.assert_not_called()
 
-    def test_invite_error_handled(self, slack_env):
+    def test_error_handled(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         plugin._bot_user_id = "U_BOT"
-        mock_web.users_list.side_effect = Exception("api error")
+        mock_web.conversations_members.side_effect = Exception("api error")
         # Should not raise
-        plugin._invite_workspace_users("C_CHAN")
+        plugin._ensure_users_invited("C_CHAN")
 
 
 # ---------------------------------------------------------------------------

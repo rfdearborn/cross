@@ -556,6 +556,7 @@ class SlackPlugin:
         channel_id = self._find_channel(name)
         if channel_id:
             self._channels[name] = channel_id
+            self._ensure_users_invited(channel_id)
             return channel_id
 
         try:
@@ -566,18 +567,24 @@ class SlackPlugin:
             channel_id = resp["channel"]["id"]
             self._channels[name] = channel_id
             logger.info(f"Created channel #{name} ({channel_id})")
-            self._invite_workspace_users(channel_id)
+            self._ensure_users_invited(channel_id)
             return channel_id
         except Exception as e:
             logger.warning(f"Failed to create private channel #{name}: {e}, trying public")
             resp = self._web.conversations_create(name=name)
             channel_id = resp["channel"]["id"]
             self._channels[name] = channel_id
+            self._ensure_users_invited(channel_id)
             return channel_id
 
-    def _invite_workspace_users(self, channel_id: str):
-        """Invite non-bot workspace users to the channel."""
+    def _ensure_users_invited(self, channel_id: str):
+        """Ensure non-bot workspace users are members of the channel."""
         try:
+            # Get current channel members
+            members_resp = self._web.conversations_members(channel=channel_id)
+            current_members = set(members_resp.get("members", []))
+
+            # Get non-bot workspace users
             resp = self._web.users_list()
             user_ids = [
                 u["id"]
@@ -587,14 +594,17 @@ class SlackPlugin:
                 and u["id"] != "USLACKBOT"
                 and u["id"] != self._bot_user_id
             ]
-            if user_ids:
+
+            # Invite any who aren't already members
+            missing = [uid for uid in user_ids if uid not in current_members]
+            if missing:
                 self._web.conversations_invite(
                     channel=channel_id,
-                    users=",".join(user_ids),
+                    users=",".join(missing),
                 )
-                logger.info(f"Invited {len(user_ids)} user(s) to channel")
+                logger.info(f"Invited {len(missing)} user(s) to channel {channel_id}")
         except Exception as e:
-            logger.warning(f"Failed to invite users: {e}")
+            logger.warning(f"Failed to ensure users invited to {channel_id}: {e}")
 
     def _find_channel(self, name: str) -> str | None:
         """Search for an existing channel by name."""
