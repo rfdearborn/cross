@@ -31,7 +31,9 @@ from cross.events import (
 _SETTINGS_DEFAULTS = {
     "slack_bot_token": "xoxb-fake-token",
     "slack_app_token": "xapp-fake-token",
-    "slack_channel_prefix": "test",
+    "slack_channel_base": "cross",
+    "slack_channel_append_project": False,
+    "slack_channel_append_user": True,
 }
 
 
@@ -214,6 +216,7 @@ class TestStartStop:
         factory, _, MockWebClient = slack_env
         plugin, mock_web = factory()
         mock_web.auth_test.return_value = {"user_id": "U_BOT", "user": "crossbot"}
+        mock_web.users_list.return_value = {"members": []}
 
         with patch("cross.plugins.slack.SocketModeClient") as MockSocket:
             mock_socket = MagicMock()
@@ -222,8 +225,29 @@ class TestStartStop:
             plugin.start()
 
         assert plugin._bot_user_id == "U_BOT"
+        assert plugin._username is None
         mock_socket.connect.assert_called_once()
         assert plugin._on_socket_event in mock_socket.socket_mode_request_listeners
+
+    def test_start_resolves_username(self, slack_env):
+        factory, _, MockWebClient = slack_env
+        plugin, mock_web = factory()
+        mock_web.auth_test.return_value = {"user_id": "U_BOT", "user": "crossbot"}
+        mock_web.users_list.return_value = {
+            "members": [
+                {"id": "USLACKBOT", "is_bot": False, "deleted": False, "name": "slackbot"},
+                {"id": "U_BOT", "is_bot": True, "deleted": False, "name": "crossbot"},
+                {"id": "U_HUMAN", "is_bot": False, "deleted": False, "name": "rob"},
+            ]
+        }
+
+        with patch("cross.plugins.slack.SocketModeClient") as MockSocket:
+            mock_socket = MagicMock()
+            mock_socket.socket_mode_request_listeners = []
+            MockSocket.return_value = mock_socket
+            plugin.start()
+
+        assert plugin._username == "rob"
 
     def test_stop_disconnects(self, slack_env):
         factory, _, _ = slack_env
@@ -257,21 +281,48 @@ class TestStartStop:
 
 
 class TestChannelName:
-    def test_with_prefix(self, slack_env):
-        factory, settings_mock, _ = slack_env
-        settings_mock.slack_channel_prefix = "org"
+    def test_default(self, slack_env):
+        factory, _, _ = slack_env
         plugin, _ = factory()
-        assert plugin._channel_name("myproj") == "org-cross-myproj"
+        assert plugin._channel_name("myproj") == "cross"
 
-    def test_without_prefix(self, slack_env):
+    def test_with_project(self, slack_env):
         factory, settings_mock, _ = slack_env
-        settings_mock.slack_channel_prefix = ""
+        settings_mock.slack_channel_append_project = True
         plugin, _ = factory()
+        assert plugin._channel_name("myproj") == "cross-myproj"
+
+    def test_custom_base(self, slack_env):
+        factory, settings_mock, _ = slack_env
+        settings_mock.slack_channel_base = "acme-agents"
+        settings_mock.slack_channel_append_project = True
+        plugin, _ = factory()
+        assert plugin._channel_name("myproj") == "acme-agents-myproj"
+
+    def test_with_username(self, slack_env):
+        factory, settings_mock, _ = slack_env
+        settings_mock.slack_channel_append_project = True
+        plugin, _ = factory()
+        plugin._username = "rob"
+        assert plugin._channel_name("myproj") == "cross-myproj-rob"
+
+    def test_default_with_username(self, slack_env):
+        factory, _, _ = slack_env
+        plugin, _ = factory()
+        plugin._username = "rob"
+        assert plugin._channel_name("myproj") == "cross-rob"
+
+    def test_no_user_config(self, slack_env):
+        factory, settings_mock, _ = slack_env
+        settings_mock.slack_channel_append_project = True
+        settings_mock.slack_channel_append_user = False
+        plugin, _ = factory()
+        plugin._username = "rob"
         assert plugin._channel_name("myproj") == "cross-myproj"
 
     def test_truncation(self, slack_env):
         factory, settings_mock, _ = slack_env
-        settings_mock.slack_channel_prefix = "prefix"
+        settings_mock.slack_channel_append_project = True
         plugin, _ = factory()
         long_name = "a" * 100
         name = plugin._channel_name(long_name)
@@ -287,7 +338,7 @@ class TestEnsureChannel:
     def test_cached(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        plugin._channels["test-cross-myproj"] = "C_CACHED"
+        plugin._channels["cross-myproj"] = "C_CACHED"
         result = plugin._ensure_channel("myproj")
         assert result == "C_CACHED"
         mock_web.conversations_list.assert_not_called()
@@ -296,11 +347,11 @@ class TestEnsureChannel:
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         mock_web.conversations_list.side_effect = [
-            {"channels": [{"name": "test-cross-myproj", "id": "C_EXISTING"}]},
+            {"channels": [{"name": "cross-myproj", "id": "C_EXISTING"}]},
         ]
         result = plugin._ensure_channel("myproj")
         assert result == "C_EXISTING"
-        assert plugin._channels["test-cross-myproj"] == "C_EXISTING"
+        assert plugin._channels["cross-myproj"] == "C_EXISTING"
 
     def test_creates_private(self, slack_env):
         factory, _, _ = slack_env
@@ -311,7 +362,7 @@ class TestEnsureChannel:
 
         result = plugin._ensure_channel("myproj")
         assert result == "C_NEW"
-        mock_web.conversations_create.assert_called_once_with(name="test-cross-myproj", is_private=True)
+        mock_web.conversations_create.assert_called_once_with(name="cross-myproj", is_private=True)
 
     def test_fallback_to_public(self, slack_env):
         factory, _, _ = slack_env
@@ -419,18 +470,18 @@ class TestProjectForChannel:
     def test_cached_lookup(self, slack_env):
         factory, _, _ = slack_env
         plugin, _ = factory()
-        plugin._channels["test-cross-myproj"] = "C_CHAN"
+        plugin._channels["cross-myproj"] = "C_CHAN"
         result = plugin._project_for_channel("C_CHAN")
         assert result == "myproj"
 
     def test_api_lookup(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        mock_web.conversations_info.return_value = {"channel": {"name": "test-cross-myproj"}}
+        mock_web.conversations_info.return_value = {"channel": {"name": "cross-myproj"}}
         result = plugin._project_for_channel("C_CHAN")
         assert result == "myproj"
         # Should be cached now
-        assert plugin._channels["test-cross-myproj"] == "C_CHAN"
+        assert plugin._channels["cross-myproj"] == "C_CHAN"
 
     def test_api_error(self, slack_env):
         factory, _, _ = slack_env
@@ -439,19 +490,50 @@ class TestProjectForChannel:
         result = plugin._project_for_channel("C_UNKNOWN")
         assert result is None
 
-    def test_no_cross_in_name(self, slack_env):
+    def test_no_base_in_name(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         mock_web.conversations_info.return_value = {"channel": {"name": "random-channel"}}
         result = plugin._project_for_channel("C_RANDOM")
         assert result is None
 
+    def test_custom_base(self, slack_env):
+        factory, settings_mock, _ = slack_env
+        settings_mock.slack_channel_base = "acme-agents"
+        plugin, _ = factory()
+        plugin._channels["acme-agents-myproj"] = "C_CHAN"
+        result = plugin._project_for_channel("C_CHAN")
+        assert result == "myproj"
+
     def test_multi_part_project(self, slack_env):
         factory, _, _ = slack_env
         plugin, _ = factory()
-        plugin._channels["test-cross-my-cool-proj"] = "C_CHAN"
+        plugin._channels["cross-my-cool-proj"] = "C_CHAN"
         result = plugin._project_for_channel("C_CHAN")
         assert result == "my-cool-proj"
+
+    def test_strips_username_suffix(self, slack_env):
+        factory, _, _ = slack_env
+        plugin, _ = factory()
+        plugin._username = "rob"
+        plugin._channels["cross-myproj-rob"] = "C_CHAN"
+        result = plugin._project_for_channel("C_CHAN")
+        assert result == "myproj"
+
+    def test_strips_username_multi_part_project(self, slack_env):
+        factory, _, _ = slack_env
+        plugin, _ = factory()
+        plugin._username = "rob"
+        plugin._channels["cross-my-cool-proj-rob"] = "C_CHAN"
+        result = plugin._project_for_channel("C_CHAN")
+        assert result == "my-cool-proj"
+
+    def test_base_only_no_project(self, slack_env):
+        factory, _, _ = slack_env
+        plugin, _ = factory()
+        plugin._channels["cross"] = "C_CHAN"
+        result = plugin._project_for_channel("C_CHAN")
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -1258,7 +1340,7 @@ class TestOnSocketEvent:
         spawn_cb = AsyncMock()
         plugin, mock_web = factory(spawn_callback=spawn_cb)
         plugin._bot_user_id = "U_BOT"
-        plugin._channels["test-cross-myproj"] = "C_CHAN"
+        plugin._channels["cross-myproj"] = "C_CHAN"
 
         client = MagicMock()
         req = self._make_request(
@@ -1278,7 +1360,7 @@ class TestOnSocketEvent:
         loop = asyncio.new_event_loop()
         plugin, mock_web = factory(spawn_callback=spawn_cb, event_loop=loop)
         plugin._bot_user_id = "U_BOT"
-        plugin._channels["test-cross-myproj"] = "C_CHAN"
+        plugin._channels["cross-myproj"] = "C_CHAN"
 
         client = MagicMock()
         req = self._make_request(
@@ -1303,7 +1385,7 @@ class TestOnSocketEvent:
         spawn_cb = AsyncMock()
         plugin, mock_web = factory(spawn_callback=spawn_cb)
         plugin._bot_user_id = "U_BOT"
-        plugin._channels["test-cross-myproj"] = "C_CHAN"
+        plugin._channels["cross-myproj"] = "C_CHAN"
 
         client = MagicMock()
         req = self._make_request(

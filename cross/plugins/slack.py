@@ -42,6 +42,8 @@ class SlackPlugin:
         self._sessions: dict[str, dict] = {}
         # bot user ID (resolved on connect)
         self._bot_user_id: str | None = None
+        # Slack username (resolved on connect, for channel naming)
+        self._username: str | None = None
         self._lock = threading.Lock()
         # async callback to inject input into a session: (session_id, text) -> None
         self._inject_callback = inject_callback
@@ -61,6 +63,18 @@ class SlackPlugin:
         auth = self._web.auth_test()
         self._bot_user_id = auth["user_id"]
         logger.info(f"Slack connected as {auth['user']} ({self._bot_user_id})")
+
+        # Resolve primary workspace user for channel naming
+        if settings.slack_channel_append_user:
+            try:
+                resp = self._web.users_list()
+                for u in resp.get("members", []):
+                    if not u.get("is_bot") and not u.get("deleted") and u["id"] != "USLACKBOT":
+                        self._username = u.get("name", "")
+                        logger.info(f"Slack channel username: {self._username}")
+                        break
+            except Exception as e:
+                logger.warning(f"Failed to resolve workspace user: {e}")
 
         # Start socket mode in background thread
         self._socket = SocketModeClient(
@@ -616,21 +630,26 @@ class SlackPlugin:
                 logger.warning(f"Failed to look up channel {channel_id}: {e}")
                 return None
 
-        # Channel name is "{prefix}-cross-{project}" — extract project
-        parts = name.split("-")
-        try:
-            idx = parts.index("cross")
-            return "-".join(parts[idx + 1 :])
-        except ValueError:
+        # Channel name is "{base}[-{project}][-{username}]" — extract project
+        base_slug = _slugify(settings.slack_channel_base)
+        if not name.startswith(base_slug):
             return None
+        remainder = name[len(base_slug) :].strip("-")
+        if not remainder:
+            return None
+        parts = remainder.split("-")
+        # Strip username suffix if it matches the known user
+        if self._username and parts and parts[-1] == _slugify(self._username):
+            parts = parts[:-1]
+        return "-".join(parts) if parts else None
 
     def _channel_name(self, project: str) -> str:
-        """Generate channel name: {prefix}-cross-{project}."""
-        parts = []
-        if settings.slack_channel_prefix:
-            parts.append(settings.slack_channel_prefix)
-        parts.append("cross")
-        parts.append(_slugify(project))
+        """Generate channel name: {base}[-{project}][-{username}]."""
+        parts = [_slugify(settings.slack_channel_base)]
+        if settings.slack_channel_append_project:
+            parts.append(_slugify(project))
+        if settings.slack_channel_append_user and self._username:
+            parts.append(_slugify(self._username))
         return "-".join(parts)[:80]
 
 

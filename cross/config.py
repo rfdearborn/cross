@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     # Slack
     slack_bot_token: str = ""
     slack_app_token: str = ""
-    slack_channel_prefix: str = ""  # optional org prefix
+    slack_channel_base: str = "cross"  # base channel name
+    slack_channel_append_project: bool = False  # append project name to channel
+    slack_channel_append_user: bool = True  # append Slack username to channel
 
     # Gating (denylist)
     gating_enabled: bool = True
