@@ -13,8 +13,10 @@ Tests cover:
 - shutdown: client cleanup
 """
 
+import asyncio
 import json
 import time
+import unittest.mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -23,6 +25,7 @@ from starlette.responses import StreamingResponse
 
 import cross.proxy as proxy_module
 from cross.chain import GateChain
+from cross.config import settings
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
 from cross.events import (
     ErrorEvent,
@@ -44,6 +47,7 @@ from cross.proxy import (
     _recent_tools,
     get_client,
     handle_proxy_request,
+    resolve_gate_approval,
     shutdown,
 )
 
@@ -1956,7 +1960,7 @@ class TestGateNonStreamingResponse:
         assert data["content"][0]["type"] == "text"
 
     @pytest.mark.anyio
-    async def test_escalate_treated_as_block(self):
+    async def test_escalate_waits_for_approval_then_times_out(self):
         content = json.dumps(
             {
                 "content": [
@@ -1967,10 +1971,38 @@ class TestGateNonStreamingResponse:
         event_bus = EventBus()
         chain = GateChain(gates=[EscalateGate(name="e")])
 
-        result = await _gate_non_streaming_response(content, b"{}", chain, event_bus)
+        # Use a tiny timeout so the test doesn't hang
+        with unittest.mock.patch.object(settings, "gate_approval_timeout", 0.01):
+            _blocked_tool_ids.pop("t1", None)
+            result = await _gate_non_streaming_response(content, b"{}", chain, event_bus)
         data = json.loads(result)
         assert len(data["content"]) == 0
         assert "t1" in _blocked_tool_ids
+
+    @pytest.mark.anyio
+    async def test_escalate_approved_allows_tool(self):
+        content = json.dumps(
+            {
+                "content": [
+                    {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}},
+                ]
+            }
+        ).encode()
+        event_bus = EventBus()
+        chain = GateChain(gates=[EscalateGate(name="e")])
+
+        # Resolve approval shortly after escalation
+        async def approve_soon():
+            await asyncio.sleep(0.01)
+            resolve_gate_approval("t2", approved=True, username="testuser")
+
+        _blocked_tool_ids.pop("t2", None)
+        asyncio.get_event_loop().create_task(approve_soon())
+        result = await _gate_non_streaming_response(content, b"{}", chain, event_bus)
+        data = json.loads(result)
+        # Tool should still be in the response (not blocked)
+        assert len(data["content"]) == 1
+        assert "t2" not in _blocked_tool_ids
 
     @pytest.mark.anyio
     async def test_user_intent_extracted_from_request(self):

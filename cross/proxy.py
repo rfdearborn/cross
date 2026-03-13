@@ -263,10 +263,14 @@ async def _gate_non_streaming_response(
         if block.get("type") != "tool_use":
             continue
 
+        tool_id = block.get("id", "")
+        tool_name = block.get("name", "")
+        tool_input = block.get("input")
+
         gate_request = GateRequest(
-            tool_use_id=block.get("id", ""),
-            tool_name=block.get("name", ""),
-            tool_input=block.get("input"),
+            tool_use_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
             timestamp=time.time(),
             user_intent=user_intent,
             agent=model,
@@ -276,20 +280,85 @@ async def _gate_non_streaming_response(
         result = await gate_chain.evaluate(gate_request)
 
         # Record for future context
-        _recent_tools.append({"name": block.get("name", ""), "input": block.get("input")})
+        _recent_tools.append({"name": tool_name, "input": tool_input})
 
-        if result.action in (Action.BLOCK, Action.ESCALATE) or any_blocked:
-            reason = (
-                result.reason
-                if result.action in (Action.BLOCK, Action.ESCALATE)
-                else ("Preceding tool in same message was blocked")
+        # Publish gate decision event
+        await event_bus.publish(
+            GateDecisionEvent(
+                tool_use_id=tool_id,
+                tool_name=tool_name,
+                action=result.action.name.lower(),
+                reason=result.reason,
+                rule_id=result.rule_id,
+                evaluator=result.evaluator,
+                confidence=result.confidence,
+                tool_input=tool_input,
             )
-            tool_id = block.get("id", "")
+        )
+
+        if result.action == Action.ESCALATE and not any_blocked:
+            # Hold and wait for human approval via Slack
+            approval_event = asyncio.Event()
+            _pending_approvals[tool_id] = approval_event
+            logger.info(
+                f"ESCALATED tool {tool_name} ({tool_id}), "
+                f"waiting for human approval (timeout={settings.gate_approval_timeout}s)"
+            )
+
+            try:
+                await asyncio.wait_for(
+                    approval_event.wait(),
+                    timeout=settings.gate_approval_timeout,
+                )
+                approved, username = _approval_results.pop(tool_id, (False, ""))
+            except asyncio.TimeoutError:
+                approved, username = False, ""
+                logger.warning(f"Gate approval timed out for {tool_name} ({tool_id})")
+            finally:
+                _pending_approvals.pop(tool_id, None)
+
+            if approved:
+                logger.info(f"APPROVED tool {tool_name} by {username}")
+                await event_bus.publish(
+                    GateDecisionEvent(
+                        tool_use_id=tool_id,
+                        tool_name=tool_name,
+                        action="allow",
+                        reason=f"Approved by human reviewer (@{username})",
+                        evaluator="human",
+                        tool_input=tool_input,
+                    )
+                )
+            else:
+                reason = (
+                    f"Denied by human reviewer (@{username})" if username else "Timed out waiting for human approval"
+                )
+                _blocked_tool_ids[tool_id] = reason
+                _blocked_tool_timestamps[tool_id] = time.time()
+                any_blocked = True
+                blocked_indices.append(i)
+                logger.warning(f"DENIED tool {tool_name} ({tool_id}): {reason}")
+                await event_bus.publish(
+                    GateDecisionEvent(
+                        tool_use_id=tool_id,
+                        tool_name=tool_name,
+                        action="block",
+                        reason=reason,
+                        evaluator="human",
+                        tool_input=tool_input,
+                    )
+                )
+
+        elif result.action == Action.BLOCK or any_blocked:
+            reason = result.reason if result.action == Action.BLOCK else "Preceding tool in same message was blocked"
             _blocked_tool_ids[tool_id] = reason
             _blocked_tool_timestamps[tool_id] = time.time()
             any_blocked = True
             blocked_indices.append(i)
-            logger.warning(f"BLOCKED tool {block.get('name')} (id={block.get('id')}): {reason}")
+            logger.warning(f"BLOCKED tool {tool_name} (id={tool_id}): {reason}")
+
+        elif result.action == Action.ALERT:
+            logger.warning(f"ALERT on tool {tool_name} (id={tool_id}): {result.reason}")
 
     if blocked_indices:
         # Remove blocked tool_use blocks from response (reverse order to preserve indices)
