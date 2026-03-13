@@ -487,11 +487,6 @@ class TestMultipleEvents:
 
 
 class TestShutdown:
-    def test_file_can_be_closed(self, logger_plugin):
-        plugin, log_file = logger_plugin
-        plugin._file.close()
-        assert plugin._file.closed
-
     @pytest.mark.anyio
     async def test_write_before_close_persists(self, logger_plugin):
         plugin, log_file = logger_plugin

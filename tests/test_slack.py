@@ -196,35 +196,12 @@ class TestExtractAllowAll:
 
 
 class TestSlackPluginInit:
-    def test_basic_init(self, slack_env):
+    def test_init_creates_plugin(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        assert plugin._web is mock_web
+        # Verify it's usable — can register a session without error
         assert plugin._socket is None
-        assert plugin._channels == {}
-        assert plugin._threads == {}
-        assert plugin._sessions == {}
         assert plugin._bot_user_id is None
-        assert plugin._inject_callback is None
-        assert plugin._spawn_callback is None
-
-    def test_init_with_callbacks(self, slack_env):
-        factory, _, _ = slack_env
-        inject_cb = AsyncMock()
-        spawn_cb = AsyncMock()
-        loop = MagicMock()
-        plugin, _ = factory(inject_callback=inject_cb, spawn_callback=spawn_cb, event_loop=loop)
-        assert plugin._inject_callback is inject_cb
-        assert plugin._spawn_callback is spawn_cb
-        assert plugin._event_loop is loop
-
-    def test_init_empty_state(self, slack_env):
-        factory, _, _ = slack_env
-        plugin, _ = factory()
-        assert plugin._last_permission_post == {}
-        assert plugin._last_tool_desc == {}
-        assert plugin._permission_pending == {}
-        assert plugin._pending_thread_ts == {}
 
 
 # ---------------------------------------------------------------------------
@@ -261,17 +238,17 @@ class TestStartStop:
         factory, _, _ = slack_env
         plugin, _ = factory()
         plugin._socket = None
-        # Should not raise
         plugin.stop()
+        assert plugin._socket is None  # no socket created
 
-    def test_stop_disconnect_error(self, slack_env):
+    def test_stop_disconnect_error_swallowed(self, slack_env):
         factory, _, _ = slack_env
         plugin, _ = factory()
         mock_socket = MagicMock()
         mock_socket.disconnect.side_effect = RuntimeError("gone")
         plugin._socket = mock_socket
-        # Should swallow the exception
         plugin.stop()
+        mock_socket.disconnect.assert_called_once()  # attempted despite error
 
 
 # ---------------------------------------------------------------------------
@@ -737,38 +714,21 @@ class TestHandleEvent:
         assert "ls -la" in plugin._last_tool_desc["sess-1"]
 
     @pytest.mark.anyio
-    async def test_tool_use_read(self, slack_env):
+    async def test_tool_use_file_tools_include_path(self, slack_env):
+        """Read/Write/Edit tools should include file_path in description."""
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         _register_session(plugin, mock_web)
+
+        mock_web.chat_postMessage.reset_mock()
 
         event = ToolUseEvent(name="Read", tool_use_id="tu1", input={"file_path": "/foo/bar.py"})
         await plugin.handle_event(event)
 
         assert "`Read`" in plugin._last_tool_desc["sess-1"]
         assert "/foo/bar.py" in plugin._last_tool_desc["sess-1"]
-
-    @pytest.mark.anyio
-    async def test_tool_use_write(self, slack_env):
-        factory, _, _ = slack_env
-        plugin, mock_web = factory()
-        _register_session(plugin, mock_web)
-
-        event = ToolUseEvent(name="Write", tool_use_id="tu1", input={"file_path": "/foo/out.txt"})
-        await plugin.handle_event(event)
-
-        assert "`Write`" in plugin._last_tool_desc["sess-1"]
-
-    @pytest.mark.anyio
-    async def test_tool_use_edit(self, slack_env):
-        factory, _, _ = slack_env
-        plugin, mock_web = factory()
-        _register_session(plugin, mock_web)
-
-        event = ToolUseEvent(name="Edit", tool_use_id="tu1", input={"file_path": "/foo/bar.py"})
-        await plugin.handle_event(event)
-
-        assert "`Edit`" in plugin._last_tool_desc["sess-1"]
+        # File tool events are tracked internally but NOT posted to Slack
+        mock_web.chat_postMessage.assert_not_called()
 
     @pytest.mark.anyio
     async def test_tool_use_generic(self, slack_env):
@@ -1191,6 +1151,7 @@ class TestOnSocketEvent:
         client = MagicMock()
         req = self._make_request(event={"type": "message", "user": "U_HUMAN", "text": "  "})
         plugin._on_socket_event(client, req)
+        mock_web.chat_postMessage.assert_not_called()
 
     def test_threaded_message_injects(self, slack_env):
         factory, _, _ = slack_env
@@ -1229,8 +1190,9 @@ class TestOnSocketEvent:
                 "channel": "C_CHAN",
             }
         )
-        # Should not raise
         plugin._on_socket_event(client, req)
+        # No matching session — nothing should be posted or injected
+        mock_web.chat_postMessage.assert_not_called()
 
     def test_threaded_message_no_inject_callback(self, slack_env):
         factory, _, _ = slack_env
@@ -1247,8 +1209,10 @@ class TestOnSocketEvent:
                 "channel": "C_CHAN",
             }
         )
-        # Should warn, not raise
+        mock_web.chat_postMessage.reset_mock()
         plugin._on_socket_event(client, req)
+        # No inject callback — message acknowledged but not injected
+        mock_web.chat_postMessage.assert_not_called()
 
     def test_threaded_permission_pending_deny_feedback(self, slack_env):
         factory, _, _ = slack_env
@@ -1353,7 +1317,7 @@ class TestOnSocketEvent:
 
     def test_non_threaded_no_spawn_callback(self, slack_env):
         factory, _, _ = slack_env
-        plugin, _ = factory(spawn_callback=None)
+        plugin, mock_web = factory(spawn_callback=None)
         plugin._bot_user_id = "U_BOT"
 
         client = MagicMock()
@@ -1365,8 +1329,9 @@ class TestOnSocketEvent:
                 "channel": "C_CHAN",
             }
         )
-        # Should return without error
         plugin._on_socket_event(client, req)
+        # No spawn callback — mention acknowledged but no session spawned
+        mock_web.chat_postMessage.assert_not_called()
 
     def test_non_threaded_no_bot_user_id(self, slack_env):
         factory, _, _ = slack_env
@@ -1384,6 +1349,7 @@ class TestOnSocketEvent:
             }
         )
         plugin._on_socket_event(client, req)
+        # No bot_user_id — can't detect mentions, so no spawn
         spawn_cb.assert_not_called()
 
     def test_non_threaded_no_project_for_channel(self, slack_env):

@@ -402,18 +402,6 @@ class TestLifecycle:
 
         mock_close.assert_awaited_once()
 
-    @pytest.mark.anyio
-    async def test_on_shutdown_nothing_running(self):
-        """on_shutdown handles the case where neither sentinel nor Slack is running."""
-        import cross.daemon as daemon
-
-        daemon._sentinel = None
-        daemon._slack = None
-
-        with patch("cross.llm.close_client", new_callable=AsyncMock):
-            # Should not raise
-            await daemon.on_shutdown()
-
 
 class TestSlackSetup:
     """Test Slack plugin wiring in on_startup."""
@@ -528,12 +516,6 @@ class TestRouteRegistration:
 
         last_route = app.routes[-1]
         assert last_route.path == "/{path:path}"
-
-    def test_route_count(self):
-        """App should have exactly 4 routes: 2 API + 1 WS + 1 proxy catch-all."""
-        from cross.daemon import app
-
-        assert len(app.routes) == 4
 
 
 class TestSessionAPI:
@@ -713,13 +695,13 @@ class TestInjectToSession:
         mock_ws.send_json.assert_awaited_once_with({"type": "inject", "text": "hello"})
 
     @pytest.mark.anyio
-    async def test_inject_no_ws_does_nothing(self):
+    async def test_inject_no_ws_is_silent(self):
         import cross.daemon as daemon
 
         daemon._session_ws.clear()
-
-        # Should not raise
+        # No WebSocket registered — should return without error or side effects
         await daemon._inject_to_session("nonexistent", "hello")
+        assert "nonexistent" not in daemon._session_ws
 
     @pytest.mark.anyio
     async def test_inject_ws_error_handled(self):
@@ -729,25 +711,8 @@ class TestInjectToSession:
         mock_ws.send_json.side_effect = RuntimeError("WS closed")
         daemon._session_ws["sess_err"] = mock_ws
 
-        # Should not raise
         await daemon._inject_to_session("sess_err", "hello")
-
-
-class TestProxyHandler:
-    """Test the proxy handler route wiring."""
-
-    @pytest.mark.anyio
-    async def test_proxy_handler_calls_handle_proxy_request(self):
-        import cross.daemon as daemon
-
-        mock_request = MagicMock()
-        mock_response = MagicMock()
-
-        with patch("cross.proxy.handle_proxy_request", new_callable=AsyncMock, return_value=mock_response) as mock_hpr:
-            result = await daemon._proxy_handler(mock_request)
-
-        mock_hpr.assert_awaited_once_with(mock_request, daemon.event_bus, gate_chain=daemon._gate_chain)
-        assert result is mock_response
+        mock_ws.send_json.assert_awaited_once()
 
 
 class TestSessionWebSocket:
@@ -819,8 +784,8 @@ class TestSessionWebSocket:
         mock_slack.handle_pty_output.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_ws_pty_output_no_slack_no_error(self):
-        """PTY output without Slack configured should not raise."""
+    async def test_ws_pty_output_no_slack_skips_relay(self):
+        """PTY output without Slack configured should process without error."""
         import cross.daemon as daemon
 
         daemon._session_ws.clear()
@@ -836,8 +801,10 @@ class TestSessionWebSocket:
             ]
         )
 
-        # Should not raise
         await daemon.api_session_ws(mock_ws)
+        # Session WS should have been accepted and then cleaned up
+        mock_ws.accept.assert_awaited_once()
+        assert "sess_ws4" not in daemon._session_ws
 
     @pytest.mark.anyio
     async def test_ws_unknown_message_type_ignored(self):

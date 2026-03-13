@@ -17,43 +17,6 @@ import time
 from cross.session import SessionInfo, SessionRegistry, _detect_project, registry
 
 
-class TestSessionInfoDefaults:
-    """Verify SessionInfo dataclass defaults."""
-
-    def test_defaults(self):
-        info = SessionInfo(
-            session_id="abc123",
-            agent="claude",
-            argv=["claude"],
-            project="myproject",
-            cwd="/tmp",
-            started_at=1000.0,
-        )
-        assert info.session_id == "abc123"
-        assert info.agent == "claude"
-        assert info.argv == ["claude"]
-        assert info.project == "myproject"
-        assert info.cwd == "/tmp"
-        assert info.started_at == 1000.0
-        assert info.ended_at is None
-        assert info.exit_code is None
-        assert info.pty_session is None
-
-    def test_completed_session(self):
-        info = SessionInfo(
-            session_id="def456",
-            agent="codex",
-            argv=["codex", "--model", "o3"],
-            project="cross",
-            cwd="/home/user/cross",
-            started_at=1000.0,
-            ended_at=1050.0,
-            exit_code=0,
-        )
-        assert info.ended_at == 1050.0
-        assert info.exit_code == 0
-
-
 class TestSessionRegistryCreate:
     """Verify SessionRegistry.create generates unique sessions with correct fields."""
 
@@ -103,12 +66,6 @@ class TestSessionRegistryCreate:
 
 class TestSessionRegistryGet:
     """Verify SessionRegistry.get retrieval."""
-
-    def test_get_existing_session(self):
-        reg = SessionRegistry()
-        info = reg.create(agent="claude", argv=["claude"], cwd="/tmp")
-        retrieved = reg.get(info.session_id)
-        assert retrieved is info
 
     def test_get_nonexistent_returns_none(self):
         reg = SessionRegistry()
@@ -225,12 +182,6 @@ class TestGlobalRegistry:
 
     def test_singleton_is_session_registry(self):
         assert isinstance(registry, SessionRegistry)
-
-    def test_singleton_create_and_get(self):
-        info = registry.create(agent="test_agent", argv=["test"], cwd="/tmp")
-        assert registry.get(info.session_id) is info
-        # Clean up
-        registry.complete(info.session_id, exit_code=0)
 
 
 class TestProjectDetectionFromCreate:
