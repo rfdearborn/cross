@@ -765,6 +765,56 @@ class TestUserRules:
         assert r.action == Action.BLOCK
 
 
+class TestBareListFormat:
+    @pytest.mark.anyio
+    async def test_yaml_bare_list(self, tmp_path):
+        """User rule files can be a bare YAML list without a 'rules:' wrapper."""
+        rules_file = tmp_path / "custom.yaml"
+        rules_file.write_text(
+            "- name: no-curl\n  tools: [Bash]\n  action: block\n  field: command\n  patterns:\n    - '\\bcurl\\b'\n"
+        )
+        gate = DenylistGate(rules_dir=tmp_path, include_defaults=False)
+        assert len(gate.rules) == 1
+        assert gate.rules[0].name == "no-curl"
+
+        r = await gate.evaluate(_req("Bash", {"command": "curl http://example.com"}))
+        assert r.action == Action.BLOCK
+
+    @pytest.mark.anyio
+    async def test_json_bare_list(self, tmp_path):
+        rules_file = tmp_path / "custom.json"
+        rules_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "no-wget",
+                        "tools": ["Bash"],
+                        "action": "block",
+                        "field": "command",
+                        "patterns": [r"wget\b"],
+                    }
+                ]
+            )
+        )
+        gate = DenylistGate(rules_dir=tmp_path, include_defaults=False)
+        assert len(gate.rules) == 1
+
+        r = await gate.evaluate(_req("Bash", {"command": "wget http://evil.com"}))
+        assert r.action == Action.BLOCK
+
+    @pytest.mark.anyio
+    async def test_bare_list_merged_with_defaults(self, tmp_path):
+        rules_file = tmp_path / "extra.yaml"
+        rules_file.write_text(
+            "- name: test-rule\n  tools: [Bash]\n  action: escalate\n  field: command\n  patterns:\n    - 'crosstest'\n"
+        )
+        gate = DenylistGate(rules_dir=tmp_path, include_defaults=True)
+        assert len(gate.rules) > 1
+
+        r = await gate.evaluate(_req("Bash", {"command": "echo crosstest"}))
+        assert r.action == Action.ESCALATE
+
+
 class TestDisableRules:
     @pytest.mark.anyio
     async def test_disable_default_rule(self, tmp_path):

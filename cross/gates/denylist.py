@@ -71,10 +71,14 @@ def _substitute_variables(patterns: list[str], variables: dict[str, str]) -> lis
     return result
 
 
-def _parse_rules(data: dict, source: str = "") -> list[DenylistRule]:
-    """Parse rules from a loaded YAML/JSON dict."""
+def _parse_rules(data: dict | list, source: str = "") -> list[DenylistRule]:
+    """Parse rules from a loaded YAML/JSON dict or bare list."""
     if not data:
         return []
+
+    # Accept bare list of rules (e.g., user files without a "rules:" wrapper)
+    if isinstance(data, list):
+        data = {"rules": data}
 
     variables = data.get("variables", {})
     rules = []
@@ -137,12 +141,13 @@ def _load_user_rules(rules_dir: Path) -> tuple[list[DenylistRule], set[str]]:
             if not data:
                 continue
 
-            # Collect disabled rule names
-            disable_list = data.get("disable", [])
-            if isinstance(disable_list, list):
-                disabled.update(disable_list)
+            # Collect disabled rule names (only if data is a dict)
+            if isinstance(data, dict):
+                disable_list = data.get("disable", [])
+                if isinstance(disable_list, list):
+                    disabled.update(disable_list)
 
-            # Parse rules
+            # Parse rules (accepts both dict and bare list)
             parsed = _parse_rules(data, source=str(path))
             rules.extend(parsed)
             if parsed:
