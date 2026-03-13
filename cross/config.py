@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     llm_gate_timeout_ms: float = 30000
     llm_gate_threshold: str = "block"  # min denylist action to trigger LLM review
     llm_gate_context_tools: int = 3  # number of recent tool calls to include in LLM review
+    llm_gate_justification: bool = False  # include explanation after verdict (costs tokens)
 
     # LLM sentinel — async periodic review of all activity
     llm_sentinel_enabled: bool = True

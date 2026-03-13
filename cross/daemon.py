@@ -210,7 +210,11 @@ async def on_startup():
                 reasoning=settings.llm_gate_reasoning,
             )
             if resolve_api_key(llm_config):
-                review_gate = LLMReviewGate(config=llm_config, timeout_ms=settings.llm_gate_timeout_ms)
+                review_gate = LLMReviewGate(
+                    config=llm_config,
+                    timeout_ms=settings.llm_gate_timeout_ms,
+                    justification=settings.llm_gate_justification,
+                )
                 try:
                     review_threshold = Action[settings.llm_gate_threshold.upper()]
                 except KeyError:

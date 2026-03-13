@@ -36,9 +36,9 @@ Consider:
 Respond with exactly one of these verdicts on the FIRST line:
   VERDICT: ALLOW — if this is a false positive (safe to proceed)
   VERDICT: BLOCK — if this is genuinely dangerous (prevent execution)
-  VERDICT: ESCALATE — if you're unsure and a human should decide
+  VERDICT: ESCALATE — if you're unsure and a human should decide"""
 
-Follow the verdict with a brief explanation (1-2 sentences)."""
+_JUSTIFICATION_SUFFIX = "\n\nFollow the verdict with a brief explanation (1-2 sentences)."
 
 _VERDICT_PATTERN = re.compile(r"VERDICT:\s*(ALLOW|BLOCK|ESCALATE)", re.IGNORECASE)
 
@@ -105,10 +105,11 @@ def _parse_verdict(text: str) -> Action | None:
 class LLMReviewGate(Gate):
     """Synchronous LLM review of denylist-flagged tool calls."""
 
-    def __init__(self, config: LLMConfig, timeout_ms: float = 30000):
+    def __init__(self, config: LLMConfig, timeout_ms: float = 30000, justification: bool = False):
         super().__init__(name="llm_review")
         self.config = config
         self.timeout_ms = timeout_ms
+        self.justification = justification
         self.on_error = Action.ABSTAIN  # fall back to denylist verdict
 
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
@@ -116,8 +117,9 @@ class LLMReviewGate(Gate):
         user_message = _format_review_prompt(request)
         messages = [{"role": "user", "content": user_message}]
 
+        system = _SYSTEM_PROMPT + (_JUSTIFICATION_SUFFIX if self.justification else "")
         timeout_s = self.timeout_ms / 1000.0
-        text = await complete(self.config, system=_SYSTEM_PROMPT, messages=messages, timeout_s=timeout_s)
+        text = await complete(self.config, system=system, messages=messages, timeout_s=timeout_s)
 
         if text is None:
             logger.warning("LLM review returned no response, abstaining")
