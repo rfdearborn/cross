@@ -44,6 +44,8 @@ class SlackPlugin:
         self._bot_user_id: str | None = None
         # Slack username (resolved on connect, for channel naming)
         self._username: str | None = None
+        # Cached non-bot user IDs (resolved on connect)
+        self._user_ids: list[str] = []
         self._lock = threading.Lock()
         # async callback to inject input into a session: (session_id, text) -> None
         self._inject_callback = inject_callback
@@ -64,17 +66,18 @@ class SlackPlugin:
         self._bot_user_id = auth["user_id"]
         logger.info(f"Slack connected as {auth['user']} ({self._bot_user_id})")
 
-        # Resolve primary workspace user for channel naming
-        if settings.slack_channel_append_user:
-            try:
-                resp = self._web.users_list()
-                for u in resp.get("members", []):
-                    if not u.get("is_bot") and not u.get("deleted") and u["id"] != "USLACKBOT":
+        # Resolve workspace users (for channel naming and invites)
+        try:
+            resp = self._web.users_list()
+            for u in resp.get("members", []):
+                if not u.get("is_bot") and not u.get("deleted") and u["id"] != "USLACKBOT":
+                    self._user_ids.append(u["id"])
+                    if not self._username and settings.slack_channel_append_user:
                         self._username = u.get("name", "")
                         logger.info(f"Slack channel username: {self._username}")
-                        break
-            except Exception as e:
-                logger.warning(f"Failed to resolve workspace user: {e}")
+            logger.info(f"Resolved {len(self._user_ids)} workspace user(s)")
+        except Exception as e:
+            logger.warning(f"Failed to resolve workspace users: {e}")
 
         # Start socket mode in background thread
         self._socket = SocketModeClient(
@@ -579,24 +582,12 @@ class SlackPlugin:
 
     def _ensure_users_invited(self, channel_id: str):
         """Ensure non-bot workspace users are members of the channel."""
+        if not self._user_ids:
+            return
         try:
-            # Get current channel members
             members_resp = self._web.conversations_members(channel=channel_id)
             current_members = set(members_resp.get("members", []))
-
-            # Get non-bot workspace users
-            resp = self._web.users_list()
-            user_ids = [
-                u["id"]
-                for u in resp.get("members", [])
-                if not u.get("is_bot")
-                and not u.get("deleted")
-                and u["id"] != "USLACKBOT"
-                and u["id"] != self._bot_user_id
-            ]
-
-            # Invite any who aren't already members
-            missing = [uid for uid in user_ids if uid not in current_members]
+            missing = [uid for uid in self._user_ids if uid not in current_members]
             if missing:
                 self._web.conversations_invite(
                     channel=channel_id,

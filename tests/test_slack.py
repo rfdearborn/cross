@@ -249,6 +249,7 @@ class TestStartStop:
             plugin.start()
 
         assert plugin._username == "rob"
+        assert plugin._user_ids == ["U_HUMAN"]
 
     def test_stop_disconnects(self, slack_env):
         factory, _, _ = slack_env
@@ -339,7 +340,7 @@ class TestEnsureChannel:
     def test_cached(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        plugin._channels["cross-myproj"] = "C_CACHED"
+        plugin._channels["cross"] = "C_CACHED"
         result = plugin._ensure_channel("myproj")
         assert result == "C_CACHED"
         mock_web.conversations_list.assert_not_called()
@@ -348,22 +349,21 @@ class TestEnsureChannel:
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         mock_web.conversations_list.side_effect = [
-            {"channels": [{"name": "cross-myproj", "id": "C_EXISTING"}]},
+            {"channels": [{"name": "cross", "id": "C_EXISTING"}]},
         ]
         result = plugin._ensure_channel("myproj")
         assert result == "C_EXISTING"
-        assert plugin._channels["cross-myproj"] == "C_EXISTING"
+        assert plugin._channels["cross"] == "C_EXISTING"
 
     def test_creates_private(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         mock_web.conversations_list.return_value = {"channels": []}
         mock_web.conversations_create.return_value = {"channel": {"id": "C_NEW"}}
-        mock_web.users_list.return_value = {"members": []}
 
         result = plugin._ensure_channel("myproj")
         assert result == "C_NEW"
-        mock_web.conversations_create.assert_called_once_with(name="cross-myproj", is_private=True)
+        mock_web.conversations_create.assert_called_once_with(name="cross", is_private=True)
 
     def test_fallback_to_public(self, slack_env):
         factory, _, _ = slack_env
@@ -391,16 +391,8 @@ class TestEnsureUsersInvited:
     def test_invites_missing_users(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        plugin._bot_user_id = "U_BOT"
+        plugin._user_ids = ["U_HUMAN"]
         mock_web.conversations_members.return_value = {"members": ["U_BOT"]}
-        mock_web.users_list.return_value = {
-            "members": [
-                {"id": "U_HUMAN", "is_bot": False, "deleted": False},
-                {"id": "U_BOT", "is_bot": True, "deleted": False},
-                {"id": "USLACKBOT", "is_bot": False, "deleted": False},
-                {"id": "U_DELETED", "is_bot": False, "deleted": True},
-            ]
-        }
 
         plugin._ensure_users_invited("C_CHAN")
         mock_web.conversations_invite.assert_called_once_with(channel="C_CHAN", users="U_HUMAN")
@@ -408,32 +400,25 @@ class TestEnsureUsersInvited:
     def test_skips_already_members(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        plugin._bot_user_id = "U_BOT"
+        plugin._user_ids = ["U_HUMAN"]
         mock_web.conversations_members.return_value = {"members": ["U_BOT", "U_HUMAN"]}
-        mock_web.users_list.return_value = {
-            "members": [
-                {"id": "U_HUMAN", "is_bot": False, "deleted": False},
-                {"id": "U_BOT", "is_bot": True, "deleted": False},
-            ]
-        }
 
         plugin._ensure_users_invited("C_CHAN")
         mock_web.conversations_invite.assert_not_called()
 
-    def test_no_users_to_invite(self, slack_env):
+    def test_no_cached_users(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        plugin._bot_user_id = "U_BOT"
-        mock_web.conversations_members.return_value = {"members": ["U_BOT"]}
-        mock_web.users_list.return_value = {"members": []}
+        plugin._user_ids = []
 
         plugin._ensure_users_invited("C_CHAN")
+        mock_web.conversations_members.assert_not_called()
         mock_web.conversations_invite.assert_not_called()
 
     def test_error_handled(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        plugin._bot_user_id = "U_BOT"
+        plugin._user_ids = ["U_HUMAN"]
         mock_web.conversations_members.side_effect = Exception("api error")
         # Should not raise
         plugin._ensure_users_invited("C_CHAN")
