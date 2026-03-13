@@ -28,11 +28,12 @@ logger = logging.getLogger("cross.plugins.slack")
 class SlackPlugin:
     """Manages Slack channels/threads and relays agent events."""
 
-    def __init__(self, inject_callback=None, spawn_callback=None, event_loop=None):
+    def __init__(self, inject_callback=None, spawn_callback=None, resolve_approval_callback=None, event_loop=None):
         self._web = WebClient(token=settings.slack_bot_token)
         self._socket: SocketModeClient | None = None
         self._event_loop = event_loop
         self._spawn_callback = spawn_callback
+        self._resolve_approval_callback = resolve_approval_callback
         # channel name -> channel ID
         self._channels: dict[str, str] = {}
         # session_id -> (channel_id, thread_ts)
@@ -229,6 +230,7 @@ class SlackPlugin:
                 session_id = list(self._threads.keys())[-1]
                 thread_info = self._threads.get(session_id)
             else:
+                session_id = None
                 thread_info = None
 
         if thread_info:
@@ -243,7 +245,7 @@ class SlackPlugin:
             thread_ts = None
 
         match event:
-            case ToolUseEvent():
+            case ToolUseEvent() if session_id:
                 # Track tool description for permission prompt context (not posted to Slack)
                 tool_desc = f"`{event.name}`"
                 if event.name == "Bash":
@@ -254,7 +256,7 @@ class SlackPlugin:
                     tool_desc = f"`{event.name}`: `{path}`"
                 self._last_tool_desc[session_id] = tool_desc
 
-            case TextEvent():
+            case TextEvent() if session_id:
                 # If permission was pending, it's now resolved (approved from terminal)
                 if session_id in self._permission_pending:
                     perm_channel, perm_ts = self._permission_pending.pop(session_id)
@@ -279,12 +281,40 @@ class SlackPlugin:
                     if len(input_str) > 500:
                         input_str = input_str[:500] + "\n..."
                     text += f"\n```\n{input_str}\n```"
-                self._web.chat_postMessage(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    text=text,
-                    reply_broadcast=event.action in ("block", "escalate"),
-                )
+
+                msg_kwargs: dict = {
+                    "channel": channel_id,
+                    "thread_ts": thread_ts,
+                    "text": text,
+                    "reply_broadcast": event.action in ("block", "escalate"),
+                }
+
+                # Add Allow/Deny buttons for escalations
+                if event.action == "escalate":
+                    msg_kwargs["blocks"] = [
+                        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+                        {
+                            "type": "actions",
+                            "elements": [
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "Allow"},
+                                    "action_id": "gate_approve",
+                                    "value": event.tool_use_id,
+                                    "style": "primary",
+                                },
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "Deny"},
+                                    "action_id": "gate_deny",
+                                    "value": event.tool_use_id,
+                                    "style": "danger",
+                                },
+                            ],
+                        },
+                    ]
+
+                self._web.chat_postMessage(**msg_kwargs)
 
             case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
                 icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
@@ -428,6 +458,33 @@ class SlackPlugin:
         channel_id = payload.get("channel", {}).get("id")
         message_ts = payload.get("message", {}).get("ts")
 
+        # --- Gate approval buttons ---
+        if action_id in ("gate_approve", "gate_deny"):
+            tool_use_id = action.get("value", "")
+            approved = action_id == "gate_approve"
+            result_text = f"✅ *Approved* by @{user_name}" if approved else f"❌ *Denied* by @{user_name}"
+            logger.info(f"Gate {'approved' if approved else 'denied'} by {user_name} ({tool_use_id})")
+
+            # Signal the proxy's waiting approval event (thread-safe)
+            if self._resolve_approval_callback and self._event_loop:
+                self._event_loop.call_soon_threadsafe(self._resolve_approval_callback, tool_use_id, approved, user_name)
+
+            # Update message to replace buttons with result
+            if channel_id and message_ts:
+                try:
+                    self._web.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text=result_text,
+                        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update gate approval message: {e}")
+            return
+
+        # --- Permission buttons (PTY session) ---
+        # value is session_id for these
+        session_id = action.get("value", "")
         if action_id == "permission_approve":
             # Claude Code's TUI acts on keypress immediately — no Enter needed
             self._inject(session_id, "1")
