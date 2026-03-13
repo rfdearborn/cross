@@ -2,7 +2,9 @@
 
 When a GateChain is configured, tool_use blocks in streaming responses are buffered
 until the gate evaluates them. Text blocks stream through with zero added latency.
-Blocked tools are suppressed; the next client request gets a synthetic error tool_result.
+Blocked tools are suppressed from the SSE stream and the response is cleanly terminated;
+the next client request gets the blocked tool_use + error tool_result injected into the
+conversation so the model knows what happened.
 """
 
 from __future__ import annotations
@@ -28,8 +30,9 @@ logger = logging.getLogger("cross.proxy")
 
 _client: httpx.AsyncClient | None = None
 
-# Blocked tool_use_ids -> (reason, timestamp) for injecting error tool_results on next request
+# Blocked tool_use_ids -> reason, info, timestamp for next-request feedback injection
 _blocked_tool_ids: dict[str, str] = {}
+_blocked_tool_info: dict[str, dict] = {}  # tool_use_id -> {name, input}
 _blocked_tool_timestamps: dict[str, float] = {}
 
 # Recent tool calls for LLM gate context (bounded deque)
@@ -109,14 +112,21 @@ def _extract_request_event(method: str, path: str, body: bytes | None) -> Reques
     return event
 
 
-def _intercept_blocked_tool_results(body: bytes) -> bytes:
-    """Replace tool_results for blocked tools with synthetic error results."""
+def _inject_blocked_tool_feedback(body: bytes) -> bytes:
+    """Inject blocked-tool feedback into the next request's messages.
+
+    Since blocked tool_use blocks are suppressed from SSE responses, the client
+    never sees them and won't send tool_results. We reconstruct the exchange by
+    appending the tool_use to the last assistant message and prepending an error
+    tool_result to the following user message.
+    """
     # Clean up stale entries
     if _blocked_tool_timestamps:
         now = time.time()
         stale = [k for k, t in _blocked_tool_timestamps.items() if now - t > _BLOCKED_TOOL_TTL]
         for k in stale:
             _blocked_tool_ids.pop(k, None)
+            _blocked_tool_info.pop(k, None)
             _blocked_tool_timestamps.pop(k, None)
 
     if not _blocked_tool_ids:
@@ -128,34 +138,86 @@ def _intercept_blocked_tool_results(body: bytes) -> bytes:
         return body
 
     messages = data.get("messages", [])
-    modified = False
+    if not messages:
+        return body
 
-    for msg in messages:
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
+    # Collect blocked tools with full info
+    to_inject: list[tuple[str, str, dict]] = []  # (tool_id, reason, info)
+    for tool_id in list(_blocked_tool_ids.keys()):
+        reason = _blocked_tool_ids.pop(tool_id)
+        info = _blocked_tool_info.pop(tool_id, None)
+        _blocked_tool_timestamps.pop(tool_id, None)
+        if info:
+            to_inject.append((tool_id, reason, info))
 
-        for i, block in enumerate(content):
-            if block.get("type") != "tool_result":
-                continue
-            tool_use_id = block.get("tool_use_id", "")
-            if tool_use_id in _blocked_tool_ids:
-                reason = _blocked_tool_ids.pop(tool_use_id)
-                _blocked_tool_timestamps.pop(tool_use_id, None)
-                content[i] = {
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": f"[Cross blocked this tool call: {reason}]",
-                    "is_error": True,
-                }
-                modified = True
-                logger.info(f"Injected error tool_result for blocked {tool_use_id}")
+    if not to_inject:
+        return body
 
-    if modified:
-        return json.dumps(data).encode()
-    return body
+    # Build tool_use blocks (for assistant message) and error tool_results (for user message)
+    tool_use_blocks = []
+    tool_result_blocks = []
+    for tool_id, reason, info in to_inject:
+        tool_use_blocks.append(
+            {
+                "type": "tool_use",
+                "id": tool_id,
+                "name": info["name"],
+                "input": info["input"],
+            }
+        )
+        tool_result_blocks.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": f"[Cross blocked this tool call: {reason}]",
+                "is_error": True,
+            }
+        )
+
+    # Find the last assistant message and append tool_use blocks to it
+    last_assistant_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "assistant":
+            last_assistant_idx = i
+            break
+
+    if last_assistant_idx is None:
+        # No assistant message — insert both before the last user message
+        insert_at = len(messages)
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                insert_at = i
+                break
+        messages.insert(insert_at, {"role": "user", "content": tool_result_blocks})
+        messages.insert(insert_at, {"role": "assistant", "content": tool_use_blocks})
+    else:
+        # Append tool_use blocks to the last assistant message
+        content = messages[last_assistant_idx].get("content", [])
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        content.extend(tool_use_blocks)
+        messages[last_assistant_idx]["content"] = content
+
+        # Find the next user message after the assistant message
+        next_user_idx = None
+        for i in range(last_assistant_idx + 1, len(messages)):
+            if messages[i].get("role") == "user":
+                next_user_idx = i
+                break
+
+        if next_user_idx is not None:
+            # Prepend tool_results to the existing user message
+            user_content = messages[next_user_idx].get("content", [])
+            if isinstance(user_content, str):
+                user_content = [{"type": "text", "text": user_content}]
+            messages[next_user_idx]["content"] = tool_result_blocks + user_content
+        else:
+            # No following user message — append new user message
+            messages.append({"role": "user", "content": tool_result_blocks})
+
+    data["messages"] = messages
+    logger.info(f"Injected feedback for {len(to_inject)} blocked tool(s) into next request")
+    return json.dumps(data).encode()
 
 
 async def handle_proxy_request(
@@ -170,7 +232,7 @@ async def handle_proxy_request(
         path = f"{path}?{request.url.query}"
 
     # Intercept blocked tool_results before forwarding
-    body = _intercept_blocked_tool_results(body)
+    body = _inject_blocked_tool_feedback(body)
 
     # Build upstream headers — forward everything except host
     headers = dict(request.headers)
@@ -334,6 +396,7 @@ async def _gate_non_streaming_response(
                     f"Denied by human reviewer (@{username})" if username else "Timed out waiting for human approval"
                 )
                 _blocked_tool_ids[tool_id] = reason
+                _blocked_tool_info[tool_id] = {"name": tool_name, "input": tool_input}
                 _blocked_tool_timestamps[tool_id] = time.time()
                 any_blocked = True
                 blocked_indices.append(i)
@@ -352,6 +415,7 @@ async def _gate_non_streaming_response(
         elif result.action == Action.BLOCK or any_blocked:
             reason = result.reason if result.action == Action.BLOCK else "Preceding tool in same message was blocked"
             _blocked_tool_ids[tool_id] = reason
+            _blocked_tool_info[tool_id] = {"name": tool_name, "input": tool_input}
             _blocked_tool_timestamps[tool_id] = time.time()
             any_blocked = True
             blocked_indices.append(i)
@@ -365,6 +429,9 @@ async def _gate_non_streaming_response(
         for i in reversed(blocked_indices):
             blocks.pop(i)
         data["content"] = blocks
+        # Fix stop_reason if no tool_use blocks remain
+        if not any(b.get("type") == "tool_use" for b in blocks):
+            data["stop_reason"] = "end_turn"
         return json.dumps(data).encode()
     return content
 
@@ -378,6 +445,18 @@ def _is_tool_use_block_start(line: str) -> bool:
         return data.get("type") == "content_block_start" and data.get("content_block", {}).get("type") == "tool_use"
     except (json.JSONDecodeError, AttributeError):
         return False
+
+
+def _synthetic_message_end_sse() -> list[str]:
+    """Generate SSE lines to cleanly end a response (end_turn + message_stop)."""
+    return [
+        "event: message_delta",
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}',
+        "",
+        "event: message_stop",
+        'data: {"type":"message_stop"}',
+        "",
+    ]
 
 
 async def _proxy_streaming(
@@ -410,6 +489,7 @@ async def _proxy_streaming(
         buffer: list[str] = []
         buffering = False  # True when inside a tool_use content block
         any_blocked = False  # If any tool in this message was blocked, block the rest
+        response_terminated = False  # True when we've sent synthetic message_stop
         tool_index = 0  # Track tool position in this response
         pending_line: str | None = None  # Holds event: line until we know if next data: starts a buffer
 
@@ -533,6 +613,10 @@ async def _proxy_streaming(
                                         tool_input=tool_event.input,
                                     )
                                 )
+                                # Flush buffer — tool is approved
+                                await event_bus.publish(tool_event)
+                                for buffered_line in buffer:
+                                    yield buffered_line + "\n"
                             else:
                                 reason = (
                                     f"Denied by human reviewer (@{username})"
@@ -540,6 +624,10 @@ async def _proxy_streaming(
                                     else "Timed out waiting for human approval"
                                 )
                                 _blocked_tool_ids[tool_event.tool_use_id] = reason
+                                _blocked_tool_info[tool_event.tool_use_id] = {
+                                    "name": tool_event.name,
+                                    "input": tool_event.input,
+                                }
                                 _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
                                 logger.warning(f"DENIED tool {tool_event.name} ({tool_event.tool_use_id}): {reason}")
                                 await event_bus.publish(
@@ -552,28 +640,33 @@ async def _proxy_streaming(
                                         tool_input=tool_event.input,
                                     )
                                 )
-
-                            # Flush buffer either way — Claude Code needs to see the tool_use
-                            # so it can send a tool_result that the proxy can intercept
-                            await event_bus.publish(tool_event)
-                            for buffered_line in buffer:
-                                yield buffered_line + "\n"
+                                # Suppress tool_use, terminate response cleanly
+                                await event_bus.publish(tool_event)
+                                for sse_line in _synthetic_message_end_sse():
+                                    yield sse_line + "\n"
+                                response_terminated = True
+                                break
 
                         elif result.action == Action.BLOCK or any_blocked:
-                            # Block: flush buffer so Claude Code sees the tool, then
-                            # intercept the tool_result on the next request with the error
                             reason = (
                                 result.reason
                                 if result.action == Action.BLOCK
                                 else "Preceding tool in same message was blocked"
                             )
                             _blocked_tool_ids[tool_event.tool_use_id] = reason
+                            _blocked_tool_info[tool_event.tool_use_id] = {
+                                "name": tool_event.name,
+                                "input": tool_event.input,
+                            }
                             _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
                             logger.warning(f"BLOCKED tool {tool_event.name} (id={tool_event.tool_use_id}): {reason}")
                             any_blocked = True
                             await event_bus.publish(tool_event)
-                            for buffered_line in buffer:
-                                yield buffered_line + "\n"
+                            # Suppress tool_use, terminate response cleanly
+                            for sse_line in _synthetic_message_end_sse():
+                                yield sse_line + "\n"
+                            response_terminated = True
+                            break
                         elif result.action == Action.ALERT:
                             # Alert: flush buffer (allow execution) but log
                             logger.warning(
@@ -613,14 +706,15 @@ async def _proxy_streaming(
                     await event_bus.publish(ev)
                 yield line + "\n"
 
-            # Flush any pending event line
-            if pending_line is not None:
-                yield pending_line + "\n"
+            if not response_terminated:
+                # Flush any pending event line
+                if pending_line is not None:
+                    yield pending_line + "\n"
 
-            # Flush any remaining parser state
-            events = parser.feed_line("")
-            for ev in events:
-                await event_bus.publish(ev)
+                # Flush any remaining parser state
+                events = parser.feed_line("")
+                for ev in events:
+                    await event_bus.publish(ev)
         finally:
             await upstream.aclose()
 

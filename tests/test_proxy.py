@@ -3,7 +3,7 @@
 Tests cover:
 - _extract_user_intent: message parsing, system-reminder skipping, content types
 - _extract_request_event: request parsing, edge cases, body variations
-- _intercept_blocked_tool_results: stale cleanup, multiple messages, edge cases
+- _inject_blocked_tool_feedback: stale cleanup, message injection, edge cases
 - get_client: singleton behavior
 - handle_proxy_request: streaming vs non-streaming routing
 - _proxy_simple: non-streaming with/without gate chain, error responses
@@ -37,11 +37,12 @@ from cross.proxy import (
     _BLOCKED_TOOL_TTL,
     _MAX_BUFFER_LINES,
     _blocked_tool_ids,
+    _blocked_tool_info,
     _blocked_tool_timestamps,
     _extract_request_event,
     _extract_user_intent,
     _gate_non_streaming_response,
-    _intercept_blocked_tool_results,
+    _inject_blocked_tool_feedback,
     _is_tool_use_block_start,
     _proxy_streaming,
     _recent_tools,
@@ -58,6 +59,7 @@ from cross.proxy import (
 def _reset_proxy_globals():
     """Reset module-level mutable state before each test."""
     _blocked_tool_ids.clear()
+    _blocked_tool_info.clear()
     _blocked_tool_timestamps.clear()
     _recent_tools.clear()
     # Reset the singleton client
@@ -399,203 +401,264 @@ class TestExtractRequestEvent:
 
 
 # ============================================================
-# _intercept_blocked_tool_results (additional edge cases)
+# _inject_blocked_tool_feedback
 # ============================================================
 
 
-class TestInterceptBlockedToolResults:
-    """Additional tests beyond test_proxy_gating.py coverage."""
+class TestInjectBlockedToolFeedback:
+    """Tests for injecting blocked-tool feedback into the next request."""
 
     def test_stale_entries_cleaned_up(self):
         _blocked_tool_ids["old_tool"] = "old reason"
+        _blocked_tool_info["old_tool"] = {"name": "Bash", "input": {}}
         _blocked_tool_timestamps["old_tool"] = time.time() - _BLOCKED_TOOL_TTL - 10
 
         body = json.dumps({"messages": []}).encode()
-        _intercept_blocked_tool_results(body)
+        _inject_blocked_tool_feedback(body)
 
         assert "old_tool" not in _blocked_tool_ids
+        assert "old_tool" not in _blocked_tool_info
         assert "old_tool" not in _blocked_tool_timestamps
 
     def test_fresh_entries_not_cleaned(self):
         _blocked_tool_ids["fresh_tool"] = "fresh reason"
+        _blocked_tool_info["fresh_tool"] = {"name": "Bash", "input": {}}
         _blocked_tool_timestamps["fresh_tool"] = time.time()
 
         body = json.dumps({"messages": []}).encode()
-        _intercept_blocked_tool_results(body)
+        _inject_blocked_tool_feedback(body)
 
+        # Empty messages → nothing to inject into, entry preserved
         assert "fresh_tool" in _blocked_tool_ids
 
     def test_stale_and_fresh_mixed(self):
         _blocked_tool_ids["old"] = "old"
+        _blocked_tool_info["old"] = {"name": "Bash", "input": {}}
         _blocked_tool_timestamps["old"] = time.time() - _BLOCKED_TOOL_TTL - 10
         _blocked_tool_ids["new"] = "new"
+        _blocked_tool_info["new"] = {"name": "Bash", "input": {}}
         _blocked_tool_timestamps["new"] = time.time()
 
-        body = json.dumps({"messages": []}).encode()
-        _intercept_blocked_tool_results(body)
+        body = json.dumps(
+            {
+                "messages": [
+                    {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+                    {"role": "user", "content": "next message"},
+                ]
+            }
+        ).encode()
+        _inject_blocked_tool_feedback(body)
 
+        # Old should be cleaned, new should be consumed
         assert "old" not in _blocked_tool_ids
-        assert "new" in _blocked_tool_ids
+        assert "new" not in _blocked_tool_ids
 
-    def test_no_messages_key(self):
+    def test_no_messages_returns_unchanged(self):
         _blocked_tool_ids["t1"] = "reason"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {}}
         body = json.dumps({"model": "claude-3"}).encode()
-        result = _intercept_blocked_tool_results(body)
+        result = _inject_blocked_tool_feedback(body)
         data = json.loads(result)
-        assert "messages" not in data or data.get("messages") is None
+        assert "messages" not in data
 
-    def test_assistant_messages_skipped(self):
-        _blocked_tool_ids["t1"] = "reason"
-        body = json.dumps(
-            {
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
-                        ],
-                    }
-                ]
-            }
-        ).encode()
-        result = _intercept_blocked_tool_results(body)
-        # Should not modify assistant messages
-        data = json.loads(result)
-        assert data["messages"][0]["content"][0]["type"] == "tool_use"
-        # t1 should still be blocked (not consumed)
-        assert "t1" in _blocked_tool_ids
-
-    def test_string_content_not_iterated(self):
-        """Content that is a string (not list) should be safely skipped."""
-        _blocked_tool_ids["t1"] = "reason"
-        body = json.dumps(
-            {
-                "messages": [
-                    {"role": "user", "content": "just a string"},
-                ]
-            }
-        ).encode()
-        result = _intercept_blocked_tool_results(body)
-        assert result == body  # unchanged
-
-    def test_multiple_messages_with_blocked_tools(self):
-        _blocked_tool_ids["t1"] = "reason1"
-        _blocked_tool_ids["t2"] = "reason2"
+    def test_injects_tool_use_and_error_tool_result(self):
+        """Core test: blocked tool gets injected as tool_use in assistant + error tool_result in user."""
+        _blocked_tool_ids["t1"] = "dangerous command"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {"command": "rm -rf /"}}
         _blocked_tool_timestamps["t1"] = time.time()
+
+        body = json.dumps(
+            {
+                "messages": [
+                    {"role": "assistant", "content": [{"type": "text", "text": "I will run this"}]},
+                    {"role": "user", "content": "do it"},
+                ]
+            }
+        ).encode()
+        result = _inject_blocked_tool_feedback(body)
+        data = json.loads(result)
+
+        # Assistant message should now have tool_use appended
+        assistant_content = data["messages"][0]["content"]
+        assert len(assistant_content) == 2
+        assert assistant_content[0]["type"] == "text"
+        assert assistant_content[1]["type"] == "tool_use"
+        assert assistant_content[1]["id"] == "t1"
+        assert assistant_content[1]["name"] == "Bash"
+        assert assistant_content[1]["input"] == {"command": "rm -rf /"}
+
+        # User message should have tool_result prepended
+        user_content = data["messages"][1]["content"]
+        assert len(user_content) == 2
+        assert user_content[0]["type"] == "tool_result"
+        assert user_content[0]["tool_use_id"] == "t1"
+        assert user_content[0]["is_error"] is True
+        assert "Cross blocked" in user_content[0]["content"]
+        assert user_content[1]["type"] == "text"
+        assert user_content[1]["text"] == "do it"
+
+        assert "t1" not in _blocked_tool_ids
+
+    def test_multiple_blocked_tools_injected(self):
+        _blocked_tool_ids["t1"] = "reason1"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {"command": "rm"}}
+        _blocked_tool_timestamps["t1"] = time.time()
+        _blocked_tool_ids["t2"] = "reason2"
+        _blocked_tool_info["t2"] = {"name": "Write", "input": {"file_path": "/etc/passwd"}}
         _blocked_tool_timestamps["t2"] = time.time()
 
         body = json.dumps(
             {
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
-                        ],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "tool_result", "tool_use_id": "t2", "content": "ok"},
-                        ],
-                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+                    {"role": "user", "content": "next"},
                 ]
             }
         ).encode()
-        result = _intercept_blocked_tool_results(body)
+        result = _inject_blocked_tool_feedback(body)
         data = json.loads(result)
 
-        assert data["messages"][0]["content"][0]["is_error"] is True
-        assert "Cross blocked" in data["messages"][0]["content"][0]["content"]
-        assert data["messages"][1]["content"][0]["is_error"] is True
-        assert "Cross blocked" in data["messages"][1]["content"][0]["content"]
+        # Both tool_use blocks appended to assistant
+        assistant_content = data["messages"][0]["content"]
+        tool_uses = [b for b in assistant_content if b["type"] == "tool_use"]
+        assert len(tool_uses) == 2
 
-        assert "t1" not in _blocked_tool_ids
-        assert "t2" not in _blocked_tool_ids
+        # Both error tool_results prepended to user
+        user_content = data["messages"][1]["content"]
+        tool_results = [b for b in user_content if b["type"] == "tool_result"]
+        assert len(tool_results) == 2
+        assert all(tr["is_error"] for tr in tool_results)
 
-    def test_blocked_tool_without_timestamp_not_stale_cleaned(self):
-        """Blocked tool in _blocked_tool_ids but not in _blocked_tool_timestamps."""
-        _blocked_tool_ids["orphan"] = "reason"
-        # No entry in _blocked_tool_timestamps
+    def test_string_assistant_content_converted_to_list(self):
+        """Assistant content that is a string should be converted to list before appending."""
+        _blocked_tool_ids["t1"] = "blocked"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {}}
+        _blocked_tool_timestamps["t1"] = time.time()
 
         body = json.dumps(
             {
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "tool_result", "tool_use_id": "orphan", "content": "ok"},
-                        ],
-                    }
+                    {"role": "assistant", "content": "I will run it"},
+                    {"role": "user", "content": "ok"},
                 ]
             }
         ).encode()
-        result = _intercept_blocked_tool_results(body)
+        result = _inject_blocked_tool_feedback(body)
         data = json.loads(result)
-        assert data["messages"][0]["content"][0]["is_error"] is True
+
+        assistant_content = data["messages"][0]["content"]
+        assert isinstance(assistant_content, list)
+        assert assistant_content[0]["type"] == "text"
+        assert assistant_content[0]["text"] == "I will run it"
+        assert assistant_content[1]["type"] == "tool_use"
+
+    def test_string_user_content_converted_to_list(self):
+        """User content that is a string should be converted to list before prepending."""
+        _blocked_tool_ids["t1"] = "blocked"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {}}
+        _blocked_tool_timestamps["t1"] = time.time()
+
+        body = json.dumps(
+            {
+                "messages": [
+                    {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+                    {"role": "user", "content": "next message"},
+                ]
+            }
+        ).encode()
+        result = _inject_blocked_tool_feedback(body)
+        data = json.loads(result)
+
+        user_content = data["messages"][1]["content"]
+        assert isinstance(user_content, list)
+        assert user_content[0]["type"] == "tool_result"
+        assert user_content[1]["type"] == "text"
+        assert user_content[1]["text"] == "next message"
+
+    def test_no_assistant_message_inserts_both(self):
+        """When no assistant message exists, both assistant+user messages are inserted."""
+        _blocked_tool_ids["t1"] = "blocked"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {}}
+        _blocked_tool_timestamps["t1"] = time.time()
+
+        body = json.dumps(
+            {
+                "messages": [
+                    {"role": "user", "content": "do something"},
+                ]
+            }
+        ).encode()
+        result = _inject_blocked_tool_feedback(body)
+        data = json.loads(result)
+
+        assert len(data["messages"]) == 3
+        assert data["messages"][0]["role"] == "assistant"
+        assert data["messages"][0]["content"][0]["type"] == "tool_use"
+        assert data["messages"][1]["role"] == "user"
+        assert data["messages"][1]["content"][0]["type"] == "tool_result"
+        assert data["messages"][2]["role"] == "user"
+        assert data["messages"][2]["content"] == "do something"
+
+    def test_no_following_user_message_appends(self):
+        """When no user message follows the assistant, a new user message is appended."""
+        _blocked_tool_ids["t1"] = "blocked"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {}}
+        _blocked_tool_timestamps["t1"] = time.time()
+
+        body = json.dumps(
+            {
+                "messages": [
+                    {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+                ]
+            }
+        ).encode()
+        result = _inject_blocked_tool_feedback(body)
+        data = json.loads(result)
+
+        assert len(data["messages"]) == 2
+        assert data["messages"][0]["role"] == "assistant"
+        assert data["messages"][1]["role"] == "user"
+        assert data["messages"][1]["content"][0]["type"] == "tool_result"
+
+    def test_blocked_without_info_skipped(self):
+        """Blocked tool with no info in _blocked_tool_info is skipped (no crash)."""
+        _blocked_tool_ids["orphan"] = "reason"
+        # No entry in _blocked_tool_info
+
+        body = json.dumps(
+            {
+                "messages": [
+                    {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+                    {"role": "user", "content": "next"},
+                ]
+            }
+        ).encode()
+        result = _inject_blocked_tool_feedback(body)
+        # No info → nothing to inject, body unchanged
+        assert result == body
+        assert "orphan" not in _blocked_tool_ids  # consumed
 
     def test_bad_json_with_blocked_ids_returns_unchanged(self):
         """When _blocked_tool_ids is non-empty but body is invalid JSON, return body unchanged."""
         _blocked_tool_ids["t1"] = "some reason"
+        _blocked_tool_info["t1"] = {"name": "Bash", "input": {}}
         _blocked_tool_timestamps["t1"] = time.time()
 
         body = b"this is not valid json at all"
-        result = _intercept_blocked_tool_results(body)
+        result = _inject_blocked_tool_feedback(body)
         assert result == body
-        # blocked_tool_ids should still have the entry (not consumed)
         assert "t1" in _blocked_tool_ids
 
-    def test_non_tool_result_blocks_skipped_in_content(self):
-        """Non-tool_result blocks (text, image) in user content should be skipped."""
-        _blocked_tool_ids["t1"] = "blocked"
-        _blocked_tool_timestamps["t1"] = time.time()
-
+    def test_empty_blocked_ids_returns_unchanged(self):
+        """When _blocked_tool_ids is empty, return body unchanged."""
         body = json.dumps(
             {
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Here are the results"},
-                            {"type": "tool_result", "tool_use_id": "t1", "content": "file contents"},
-                            {"type": "image", "source": {"type": "base64"}},
-                        ],
-                    }
+                    {"role": "user", "content": "hello"},
                 ]
             }
         ).encode()
-        result = _intercept_blocked_tool_results(body)
-        data = json.loads(result)
-        blocks = data["messages"][0]["content"]
-
-        # Text block unchanged
-        assert blocks[0]["type"] == "text"
-        assert blocks[0]["text"] == "Here are the results"
-        # Tool result replaced
-        assert blocks[1]["is_error"] is True
-        assert "Cross blocked" in blocks[1]["content"]
-        # Image block unchanged
-        assert blocks[2]["type"] == "image"
-
-    def test_empty_blocked_ids_with_non_empty_timestamps(self):
-        """Edge case: timestamps dict has entries but ids dict is empty."""
-        _blocked_tool_timestamps["orphan_ts"] = time.time()
-        # _blocked_tool_ids is empty
-
-        body = json.dumps(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
-                        ],
-                    }
-                ]
-            }
-        ).encode()
-        result = _intercept_blocked_tool_results(body)
-        # Should return unchanged since _blocked_tool_ids is empty
+        result = _inject_blocked_tool_feedback(body)
         assert result == body
 
 
@@ -772,9 +835,10 @@ class TestHandleProxyRequest:
         assert req_events[0].model == "claude-3"
 
     @pytest.mark.anyio
-    async def test_intercepts_blocked_tool_results(self):
-        """Blocked tool IDs should be intercepted before forwarding."""
+    async def test_injects_blocked_tool_feedback(self):
+        """Blocked tool feedback should be injected into the conversation before forwarding."""
         _blocked_tool_ids["toolu_blocked"] = "test reason"
+        _blocked_tool_info["toolu_blocked"] = {"name": "Bash", "input": {"command": "bad"}}
         _blocked_tool_timestamps["toolu_blocked"] = time.time()
 
         body = {
@@ -782,11 +846,13 @@ class TestHandleProxyRequest:
             "stream": False,
             "messages": [
                 {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "I will run this"}],
+                },
+                {
                     "role": "user",
-                    "content": [
-                        {"type": "tool_result", "tool_use_id": "toolu_blocked", "content": "original"},
-                    ],
-                }
+                    "content": "ok go ahead",
+                },
             ],
         }
         req = _make_mock_request(body)
@@ -800,9 +866,14 @@ class TestHandleProxyRequest:
             call_args = mock_simple.call_args
             forwarded_body = call_args[0][5]  # body is the 6th positional arg (index 5)
             data = json.loads(forwarded_body)
-            block = data["messages"][0]["content"][0]
-            assert block["is_error"] is True
-            assert "Cross blocked" in block["content"]
+            # Tool_use should be appended to assistant message
+            assert data["messages"][0]["content"][-1]["type"] == "tool_use"
+            assert data["messages"][0]["content"][-1]["id"] == "toolu_blocked"
+            # Error tool_result should be prepended to user message
+            user_content = data["messages"][1]["content"]
+            assert user_content[0]["type"] == "tool_result"
+            assert user_content[0]["is_error"] is True
+            assert "Cross blocked" in user_content[0]["content"]
 
     @pytest.mark.anyio
     async def test_query_string_appended_to_path(self):
@@ -1366,7 +1437,7 @@ class TestProxyStreaming:
 
     @pytest.mark.anyio
     async def test_blocked_tool_suppressed(self):
-        """With a blocking gate, tool_use SSE lines should be suppressed."""
+        """With a blocking gate, tool_use SSE lines should be suppressed and response terminated."""
 
         sse_lines = [
             "event: message_start",
@@ -1402,13 +1473,17 @@ class TestProxyStreaming:
         )
 
         output = await _collect_streaming_output(result)
-
-        # Blocked tool's SSE lines ARE flushed (so Claude Code can show the tool call)
-        # but the tool_result will be intercepted on the next request
         output_text = "".join(output)
-        assert "rm -rf" in output_text
-        # Tool should be in the blocked list for tool_result interception
+
+        # Tool_use lines should NOT appear (suppressed)
+        assert "rm -rf" not in output_text
+        assert "content_block_start" not in output_text
+        # Synthetic message_stop should appear (clean termination)
+        assert "message_stop" in output_text
+        assert "end_turn" in output_text
+        # Tool should be in the blocked list for next-request feedback injection
         assert "toolu_1" in _blocked_tool_ids
+        assert "toolu_1" in _blocked_tool_info
 
     @pytest.mark.anyio
     async def test_allowed_tool_flushed(self):
@@ -1557,7 +1632,7 @@ class TestProxyStreaming:
 
     @pytest.mark.anyio
     async def test_cascade_blocking(self):
-        """When first tool is blocked, subsequent tools should be cascade-blocked."""
+        """When first tool is blocked, response is terminated — second tool never reaches client."""
 
         sse_lines = [
             "event: message_start",
@@ -1573,7 +1648,7 @@ class TestProxyStreaming:
             "event: content_block_stop",
             'data: {"type":"content_block_stop","index":0}',
             "",
-            # Second tool -- would be allowed, but cascade blocks it
+            # Second tool -- never processed because response terminates after first block
             "event: content_block_start",
             'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_read","name":"Read"}}',
             "",
@@ -1603,11 +1678,16 @@ class TestProxyStreaming:
             gate_chain=chain,
         )
 
-        await _collect_streaming_output(result)
+        output = await _collect_streaming_output(result)
+        output_text = "".join(output)
 
+        # First tool blocked and suppressed
         assert "toolu_bash" in _blocked_tool_ids
-        assert "toolu_read" in _blocked_tool_ids
-        assert "Preceding tool" in _blocked_tool_ids["toolu_read"]
+        assert "rm -rf" not in output_text
+        # Second tool never reached client (response terminated after first block)
+        assert "toolu_read" not in output_text
+        # Synthetic message_stop ends the response
+        assert "message_stop" in output_text
 
     @pytest.mark.anyio
     async def test_user_intent_passed_to_gate(self):
@@ -1886,9 +1966,10 @@ class TestGateNonStreamingResponse:
     async def test_single_tool_blocked(self):
         content = json.dumps(
             {
+                "stop_reason": "tool_use",
                 "content": [
                     {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
-                ]
+                ],
             }
         ).encode()
         event_bus = EventBus()
@@ -1897,7 +1978,9 @@ class TestGateNonStreamingResponse:
         result = await _gate_non_streaming_response(content, b"{}", chain, event_bus)
         data = json.loads(result)
         assert len(data["content"]) == 0
+        assert data["stop_reason"] == "end_turn"
         assert "t1" in _blocked_tool_ids
+        assert "t1" in _blocked_tool_info
         assert "t1" in _blocked_tool_timestamps
 
     @pytest.mark.anyio
