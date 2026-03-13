@@ -223,16 +223,24 @@ class SlackPlugin:
         relay is handled by the JSONL logger, not Slack.
         """
         with self._lock:
-            if not self._threads:
-                return
-            # Post to the most recently active session's thread
-            # TODO: correlate proxy events to specific sessions
-            session_id = list(self._threads.keys())[-1]
-            thread_info = self._threads.get(session_id)
+            if self._threads:
+                # Post to the most recently active session's thread
+                # TODO: correlate proxy events to specific sessions
+                session_id = list(self._threads.keys())[-1]
+                thread_info = self._threads.get(session_id)
+            else:
+                thread_info = None
 
-        if not thread_info:
-            return
-        channel_id, thread_ts = thread_info
+        if thread_info:
+            channel_id, thread_ts = thread_info
+        else:
+            # No active session — post to a default channel (no thread)
+            try:
+                channel_id = self._ensure_channel("proxy")
+            except Exception as e:
+                logger.warning(f"Failed to get fallback channel for proxy event: {e}")
+                return
+            thread_ts = None
 
         match event:
             case ToolUseEvent():

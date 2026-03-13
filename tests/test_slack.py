@@ -692,12 +692,14 @@ class TestHandlePtyOutput:
 
 class TestHandleEvent:
     @pytest.mark.anyio
-    async def test_no_threads_returns(self, slack_env):
+    async def test_no_threads_posts_to_fallback_channel(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         event = ErrorEvent(status_code=500, body="error")
         await plugin.handle_event(event)
-        mock_web.chat_postMessage.assert_not_called()
+        mock_web.chat_postMessage.assert_called_once()
+        kwargs = mock_web.chat_postMessage.call_args.kwargs
+        assert kwargs["thread_ts"] is None  # top-level message, no thread
 
     @pytest.mark.anyio
     async def test_tool_use_event_tracks_desc(self, slack_env):
@@ -1673,8 +1675,8 @@ class TestEdgeCases:
         mock_web.chat_postMessage.assert_called_once()
 
     @pytest.mark.anyio
-    async def test_handle_event_thread_info_none(self, slack_env):
-        """Cover the guard where thread_info is None after session lookup (race condition)."""
+    async def test_handle_event_thread_info_none_falls_back(self, slack_env):
+        """When thread_info is None (race condition), falls back to default channel."""
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         # Store None as the value to simulate the race condition
@@ -1683,8 +1685,10 @@ class TestEdgeCases:
         event = ErrorEvent(status_code=500, body="error")
         await plugin.handle_event(event)
 
-        # Should return early without posting
-        mock_web.chat_postMessage.assert_not_called()
+        # Should post to fallback channel with no thread
+        mock_web.chat_postMessage.assert_called_once()
+        kwargs = mock_web.chat_postMessage.call_args.kwargs
+        assert kwargs["thread_ts"] is None
 
     @pytest.mark.anyio
     async def test_gate_decision_small_tool_input(self, slack_env):
