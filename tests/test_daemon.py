@@ -17,7 +17,7 @@ def _mock_settings(**overrides):
         "gating_enabled": False,
         "rules_dir": "~/.cross/rules.d",
         "llm_gate_enabled": False,
-        "llm_gate_model": "anthropic/claude-haiku-4-5",
+        "llm_gate_model": "google/gemini-3-flash-preview",
         "llm_gate_api_key": "",
         "llm_gate_base_url": "",
         "llm_gate_temperature": 0.0,
@@ -26,7 +26,7 @@ def _mock_settings(**overrides):
         "llm_gate_timeout_ms": 30000,
         "llm_gate_threshold": "block",
         "llm_sentinel_enabled": False,
-        "llm_sentinel_model": "anthropic/claude-sonnet-4-6",
+        "llm_sentinel_model": "google/gemini-3-flash-preview",
         "llm_sentinel_api_key": "",
         "llm_sentinel_base_url": "",
         "llm_sentinel_temperature": 0.0,
@@ -35,7 +35,7 @@ def _mock_settings(**overrides):
         "llm_sentinel_interval_seconds": 60,
         "slack_bot_token": "",
         "slack_app_token": "",
-        "listen_port": 8080,
+        "listen_port": 2767,
         "log_file": "/dev/null",
     }
     defaults.update(overrides)

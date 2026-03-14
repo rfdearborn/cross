@@ -64,6 +64,12 @@ class ErrorGate(Gate):
         raise RuntimeError("Gate exploded")
 
 
+@pytest.fixture(autouse=True)
+def _no_shadow(monkeypatch):
+    """Ensure shadow mode is off so review gate results are used directly."""
+    monkeypatch.setattr(settings, "llm_gate_shadow", False)
+
+
 # --- Two-stage chain tests ---
 
 

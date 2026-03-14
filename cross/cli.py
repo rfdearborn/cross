@@ -24,14 +24,28 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # cross daemon — start the central daemon (proxy + slack + session mgmt)
-    sub.add_parser("daemon", help="Start the Cross daemon (proxy + Slack + session management)")
+    sub.add_parser("daemon", help="Start the cross daemon (proxy + Slack + session management)")
 
     # cross proxy — start just the network proxy (no Slack, no session mgmt)
     sub.add_parser("proxy", help="Start only the network monitoring proxy")
 
     # cross wrap -- <agent> [args...]
-    wrap_p = sub.add_parser("wrap", help="Wrap an agent CLI in a Cross-managed PTY")
+    wrap_p = sub.add_parser("wrap", help="Wrap an agent CLI in a cross-managed PTY")
     wrap_p.add_argument("agent_argv", nargs=argparse.REMAINDER, help="Agent command (after --)")
+
+    # cross setup — interactive onboarding wizard
+    sub.add_parser("setup", help="Interactive setup wizard")
+
+    # cross reset — wipe configuration and start fresh
+    sub.add_parser("reset", help="Remove cross configuration (~/.cross/.env and rules)")
+
+    # cross pending [approve|deny <tool_use_id>]
+    pending_p = sub.add_parser("pending", help="Show or resolve pending gate escalations")
+    pending_sub = pending_p.add_subparsers(dest="pending_action")
+    approve_p = pending_sub.add_parser("approve", help="Approve a pending escalation")
+    approve_p.add_argument("tool_use_id", help="Tool use ID to approve")
+    deny_p = pending_sub.add_parser("deny", help="Deny a pending escalation")
+    deny_p.add_argument("tool_use_id", help="Tool use ID to deny")
 
     args = parser.parse_args()
 
@@ -42,7 +56,14 @@ def main():
     )
     log = logging.getLogger("cross")
 
-    if args.command == "daemon":
+    if args.command == "setup":
+        from cross.setup import run_setup
+
+        run_setup()
+        return
+    elif args.command == "reset":
+        sys.exit(_run_reset())
+    elif args.command == "daemon":
         _run_daemon()
     elif args.command == "proxy":
         _run_proxy()
@@ -51,8 +72,106 @@ def main():
         if not argv:
             wrap_p.error("Usage: cross wrap -- <agent-command> [args...]")
         sys.exit(_run_wrap(argv, log))
+    elif args.command == "pending":
+        sys.exit(_run_pending(args))
     else:
         parser.print_help()
+
+
+def _run_reset() -> int:
+    """Remove cross configuration so the user can re-run setup."""
+    from pathlib import Path
+
+    cross_dir = Path.home() / ".cross"
+    targets = [
+        (cross_dir / ".env", "Configuration (.env)"),
+        (cross_dir / "rules.d", "Rules (rules.d/)"),
+    ]
+
+    found = [(path, label) for path, label in targets if path.exists()]
+    if not found:
+        print("Nothing to remove — no configuration found.")
+        return 0
+
+    removed = []
+    for path, label in found:
+        answer = input(f"Remove {label}? (y/N): ").strip().lower()
+        if answer in ("y", "yes"):
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            removed.append(str(path))
+            print(f"  Removed: {path}")
+
+    if removed:
+        print("\nRun 'cross setup' to reconfigure.")
+    else:
+        print("Nothing removed.")
+    return 0
+
+
+def _run_pending(args) -> int:
+    """Show or resolve pending gate escalations via the daemon API."""
+    daemon_url = f"http://localhost:{settings.listen_port}"
+
+    if getattr(args, "pending_action", None) in ("approve", "deny"):
+        approved = args.pending_action == "approve"
+        tool_use_id = args.tool_use_id
+        try:
+            resp = httpx.post(
+                f"{daemon_url}/cross/api/pending/{tool_use_id}/resolve",
+                json={"approved": approved, "username": "cli"},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                action_word = "Approved" if approved else "Denied"
+                print(f"{action_word}: {tool_use_id}")
+                return 0
+            else:
+                print(f"Error: {resp.status_code} {resp.text}", file=sys.stderr)
+                return 1
+        except httpx.ConnectError:
+            print("Error: daemon not running", file=sys.stderr)
+            return 1
+
+    # Default: list pending escalations
+    try:
+        resp = httpx.get(f"{daemon_url}/cross/api/pending", timeout=5)
+    except httpx.ConnectError:
+        print("Error: daemon not running", file=sys.stderr)
+        return 1
+
+    if resp.status_code != 200:
+        print(f"Error: {resp.status_code}", file=sys.stderr)
+        return 1
+
+    pending = resp.json()
+    if not pending:
+        print("No pending escalations.")
+        return 0
+
+    for item in pending:
+        tool_id = item.get("tool_use_id", "?")
+        tool_name = item.get("tool_name", "?")
+        reason = item.get("reason", "")
+        tool_input = item.get("tool_input")
+        input_preview = ""
+        if tool_input:
+            input_str = json.dumps(tool_input)
+            input_preview = input_str[:80] + "..." if len(input_str) > 80 else input_str
+        print(f"  {tool_id}")
+        print(f"    Tool:   {tool_name}")
+        if reason:
+            print(f"    Reason: {reason}")
+        if input_preview:
+            print(f"    Input:  {input_preview}")
+        print()
+
+    print(f"{len(pending)} pending escalation(s).")
+    print("  cross pending approve <tool_use_id>")
+    print("  cross pending deny <tool_use_id>")
+    return 0
 
 
 def _run_daemon():

@@ -11,7 +11,7 @@ from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -19,6 +19,7 @@ from cross.chain import GateChain
 from cross.config import settings
 from cross.evaluator import Action
 from cross.events import EventBus
+from cross.plugins.dashboard import DASHBOARD_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
 
 logger = logging.getLogger("cross.daemon")
@@ -27,6 +28,7 @@ logger = logging.getLogger("cross.daemon")
 event_bus = EventBus()
 _gate_chain: GateChain | None = None
 _slack = None  # SlackPlugin instance, if configured
+_dashboard: DashboardPlugin | None = None  # always active
 
 # Session tracking: session_id -> session metadata
 _sessions: dict[str, dict[str, Any]] = {}
@@ -161,6 +163,54 @@ async def _spawn_session(project: str, initial_message: str):
     logger.info(f"Spawned new session for project '{project}' in {cwd} (pid {proc.pid})")
 
 
+# --- Dashboard routes ---
+
+
+async def root_redirect(request: Request) -> RedirectResponse:
+    """GET / — redirect to dashboard."""
+    return RedirectResponse(url="/cross/dashboard")
+
+
+async def dashboard_page(request: Request) -> Response:
+    """GET /cross/dashboard — serves the single-page dashboard HTML."""
+    return Response(content=DASHBOARD_HTML, media_type="text/html")
+
+
+async def api_events(request: Request) -> JSONResponse:
+    """GET /cross/api/events — recent events as JSON."""
+    if _dashboard:
+        return JSONResponse(_dashboard.get_events())
+    return JSONResponse([])
+
+
+async def api_pending(request: Request) -> JSONResponse:
+    """GET /cross/api/pending — pending escalations as JSON."""
+    if _dashboard:
+        return JSONResponse(_dashboard.get_pending())
+    return JSONResponse([])
+
+
+async def api_resolve_pending(request: Request) -> JSONResponse:
+    """POST /cross/api/pending/{tool_use_id}/resolve — approve or deny."""
+    tool_use_id = request.path_params["tool_use_id"]
+    data = await request.json()
+    approved = data.get("approved", False)
+    username = data.get("username", "dashboard")
+
+    if _dashboard:
+        _dashboard.resolve(tool_use_id, approved, username)
+        return JSONResponse({"status": "ok", "tool_use_id": tool_use_id, "approved": approved})
+    return JSONResponse({"status": "error", "message": "dashboard not initialized"}, status_code=500)
+
+
+async def api_dashboard_ws(ws: WebSocket):
+    """WS /cross/api/ws — real-time event stream to dashboard clients."""
+    if _dashboard:
+        await _dashboard.ws_handler(ws)
+    else:
+        await ws.close()
+
+
 # --- Proxy routes ---
 
 
@@ -178,12 +228,19 @@ _sentinel = None  # LLMSentinel instance, if configured
 
 
 async def on_startup():
-    global _slack, _gate_chain, _sentinel
+    global _slack, _gate_chain, _sentinel, _dashboard
 
     # Register logger plugin
     log_plugin = LoggerPlugin()
     event_bus.subscribe(log_plugin.handle)
     logger.info(f"Daemon starting on port {settings.listen_port}")
+
+    # Register dashboard plugin (always active — no config gating)
+    from cross.proxy import resolve_gate_approval as _resolve_gate
+
+    _dashboard = DashboardPlugin(resolve_approval_callback=_resolve_gate)
+    event_bus.subscribe(_dashboard.handle_event)
+    logger.info("Dashboard active at /cross/dashboard")
 
     # Set up gate chain
     if settings.gating_enabled:
@@ -294,9 +351,19 @@ _api_routes = [
     Route("/cross/sessions/{session_id}/end", api_end_session, methods=["POST"]),
 ]
 
-# WebSocket route
+# Dashboard routes
+_dashboard_routes = [
+    Route("/", root_redirect, methods=["GET"]),
+    Route("/cross/dashboard", dashboard_page, methods=["GET"]),
+    Route("/cross/api/events", api_events, methods=["GET"]),
+    Route("/cross/api/pending", api_pending, methods=["GET"]),
+    Route("/cross/api/pending/{tool_use_id}/resolve", api_resolve_pending, methods=["POST"]),
+]
+
+# WebSocket routes
 _ws_routes = [
     WebSocketRoute("/cross/sessions/{session_id}/io", api_session_ws),
+    WebSocketRoute("/cross/api/ws", api_dashboard_ws),
 ]
 
 # Proxy catch-all (must be last)
@@ -305,7 +372,7 @@ _proxy_routes = [
 ]
 
 app = Starlette(
-    routes=_api_routes + _ws_routes + _proxy_routes,
+    routes=_api_routes + _dashboard_routes + _ws_routes + _proxy_routes,
     on_startup=[on_startup],
     on_shutdown=[on_shutdown],
 )

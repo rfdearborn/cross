@@ -1,12 +1,14 @@
 """LLM client — provider-agnostic completion interface.
 
-Supports provider/model naming (e.g. "anthropic/claude-haiku-4-5", "openai/gpt-4o").
+Supports provider/model naming (e.g. "google/gemini-3-flash-preview", "openai/gpt-4o").
 Provider prefix determines API format:
-  - anthropic/* → Anthropic Messages API
-  - openai/*   → OpenAI Chat Completions API
+  - anthropic/*        → Anthropic Messages API
+  - openai/*           → OpenAI Chat Completions API
+  - google/*           → Google Gemini (OpenAI-compatible endpoint)
+  - ollama/*           → Ollama (OpenAI-compatible endpoint, no API key needed)
 
 Each caller supplies its own api_key, base_url, model. Key resolution:
-  explicit api_key → ANTHROPIC_API_KEY (for anthropic/*) → OPENAI_API_KEY (for openai/*).
+  explicit api_key → provider env var fallback (e.g. ANTHROPIC_API_KEY, GOOGLE_API_KEY).
 """
 
 from __future__ import annotations
@@ -22,14 +24,21 @@ logger = logging.getLogger("cross.llm")
 # Default base URLs per provider
 _PROVIDER_BASE_URLS: dict[str, str] = {
     "anthropic": "https://api.anthropic.com",
-    "openai": "https://api.openai.com",
+    "openai": "https://api.openai.com/v1",
+    "google": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "ollama": "http://localhost:11434/v1",
 }
 
 # Environment variable fallbacks per provider (tried in order)
 _PROVIDER_KEY_ENV_VARS: dict[str, list[str]] = {
     "anthropic": ["ANTHROPIC_API_KEY"],
     "openai": ["OPENAI_API_KEY"],
+    "google": ["GOOGLE_API_KEY"],
+    "ollama": [],  # no key needed
 }
+
+# Providers that use the OpenAI Chat Completions API format
+_OPENAI_COMPATIBLE_PROVIDERS: set[str] = {"openai", "google", "ollama"}
 
 # Lazy singleton httpx client
 _client: httpx.AsyncClient | None = None
@@ -126,8 +135,12 @@ async def complete(
     """Send a completion request. Returns the text response, or None on error."""
     api_key = resolve_api_key(config)
     if not api_key:
-        logger.warning(f"No API key available for provider '{config.provider}'")
-        return None
+        if config.provider == "ollama":
+            # Ollama doesn't require an API key — use a placeholder
+            api_key = "ollama"
+        else:
+            logger.warning(f"No API key available for provider '{config.provider}'")
+            return None
 
     base_url = resolve_base_url(config)
     if not base_url:
@@ -136,7 +149,7 @@ async def complete(
 
     if config.provider == "anthropic":
         return await _complete_anthropic(config, api_key, base_url, system, messages, timeout_s)
-    elif config.provider == "openai":
+    elif config.provider in _OPENAI_COMPATIBLE_PROVIDERS:
         return await _complete_openai(config, api_key, base_url, system, messages, timeout_s)
     else:
         logger.warning(f"Unsupported provider: '{config.provider}'")
@@ -209,7 +222,7 @@ async def _complete_openai(
     timeout_s: float,
 ) -> str | None:
     """Call the OpenAI Chat Completions API."""
-    url = f"{base_url}/v1/chat/completions"
+    url = f"{base_url}/chat/completions"
     headers = {
         "authorization": f"Bearer {api_key}",
         "content-type": "application/json",

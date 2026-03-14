@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     anthropic_base_url: str = "https://api.anthropic.com"
     listen_host: str = "127.0.0.1"
-    listen_port: int = 8080
+    listen_port: int = 2767
     log_file: str = "data/cross.log"
 
     # Slack
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # LLM gate — synchronous review of denylist-flagged calls
     llm_gate_enabled: bool = True
-    llm_gate_model: str = "anthropic/claude-haiku-4-5"
+    llm_gate_model: str = "google/gemini-3-flash-preview"
     llm_gate_api_key: str = ""
     llm_gate_base_url: str = ""
     llm_gate_temperature: float = 0.0
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # LLM sentinel — async periodic review of all activity
     llm_sentinel_enabled: bool = True
-    llm_sentinel_model: str = "anthropic/claude-sonnet-4-6"
+    llm_sentinel_model: str = "google/gemini-3-flash-preview"
     llm_sentinel_api_key: str = ""
     llm_sentinel_base_url: str = ""
     llm_sentinel_temperature: float = 0.0
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     llm_sentinel_reasoning: str = "medium"
     llm_sentinel_interval_seconds: int = 60
 
-    model_config = {"env_prefix": "CROSS_", "env_file": ".env"}
+    model_config = {"env_prefix": "CROSS_", "env_file": ("~/.cross/local.env", "~/.cross/.env", ".env")}
 
 
 settings = Settings()

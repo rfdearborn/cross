@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from cross.llm import (
+    _OPENAI_COMPATIBLE_PROVIDERS,
     LLMConfig,
     _reasoning_to_anthropic,
     _reasoning_to_openai,
@@ -43,6 +44,12 @@ class TestParseModelRef:
     def test_slash_only(self):
         # Empty provider and model — falls back to no-slash path
         assert parse_model_ref("/") == ("anthropic", "/")
+
+    def test_google_model(self):
+        assert parse_model_ref("google/gemini-3-flash-preview") == ("google", "gemini-3-flash-preview")
+
+    def test_ollama_model(self):
+        assert parse_model_ref("ollama/llama3") == ("ollama", "llama3")
 
     def test_multiple_slashes_splits_on_first(self):
         assert parse_model_ref("openrouter/anthropic/claude-sonnet-4-6") == (
@@ -96,6 +103,16 @@ class TestResolveApiKey:
         cfg = LLMConfig(model="anthropic/claude-haiku-4-5", api_key="sk-explicit")
         assert resolve_api_key(cfg) == "sk-explicit"
 
+    def test_google_env_fallback(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "gk-google-env")
+        cfg = LLMConfig(model="google/gemini-3-flash-preview")
+        assert resolve_api_key(cfg) == "gk-google-env"
+
+    def test_ollama_no_key_returns_none(self, monkeypatch):
+        """Ollama has no env vars — resolve_api_key returns None."""
+        cfg = LLMConfig(model="ollama/llama3")
+        assert resolve_api_key(cfg) is None
+
 
 # --- resolve_base_url ---
 
@@ -111,7 +128,15 @@ class TestResolveBaseUrl:
 
     def test_openai_default(self):
         cfg = LLMConfig(model="openai/gpt-4o")
-        assert resolve_base_url(cfg) == "https://api.openai.com"
+        assert resolve_base_url(cfg) == "https://api.openai.com/v1"
+
+    def test_google_default(self):
+        cfg = LLMConfig(model="google/gemini-3-flash-preview")
+        assert resolve_base_url(cfg) == "https://generativelanguage.googleapis.com/v1beta/openai"
+
+    def test_ollama_default(self):
+        cfg = LLMConfig(model="ollama/llama3")
+        assert resolve_base_url(cfg) == "http://localhost:11434/v1"
 
     def test_unknown_provider_empty(self):
         cfg = LLMConfig(model="custom/some-model")
@@ -306,3 +331,62 @@ class TestComplete:
         body = mock_post.call_args[1]["json"]
         assert body["messages"][0] == {"role": "system", "content": "Be helpful"}
         assert body["messages"][1] == {"role": "user", "content": "hi"}
+
+    @pytest.mark.anyio
+    async def test_google_routes_to_openai_path(self):
+        """Google provider uses OpenAI-compatible endpoint."""
+        cfg = LLMConfig(model="google/gemini-3-flash-preview", api_key="gk-test")
+
+        mock_response = _mock_response(200, {"choices": [{"message": {"content": "VERDICT: ALLOW\nLooks good."}}]})
+        mock_post = AsyncMock(return_value=mock_response)
+
+        with patch("cross.llm._get_client") as mock_client:
+            mock_client.return_value.post = mock_post
+            result = await complete(cfg, system="Review this", messages=[{"role": "user", "content": "test"}])
+
+        assert result == "VERDICT: ALLOW\nLooks good."
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        assert "Bearer gk-test" in call_args[1]["headers"]["authorization"]
+        # Model should be just the model_id, not the full provider/model ref
+        assert call_args[1]["json"]["model"] == "gemini-3-flash-preview"
+
+    @pytest.mark.anyio
+    async def test_ollama_routes_to_openai_path_no_key(self, monkeypatch):
+        """Ollama provider uses OpenAI-compatible endpoint and works without an API key."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        cfg = LLMConfig(model="ollama/llama3")
+
+        mock_response = _mock_response(200, {"choices": [{"message": {"content": "VERDICT: BLOCK\nNot safe."}}]})
+        mock_post = AsyncMock(return_value=mock_response)
+
+        with patch("cross.llm._get_client") as mock_client:
+            mock_client.return_value.post = mock_post
+            result = await complete(cfg, system="Review this", messages=[{"role": "user", "content": "test"}])
+
+        assert result == "VERDICT: BLOCK\nNot safe."
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "http://localhost:11434/v1/chat/completions"
+        assert call_args[1]["json"]["model"] == "llama3"
+
+    @pytest.mark.anyio
+    async def test_google_no_key_returns_none(self, monkeypatch):
+        """Google provider still requires an API key."""
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        cfg = LLMConfig(model="google/gemini-3-flash-preview")
+        result = await complete(cfg, system="test", messages=[{"role": "user", "content": "hi"}])
+        assert result is None
+
+
+# --- _OPENAI_COMPATIBLE_PROVIDERS ---
+
+
+class TestOpenAICompatibleProviders:
+    def test_openai_compatible_providers_set(self):
+        """Verify which providers route to OpenAI-compatible path."""
+        assert "openai" in _OPENAI_COMPATIBLE_PROVIDERS
+        assert "google" in _OPENAI_COMPATIBLE_PROVIDERS
+        assert "ollama" in _OPENAI_COMPATIBLE_PROVIDERS
+        assert "anthropic" not in _OPENAI_COMPATIBLE_PROVIDERS
