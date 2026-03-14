@@ -171,8 +171,23 @@ def _normalize_path(value: str) -> str:
     return value
 
 
+def _dir_mtime(rules_dir: Path) -> float:
+    """Return the max mtime across all rule files in a directory, or 0."""
+    if not rules_dir or not rules_dir.exists():
+        return 0.0
+    mtimes = [rules_dir.stat().st_mtime]
+    for path in rules_dir.glob("*.yaml"):
+        mtimes.append(path.stat().st_mtime)
+    for path in rules_dir.glob("*.json"):
+        mtimes.append(path.stat().st_mtime)
+    return max(mtimes) if mtimes else 0.0
+
+
 class DenylistGate(Gate):
-    """Pattern-matching gate evaluator. Loads rules from YAML data files."""
+    """Pattern-matching gate evaluator. Loads rules from YAML data files.
+
+    Hot-reloads user rules when files in rules_dir change.
+    """
 
     def __init__(
         self,
@@ -180,16 +195,25 @@ class DenylistGate(Gate):
         include_defaults: bool = True,
     ):
         super().__init__(name="denylist")
+        self._rules_dir = rules_dir
+        self._include_defaults = include_defaults
+        self._last_mtime: float = 0.0
         self.rules: list[DenylistRule] = []
+        self._load_rules()
+
+    def _load_rules(self):
+        """Load (or reload) all rules from defaults + user directory."""
+        self.rules = []
 
         # Load user rules first to get disable list
         user_rules: list[DenylistRule] = []
         disabled: set[str] = set()
-        if rules_dir:
-            user_rules, disabled = _load_user_rules(rules_dir)
+        if self._rules_dir:
+            user_rules, disabled = _load_user_rules(self._rules_dir)
+            self._last_mtime = _dir_mtime(self._rules_dir)
 
         # Load defaults (unless disabled or excluded)
-        if include_defaults:
+        if self._include_defaults:
             for rule in _load_default_rules():
                 if rule.name not in disabled:
                     self.rules.append(rule)
@@ -201,8 +225,18 @@ class DenylistGate(Gate):
 
         logger.info(f"DenylistGate loaded with {len(self.rules)} rules")
 
+    def _maybe_reload(self):
+        """Reload rules if any file in rules_dir has changed."""
+        if not self._rules_dir:
+            return
+        current_mtime = _dir_mtime(self._rules_dir)
+        if current_mtime != self._last_mtime:
+            logger.info("Rules directory changed, reloading...")
+            self._load_rules()
+
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
         """Check a tool call against all rules. Returns the highest-severity match."""
+        self._maybe_reload()
         best_match: EvaluationResponse | None = None
 
         for rule in self.rules:

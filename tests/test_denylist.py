@@ -1,11 +1,12 @@
 """Tests for the denylist gate."""
 
 import json
+import time
 
 import pytest
 
 from cross.evaluator import Action, GateRequest
-from cross.gates.denylist import DenylistGate
+from cross.gates.denylist import DenylistGate, _dir_mtime
 
 
 def _req(tool_name: str, tool_input: dict) -> GateRequest:
@@ -930,4 +931,108 @@ class TestShellWrapperBypass:
     @pytest.mark.anyio
     async def test_bash_c_safe_allowed(self):
         r = await self.gate.evaluate(_req("Bash", {"command": 'bash -c "echo hello"'}))
+        assert r.action == Action.ALLOW
+
+
+class TestDirMtime:
+    def test_nonexistent_dir(self, tmp_path):
+        assert _dir_mtime(tmp_path / "nope") == 0.0
+
+    def test_none(self):
+        assert _dir_mtime(None) == 0.0
+
+    def test_empty_dir(self, tmp_path):
+        assert _dir_mtime(tmp_path) > 0.0
+
+    def test_tracks_file_changes(self, tmp_path):
+        m1 = _dir_mtime(tmp_path)
+        time.sleep(0.05)
+        (tmp_path / "new.yaml").write_text("rules: []")
+        m2 = _dir_mtime(tmp_path)
+        assert m2 > m1
+
+
+class TestHotReload:
+    @pytest.mark.anyio
+    async def test_new_rule_picked_up(self, tmp_path):
+        """Adding a rule file triggers reload on next evaluate."""
+        rules_dir = tmp_path / "rules.d"
+        rules_dir.mkdir()
+        gate = DenylistGate(rules_dir=rules_dir, include_defaults=False)
+
+        # No rules yet
+        r = await gate.evaluate(_req("Bash", {"command": "echo crosstest"}))
+        assert r.action == Action.ALLOW
+
+        # Add a rule
+        time.sleep(0.05)
+        (rules_dir / "test.yaml").write_text(
+            "rules:\n"
+            "  - name: test-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    patterns:\n"
+            "      - crosstest\n"
+        )
+
+        # Should reload and block
+        r = await gate.evaluate(_req("Bash", {"command": "echo crosstest"}))
+        assert r.action == Action.BLOCK
+        assert r.rule_id == "test-rule"
+
+    @pytest.mark.anyio
+    async def test_removed_rule_clears(self, tmp_path):
+        """Removing a rule file triggers reload."""
+        rules_dir = tmp_path / "rules.d"
+        rules_dir.mkdir()
+        rule_file = rules_dir / "test.yaml"
+        rule_file.write_text(
+            "rules:\n"
+            "  - name: temp-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    patterns:\n"
+            "      - temptest\n"
+        )
+
+        gate = DenylistGate(rules_dir=rules_dir, include_defaults=False)
+        r = await gate.evaluate(_req("Bash", {"command": "echo temptest"}))
+        assert r.action == Action.BLOCK
+
+        # Remove the rule file
+        time.sleep(0.05)
+        rule_file.unlink()
+
+        r = await gate.evaluate(_req("Bash", {"command": "echo temptest"}))
+        assert r.action == Action.ALLOW
+
+    @pytest.mark.anyio
+    async def test_no_reload_when_unchanged(self, tmp_path):
+        """No reload if mtime hasn't changed."""
+        rules_dir = tmp_path / "rules.d"
+        rules_dir.mkdir()
+        (rules_dir / "test.yaml").write_text(
+            "rules:\n"
+            "  - name: stable-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    patterns:\n"
+            "      - stabletest\n"
+        )
+
+        gate = DenylistGate(rules_dir=rules_dir, include_defaults=False)
+        initial_rules = gate.rules.copy()
+
+        # Evaluate again — should not reload
+        await gate.evaluate(_req("Bash", {"command": "echo stabletest"}))
+        assert gate.rules is not initial_rules or len(gate.rules) == len(initial_rules)
+
+    @pytest.mark.anyio
+    async def test_no_rules_dir_skips_reload(self):
+        """Gate without rules_dir never attempts reload."""
+        gate = DenylistGate(rules_dir=None, include_defaults=False)
+        r = await gate.evaluate(_req("Bash", {"command": "anything"}))
         assert r.action == Action.ALLOW
