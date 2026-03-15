@@ -266,7 +266,7 @@ async def on_startup():
                 max_tokens=settings.llm_gate_max_tokens,
                 reasoning=settings.llm_gate_reasoning,
             )
-            if resolve_api_key(llm_config):
+            if resolve_api_key(llm_config) or llm_config.provider == "cli":
                 review_gate = LLMReviewGate(
                     config=llm_config,
                     timeout_ms=settings.llm_gate_timeout_ms,
@@ -297,7 +297,7 @@ async def on_startup():
             max_tokens=settings.llm_sentinel_max_tokens,
             reasoning=settings.llm_sentinel_reasoning,
         )
-        if resolve_api_key(sentinel_config):
+        if resolve_api_key(sentinel_config) or sentinel_config.provider == "cli":
             _sentinel = LLMSentinel(
                 config=sentinel_config,
                 event_bus=event_bus,
@@ -351,9 +351,16 @@ _api_routes = [
     Route("/cross/sessions/{session_id}/end", api_end_session, methods=["POST"]),
 ]
 
+
 # Dashboard routes
+async def favicon(request: Request) -> Response:
+    """GET /favicon.ico — empty response to avoid proxy forwarding."""
+    return Response(status_code=204)
+
+
 _dashboard_routes = [
     Route("/", root_redirect, methods=["GET"]),
+    Route("/favicon.ico", favicon, methods=["GET"]),
     Route("/cross/dashboard", dashboard_page, methods=["GET"]),
     Route("/cross/api/events", api_events, methods=["GET"]),
     Route("/cross/api/pending", api_pending, methods=["GET"]),

@@ -6,7 +6,6 @@ import os
 from unittest.mock import MagicMock, patch
 
 from cross.setup import (
-    DEFAULT_MODEL,
     KNOWN_AGENTS,
     SHELL_WRAPPER_HEADER,
     _build_env_lines,
@@ -43,6 +42,12 @@ class TestParseProvider:
 
     def test_ollama(self):
         assert _parse_provider("ollama/llama3.1:8b") == "ollama"
+
+    def test_cli(self):
+        assert _parse_provider("cli/claude") == "cli"
+
+    def test_bare_claude_is_cli(self):
+        assert _parse_provider("claude") == "cli"
 
     def test_no_slash_defaults_to_anthropic(self):
         assert _parse_provider("claude-haiku-4-5") == "anthropic"
@@ -229,29 +234,29 @@ class TestRunSetupDefaultModel:
         shell_rc.write_text("# existing content\n")
         mock_shell_rc.return_value = shell_rc
 
-        # "" gate model (default), "" sentinel model (same), "" interval (default 60), N slack, Y wrappers
+        # "" gate (default cli/claude, no key), "" sentinel, "" interval, N slack, Y wrappers
         inputs = iter(["", "", "", "N", "Y"])
-        secrets = iter(["fake-google-key"])
 
         output = []
         result = run_setup(
             cross_dir=cross_dir,
             input_fn=lambda p: next(inputs),
-            getpass_fn=lambda p: next(secrets),
+            getpass_fn=lambda p: "",
             print_fn=output.append,
         )
 
         assert result["llm_enabled"] is True
-        assert result["model"] == DEFAULT_MODEL
+        assert result["model"] == "cli/claude"
         assert result["sentinel_model"] is None  # None = same as gate
         assert result["agents_found"] == ["claude"]
 
         env_file = cross_dir / ".env"
         assert env_file.exists()
         env_content = env_file.read_text()
-        assert f"CROSS_LLM_GATE_MODEL={DEFAULT_MODEL}" in env_content
-        assert f"CROSS_LLM_SENTINEL_MODEL={DEFAULT_MODEL}" in env_content
-        assert "CROSS_LLM_GATE_API_KEY=fake-google-key" in env_content
+        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
+        assert "CROSS_LLM_SENTINEL_MODEL=cli/claude" in env_content
+        # cli provider should NOT write an API key
+        assert "CROSS_LLM_GATE_API_KEY" not in env_content
 
         assert (cross_dir / "rules.d").is_dir()
         assert result["shell_wrappers_installed"] is True
@@ -366,7 +371,7 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # google gate, google sentinel (same provider = no extra key prompt), 120s interval, N slack
+        # cli/claude gate, google sentinel (different provider, asks for key), 120s, N slack
         inputs = iter(["", "google/gemini-2.5-flash", "120", "N"])
         secrets = iter(["google-key"])
 
@@ -378,12 +383,12 @@ class TestRunSetupSeparateSentinel:
             print_fn=output.append,
         )
 
-        assert result["model"] == DEFAULT_MODEL
+        assert result["model"] == "cli/claude"
         assert result["sentinel_model"] == "google/gemini-2.5-flash"
         assert result["sentinel_interval"] == 120
 
         env_content = (cross_dir / ".env").read_text()
-        assert f"CROSS_LLM_GATE_MODEL={DEFAULT_MODEL}" in env_content
+        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
         assert "CROSS_LLM_SENTINEL_MODEL=google/gemini-2.5-flash" in env_content
         assert "CROSS_LLM_SENTINEL_INTERVAL_SECONDS=120" in env_content
 
@@ -392,9 +397,9 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # google gate, anthropic sentinel (different provider = asks for key), "" interval, N slack
+        # cli/claude gate, anthropic sentinel (different provider, asks for key), "" interval, N slack
         inputs = iter(["", "anthropic/claude-haiku-4-5", "", "N"])
-        secrets = iter(["google-key", "ant-key"])
+        secrets = iter(["ant-key"])
 
         output = []
         result = run_setup(
@@ -417,14 +422,14 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
+        # default gate (cli/claude, no key prompt), "" sentinel (same), 300s interval, N slack
         inputs = iter(["", "", "300", "N"])
-        secrets = iter(["key"])
 
         output = []
         result = run_setup(
             cross_dir=cross_dir,
             input_fn=lambda p: next(inputs),
-            getpass_fn=lambda p: next(secrets),
+            getpass_fn=lambda p: "",
             print_fn=output.append,
         )
 
@@ -437,14 +442,14 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
+        # default gate (cli/claude, no key prompt), "" sentinel (same), "abc" interval, N slack
         inputs = iter(["", "", "abc", "N"])
-        secrets = iter(["key"])
 
         output = []
         result = run_setup(
             cross_dir=cross_dir,
             input_fn=lambda p: next(inputs),
-            getpass_fn=lambda p: next(secrets),
+            getpass_fn=lambda p: "",
             print_fn=output.append,
         )
 
@@ -488,8 +493,8 @@ class TestRunSetupEmptyApiKey:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "" gate model (default), empty key, no env → disables LLM → skips sentinel
-        inputs = iter(["", "N"])
+        # Explicit google model, empty key, no env → disables LLM → skips sentinel
+        inputs = iter(["google/gemini-3-flash-preview", "N"])
         secrets = iter([""])  # empty key
 
         output = []
@@ -511,8 +516,8 @@ class TestRunSetupEmptyApiKey:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "" gate model, empty key (env fallback), "" sentinel, "" interval, N slack
-        inputs = iter(["", "", "", "N"])
+        # Explicit google model, empty key (env fallback), "" sentinel, "" interval, N slack
+        inputs = iter(["google/gemini-3-flash-preview", "", "", "N"])
         secrets = iter([""])  # empty key
 
         output = []
@@ -736,6 +741,56 @@ class TestRunSetupCustomModel:
         assert result["llm_enabled"] is True
         env_content = (cross_dir / ".env").read_text()
         assert "CROSS_LLM_GATE_MODEL=google/gemini-2.5-flash" in env_content
+
+
+@patch("cross.setup.sys")
+class TestRunSetupClaudeModel:
+    """Test entering bare 'claude' (cli/claude provider)."""
+
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_bare_claude_becomes_cli_claude(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        # "claude" gate model → cli/claude, no key prompt, "" sentinel (same), "" interval, N slack
+        inputs = iter(["claude", "", "", "N"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result["model"] == "cli/claude"
+        assert result["llm_enabled"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
+        assert "CROSS_LLM_SENTINEL_MODEL=cli/claude" in env_content
+        # cli provider should not write API key
+        assert "API_KEY" not in env_content
+
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_explicit_cli_claude(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        # "cli/claude" gate model, no key prompt, "" sentinel (same), "" interval, N slack
+        inputs = iter(["cli/claude", "", "", "N"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result["model"] == "cli/claude"
+        assert result["llm_enabled"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
 
 
 @patch("cross.setup.sys")

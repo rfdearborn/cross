@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # LLM gate — synchronous review of denylist-flagged calls
     llm_gate_enabled: bool = True
-    llm_gate_model: str = "google/gemini-3-flash-preview"
+    llm_gate_model: str = "cli/claude"
     llm_gate_api_key: str = ""
     llm_gate_base_url: str = ""
     llm_gate_temperature: float = 0.0
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # LLM sentinel — async periodic review of all activity
     llm_sentinel_enabled: bool = True
-    llm_sentinel_model: str = "google/gemini-3-flash-preview"
+    llm_sentinel_model: str = "cli/claude"
     llm_sentinel_api_key: str = ""
     llm_sentinel_base_url: str = ""
     llm_sentinel_temperature: float = 0.0

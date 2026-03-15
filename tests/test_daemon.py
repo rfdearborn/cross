@@ -17,7 +17,7 @@ def _mock_settings(**overrides):
         "gating_enabled": False,
         "rules_dir": "~/.cross/rules.d",
         "llm_gate_enabled": False,
-        "llm_gate_model": "google/gemini-3-flash-preview",
+        "llm_gate_model": "cli/claude",
         "llm_gate_api_key": "",
         "llm_gate_base_url": "",
         "llm_gate_temperature": 0.0,
@@ -26,7 +26,7 @@ def _mock_settings(**overrides):
         "llm_gate_timeout_ms": 30000,
         "llm_gate_threshold": "block",
         "llm_sentinel_enabled": False,
-        "llm_sentinel_model": "google/gemini-3-flash-preview",
+        "llm_sentinel_model": "cli/claude",
         "llm_sentinel_api_key": "",
         "llm_sentinel_base_url": "",
         "llm_sentinel_temperature": 0.0,
@@ -152,7 +152,7 @@ class TestBuildGateChain:
 
     @pytest.mark.anyio
     async def test_llm_gate_no_api_key_falls_back(self, tmp_path):
-        """With LLM gate enabled but no API key, chain has denylist only (no review gate)."""
+        """With LLM gate enabled but no API key (non-cli provider), chain has denylist only."""
         import cross.daemon as daemon
 
         daemon._gate_chain = None
@@ -171,6 +171,7 @@ class TestBuildGateChain:
                     gating_enabled=True,
                     rules_dir=str(rules_dir),
                     llm_gate_enabled=True,
+                    llm_gate_model="google/gemini-3-flash-preview",
                 ),
             ),
             patch("cross.llm.resolve_api_key", return_value=None),
@@ -310,7 +311,7 @@ class TestBuildSentinel:
 
     @pytest.mark.anyio
     async def test_sentinel_enabled_no_api_key(self):
-        """With sentinel enabled but no API key, sentinel is not created."""
+        """With sentinel enabled but no API key (non-cli provider), sentinel is not created."""
         import cross.daemon as daemon
 
         daemon._gate_chain = None
@@ -322,7 +323,10 @@ class TestBuildSentinel:
             patch("cross.daemon.LoggerPlugin") as mock_logger_cls,
             patch(
                 "cross.daemon.settings",
-                _mock_settings(llm_sentinel_enabled=True),
+                _mock_settings(
+                    llm_sentinel_enabled=True,
+                    llm_sentinel_model="google/gemini-3-flash-preview",
+                ),
             ),
             patch("cross.llm.resolve_api_key", return_value=None),
         ):

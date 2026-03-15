@@ -95,24 +95,28 @@ cross pending deny <tool_use_id>       # deny
 
 ### LLM Providers
 
-cross uses LLMs for the gate reviewer and sentinel. The default is Google Gemini (free tier), but you can use any supported provider:
+cross uses LLMs for the gate reviewer and sentinel. The default is `claude` (`cli/claude`), which uses your existing Claude Code subscription -- no API key needed. You can also use any other supported provider:
 
-| Provider | Model format | API key env var |
-|----------|-------------|-----------------|
-| Google Gemini | `google/gemini-3-flash-preview` | `GOOGLE_API_KEY` |
-| Anthropic | `anthropic/claude-haiku-4-5` | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai/gpt-4o` | `OPENAI_API_KEY` |
-| Ollama | `ollama/llama3` | (none needed) |
+| Provider | Model format | API key env var | Notes |
+|----------|-------------|-----------------|-------|
+| Claude Code | `cli/claude` (or just `claude`) | (none needed) | Default. Uses your Claude subscription via `claude -p` |
+| Google Gemini | `google/gemini-3-flash-preview` | `GOOGLE_API_KEY` | Free tier available |
+| Anthropic | `anthropic/claude-haiku-4-5` | `ANTHROPIC_API_KEY` | |
+| OpenAI | `openai/gpt-4o` | `OPENAI_API_KEY` | |
+| Ollama | `ollama/llama3` | (none needed) | Local models |
 
 Configure via environment variables (all prefixed `CROSS_`):
 
 ```bash
-# LLM gate
+# LLM gate (default uses Claude Code, no key needed)
+CROSS_LLM_GATE_MODEL=cli/claude
+
+# Or use an API provider
 CROSS_LLM_GATE_MODEL=google/gemini-3-flash-preview
 CROSS_LLM_GATE_API_KEY=...          # or set GOOGLE_API_KEY
 
 # Sentinel
-CROSS_LLM_SENTINEL_MODEL=google/gemini-3-flash-preview
+CROSS_LLM_SENTINEL_MODEL=cli/claude
 CROSS_LLM_SENTINEL_INTERVAL_SECONDS=60
 ```
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from cross.llm import (
     _OPENAI_COMPATIBLE_PROVIDERS,
     LLMConfig,
+    _build_cli_prompt,
     _reasoning_to_anthropic,
     _reasoning_to_openai,
     close_client,
@@ -50,6 +52,9 @@ class TestParseModelRef:
 
     def test_ollama_model(self):
         assert parse_model_ref("ollama/llama3") == ("ollama", "llama3")
+
+    def test_cli_model(self):
+        assert parse_model_ref("cli/claude") == ("cli", "claude")
 
     def test_multiple_slashes_splits_on_first(self):
         assert parse_model_ref("openrouter/anthropic/claude-sonnet-4-6") == (
@@ -111,6 +116,11 @@ class TestResolveApiKey:
     def test_ollama_no_key_returns_none(self, monkeypatch):
         """Ollama has no env vars — resolve_api_key returns None."""
         cfg = LLMConfig(model="ollama/llama3")
+        assert resolve_api_key(cfg) is None
+
+    def test_cli_no_key_returns_none(self):
+        """CLI provider has no env vars — resolve_api_key returns None."""
+        cfg = LLMConfig(model="cli/claude")
         assert resolve_api_key(cfg) is None
 
 
@@ -377,6 +387,148 @@ class TestComplete:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         cfg = LLMConfig(model="google/gemini-3-flash-preview")
         result = await complete(cfg, system="test", messages=[{"role": "user", "content": "hi"}])
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_cli_routes_to_complete_cli(self):
+        """CLI provider should route to _complete_cli, not HTTP providers."""
+        cfg = LLMConfig(model="cli/claude")
+
+        with patch("cross.llm._complete_cli", new_callable=AsyncMock, return_value="VERDICT: ALLOW") as mock_cli:
+            result = await complete(cfg, system="Review this", messages=[{"role": "user", "content": "test"}])
+
+        assert result == "VERDICT: ALLOW"
+        mock_cli.assert_awaited_once_with(cfg, "Review this", [{"role": "user", "content": "test"}], 30.0)
+
+
+# --- _build_cli_prompt ---
+
+
+class TestBuildCliPrompt:
+    def test_system_and_messages(self):
+        prompt = _build_cli_prompt("Be a reviewer", [{"role": "user", "content": "check this"}])
+        assert "System: Be a reviewer" in prompt
+        assert "User: check this" in prompt
+
+    def test_no_system(self):
+        prompt = _build_cli_prompt("", [{"role": "user", "content": "hello"}])
+        assert "System:" not in prompt
+        assert "User: hello" in prompt
+
+    def test_content_blocks(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "block text"}]}]
+        prompt = _build_cli_prompt("sys", messages)
+        assert "User: block text" in prompt
+
+    def test_mixed_content(self):
+        messages = [
+            {"role": "user", "content": "plain text"},
+            {"role": "assistant", "content": [{"type": "text", "text": "response"}]},
+        ]
+        prompt = _build_cli_prompt("", messages)
+        assert "User: plain text" in prompt
+        assert "Assistant: response" in prompt
+
+
+# --- _complete_cli ---
+
+
+class TestCompleteCli:
+    @pytest.fixture(autouse=True)
+    async def _reset_client(self):
+        yield
+        await close_client()
+
+    @pytest.mark.anyio
+    async def test_cli_success(self):
+        """CLI subprocess returns stdout text."""
+        cfg = LLMConfig(model="cli/claude")
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"VERDICT: ALLOW\nLooks safe.", b""))
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc) as mock_exec:
+            result = await complete(cfg, system="Review", messages=[{"role": "user", "content": "test"}])
+
+        assert result == "VERDICT: ALLOW\nLooks safe."
+        # Verify the command invocation
+        call_args = mock_exec.call_args
+        assert call_args[0][0] == "claude"
+        assert call_args[0][1] == "-p"
+
+    @pytest.mark.anyio
+    async def test_cli_env_cleaned(self):
+        """CLI subprocess env should strip CROSS_* vars and set ANTHROPIC_BASE_URL."""
+        cfg = LLMConfig(model="cli/claude")
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
+        mock_proc.returncode = 0
+
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc) as mock_exec,
+            patch.dict("os.environ", {"CROSS_LLM_GATE_MODEL": "test", "HOME": "/home/user"}, clear=False),
+        ):
+            await complete(cfg, system="test", messages=[{"role": "user", "content": "hi"}])
+
+        env = mock_exec.call_args[1]["env"]
+        assert env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
+        assert "CROSS_LLM_GATE_MODEL" not in env
+        assert "HOME" in env
+
+    @pytest.mark.anyio
+    async def test_cli_nonzero_exit(self):
+        """Non-zero exit code should return None."""
+        cfg = LLMConfig(model="cli/claude")
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"", b"error message"))
+        mock_proc.returncode = 1
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
+            result = await complete(cfg, system="test", messages=[{"role": "user", "content": "hi"}])
+
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_cli_command_not_found(self):
+        """FileNotFoundError should return None."""
+        cfg = LLMConfig(model="cli/nonexistent")
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, side_effect=FileNotFoundError):
+            result = await complete(cfg, system="test", messages=[{"role": "user", "content": "hi"}])
+
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_cli_timeout(self):
+        """Timeout should return None."""
+        cfg = LLMConfig(model="cli/claude")
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+        mock_proc.kill = MagicMock()
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
+            # Use wait_for that raises TimeoutError
+            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                result = await complete(cfg, system="test", messages=[{"role": "user", "content": "hi"}], timeout_s=1.0)
+
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_cli_empty_output(self):
+        """Empty stdout should return None."""
+        cfg = LLMConfig(model="cli/claude")
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=mock_proc):
+            result = await complete(cfg, system="test", messages=[{"role": "user", "content": "hi"}])
+
         assert result is None
 
 

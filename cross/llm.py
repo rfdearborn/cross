@@ -2,6 +2,7 @@
 
 Supports provider/model naming (e.g. "google/gemini-3-flash-preview", "openai/gpt-4o").
 Provider prefix determines API format:
+  - cli/*              → CLI subprocess (e.g. cli/claude uses `claude -p`, no API key needed)
   - anthropic/*        → Anthropic Messages API
   - openai/*           → OpenAI Chat Completions API
   - google/*           → Google Gemini (OpenAI-compatible endpoint)
@@ -13,6 +14,7 @@ Each caller supplies its own api_key, base_url, model. Key resolution:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
@@ -35,6 +37,7 @@ _PROVIDER_KEY_ENV_VARS: dict[str, list[str]] = {
     "openai": ["OPENAI_API_KEY"],
     "google": ["GOOGLE_API_KEY"],
     "ollama": [],  # no key needed
+    "cli": [],  # CLI handles its own auth
 }
 
 # Providers that use the OpenAI Chat Completions API format
@@ -133,6 +136,10 @@ async def complete(
     timeout_s: float = 30.0,
 ) -> str | None:
     """Send a completion request. Returns the text response, or None on error."""
+    # CLI provider uses subprocess — no API key or base URL needed
+    if config.provider == "cli":
+        return await _complete_cli(config, system, messages, timeout_s)
+
     api_key = resolve_api_key(config)
     if not api_key:
         if config.provider == "ollama":
@@ -263,4 +270,80 @@ async def _complete_openai(
         return None
     except Exception as e:
         logger.warning(f"OpenAI request failed: {e}")
+        return None
+
+
+def _build_cli_prompt(system: str, messages: list[dict]) -> str:
+    """Flatten system prompt + messages into a single prompt string for CLI mode."""
+    parts: list[str] = []
+    if system:
+        parts.append(f"System: {system}")
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            parts.append(f"{role.capitalize()}: {content}")
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(f"{role.capitalize()}: {block['text']}")
+    return "\n\n".join(parts)
+
+
+async def _complete_cli(
+    config: LLMConfig,
+    system: str,
+    messages: list[dict],
+    timeout_s: float,
+) -> str | None:
+    """Run a CLI command (e.g. ``claude -p``) as a subprocess and return its stdout.
+
+    The subprocess environment is sanitised: ``CROSS_*`` env vars are removed
+    and ``ANTHROPIC_BASE_URL`` is set to the real Anthropic API to avoid
+    recursive proxying through cross.
+    """
+    prompt = _build_cli_prompt(system, messages)
+    cmd = config.model_id  # e.g. "claude"
+
+    # Build a clean env: strip CROSS_* vars, point at real Anthropic API
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CROSS_")}
+    env["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+
+    logger.debug(f"CLI invoke: {cmd} -p (prompt length {len(prompt)})")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            cmd,
+            "-p",
+            prompt,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+
+        if proc.returncode != 0:
+            err_text = stderr.decode(errors="replace").strip()[:200] if stderr else "(no stderr)"
+            logger.warning(f"CLI '{cmd}' exited with code {proc.returncode}: {err_text}")
+            return None
+
+        text = stdout.decode(errors="replace").strip() if stdout else ""
+        if not text:
+            logger.warning(f"CLI '{cmd}' returned empty output")
+            return None
+
+        return text
+
+    except FileNotFoundError:
+        logger.warning(f"CLI command not found: '{cmd}'")
+        return None
+    except asyncio.TimeoutError:
+        logger.warning(f"CLI '{cmd}' timed out after {timeout_s}s")
+        try:
+            proc.kill()  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+        return None
+    except Exception as e:
+        logger.warning(f"CLI '{cmd}' failed: {e}")
         return None
