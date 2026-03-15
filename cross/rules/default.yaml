@@ -28,7 +28,7 @@ rules:
   # ── Destructive file operations ──
 
   - name: destructive-rm
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Recursive forced deletes targeting root, home, or cwd
@@ -49,7 +49,7 @@ rules:
       - 'rm\s+-\w*r\w*\s+--force\s+{{dangerous_path}}'
 
   - name: rm-outside-project
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Deleting files in user directories outside typical project scope
@@ -62,7 +62,7 @@ rules:
       - '\brm\b\s.*/home/\w+/(Downloads|Documents|Desktop|Pictures|Music|Movies|Applications)/'
 
   - name: destructive-alt
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Alternative file destruction commands
@@ -74,7 +74,7 @@ rules:
       - 'rsync\b.*--delete\b.*\s/\s*$'
 
   - name: destructive-disk
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Disk-level destructive operations
@@ -88,7 +88,7 @@ rules:
       - "mkfs."
 
   - name: fork-bomb
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Fork bombs
@@ -96,7 +96,7 @@ rules:
       - ':\(\)\s*\{\s*:\|:\s*&\s*\}\s*;'
 
   - name: shell-wrapper-destructive
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Destructive commands hidden inside shell wrappers (bash -c, eval)
@@ -109,7 +109,7 @@ rules:
   # ── Credential exfiltration ──
 
   - name: credential-exfil
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: halt_session
     description: Credential exfiltration via HTTP/network
@@ -138,7 +138,7 @@ rules:
   # ── Reverse shells ──
 
   - name: reverse-shell
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: halt_session
     description: Reverse shell patterns
@@ -177,7 +177,7 @@ rules:
   # ── System path writes (bash) ──
 
   - name: system-path-write-bash
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Bash writes to system directories via redirection/cp/mv/tee/install/ln/sed
@@ -190,7 +190,7 @@ rules:
   # ── Dangerous chmod ──
 
   - name: dangerous-chmod
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: block
     description: Recursive chmod 777/a+rwx on root, home, or cwd
@@ -223,7 +223,7 @@ rules:
       - ".env"
 
   - name: sensitive-file-read-bash
-    tools: [Bash]
+    tools: [Bash, exec]
     field: command
     action: alert
     description: Alert on bash access to sensitive credential files

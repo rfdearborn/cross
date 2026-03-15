@@ -221,6 +221,8 @@ def _run_proxy():
 
 def _run_wrap(argv: list[str], log: logging.Logger) -> int:
     """Wrap an agent command in a PTY, registering with the daemon."""
+    from pathlib import Path
+
     # Resolve the agent binary
     agent_bin = shutil.which(argv[0])
     if not agent_bin:
@@ -235,9 +237,21 @@ def _run_wrap(argv: list[str], log: logging.Logger) -> int:
         "ANTHROPIC_BASE_URL": f"http://localhost:{settings.listen_port}",
     }
 
+    # OpenClaw: inject tool hook via --import (ESM)
+    if agent_name == "openclaw":
+        hook_path = Path(__file__).parent / "patches" / "openclaw_hook.mjs"
+        if hook_path.exists():
+            existing_node_opts = os.environ.get("NODE_OPTIONS", "")
+            env["NODE_OPTIONS"] = f"--import {hook_path} {existing_node_opts}".strip()
+            env["CROSS_LISTEN_PORT"] = str(settings.listen_port)
+
     # Create local session
     info = registry.create(agent=agent_name, argv=argv)
     log.info(f"Session {info.session_id} started: {agent_name} in {info.project} ({info.cwd})")
+
+    # Set session ID for OpenClaw hook (must be after session creation)
+    if agent_name == "openclaw":
+        env["CROSS_SESSION_ID"] = info.session_id
 
     # Register session with daemon
     daemon_url = f"http://localhost:{settings.listen_port}"

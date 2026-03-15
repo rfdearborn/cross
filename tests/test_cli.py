@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 from unittest.mock import MagicMock, patch
 
@@ -434,3 +435,160 @@ class TestRunWrapExitCodePropagation:
 
             assert exit_code == 42
             mock_complete.assert_called_once_with("abc123", 42)
+
+
+class TestRunWrapOpenClaw:
+    """Test OpenClaw-specific behavior in _run_wrap."""
+
+    @patch("cross.cli._end_session")
+    @patch("cross.cli._start_ws_relay")
+    @patch("cross.cli._register_session")
+    @patch("shutil.which", return_value="/usr/local/bin/openclaw")
+    def test_openclaw_sets_node_options(self, mock_which, mock_register, mock_ws, mock_end):
+        from cross.cli import _run_wrap
+        from cross.session import registry
+
+        log = logging.getLogger("test")
+
+        with patch.object(registry, "create") as mock_create:
+            mock_info = MagicMock()
+            mock_info.session_id = "oc_sess_1"
+            mock_info.agent = "openclaw"
+            mock_info.project = "test-project"
+            mock_info.cwd = "/tmp/test"
+            mock_info.started_at = 1234567890.0
+            mock_info.pty_session = MagicMock()
+            mock_info.pty_session.spawn.return_value = 0
+            mock_create.return_value = mock_info
+
+            with patch.object(registry, "complete"):
+                _run_wrap(["openclaw"], log)
+
+            spawn_call = mock_info.pty_session.spawn.call_args
+            env_arg = spawn_call[1].get("env") or spawn_call[0][1] if len(spawn_call[0]) > 1 else spawn_call[1]["env"]
+            assert "NODE_OPTIONS" in env_arg
+            assert "--import" in env_arg["NODE_OPTIONS"]
+            assert "openclaw_hook.mjs" in env_arg["NODE_OPTIONS"]
+
+    @patch("cross.cli._end_session")
+    @patch("cross.cli._start_ws_relay")
+    @patch("cross.cli._register_session")
+    @patch("shutil.which", return_value="/usr/local/bin/openclaw")
+    def test_openclaw_sets_cross_listen_port(self, mock_which, mock_register, mock_ws, mock_end):
+        from cross.cli import _run_wrap
+        from cross.config import settings
+        from cross.session import registry
+
+        log = logging.getLogger("test")
+
+        with patch.object(registry, "create") as mock_create:
+            mock_info = MagicMock()
+            mock_info.session_id = "oc_sess_2"
+            mock_info.agent = "openclaw"
+            mock_info.project = "test-project"
+            mock_info.cwd = "/tmp/test"
+            mock_info.started_at = 1234567890.0
+            mock_info.pty_session = MagicMock()
+            mock_info.pty_session.spawn.return_value = 0
+            mock_create.return_value = mock_info
+
+            with patch.object(registry, "complete"):
+                _run_wrap(["openclaw"], log)
+
+            spawn_call = mock_info.pty_session.spawn.call_args
+            env_arg = spawn_call[1].get("env") or spawn_call[0][1] if len(spawn_call[0]) > 1 else spawn_call[1]["env"]
+            assert "CROSS_LISTEN_PORT" in env_arg
+            assert env_arg["CROSS_LISTEN_PORT"] == str(settings.listen_port)
+
+    @patch("cross.cli._end_session")
+    @patch("cross.cli._start_ws_relay")
+    @patch("cross.cli._register_session")
+    @patch("shutil.which", return_value="/usr/local/bin/openclaw")
+    def test_openclaw_sets_cross_session_id(self, mock_which, mock_register, mock_ws, mock_end):
+        from cross.cli import _run_wrap
+        from cross.session import registry
+
+        log = logging.getLogger("test")
+
+        with patch.object(registry, "create") as mock_create:
+            mock_info = MagicMock()
+            mock_info.session_id = "oc_sess_3"
+            mock_info.agent = "openclaw"
+            mock_info.project = "test-project"
+            mock_info.cwd = "/tmp/test"
+            mock_info.started_at = 1234567890.0
+            mock_info.pty_session = MagicMock()
+            mock_info.pty_session.spawn.return_value = 0
+            mock_create.return_value = mock_info
+
+            with patch.object(registry, "complete"):
+                _run_wrap(["openclaw"], log)
+
+            spawn_call = mock_info.pty_session.spawn.call_args
+            env_arg = spawn_call[1].get("env") or spawn_call[0][1] if len(spawn_call[0]) > 1 else spawn_call[1]["env"]
+            assert "CROSS_SESSION_ID" in env_arg
+            assert env_arg["CROSS_SESSION_ID"] == "oc_sess_3"
+
+    @patch("cross.cli._end_session")
+    @patch("cross.cli._start_ws_relay")
+    @patch("cross.cli._register_session")
+    @patch("shutil.which", return_value="/usr/bin/claude")
+    def test_non_openclaw_no_node_options(self, mock_which, mock_register, mock_ws, mock_end):
+        """Non-OpenClaw agents should not get NODE_OPTIONS."""
+        from cross.cli import _run_wrap
+        from cross.session import registry
+
+        log = logging.getLogger("test")
+
+        with patch.object(registry, "create") as mock_create:
+            mock_info = MagicMock()
+            mock_info.session_id = "claude_sess_1"
+            mock_info.agent = "claude"
+            mock_info.project = "test-project"
+            mock_info.cwd = "/tmp/test"
+            mock_info.started_at = 1234567890.0
+            mock_info.pty_session = MagicMock()
+            mock_info.pty_session.spawn.return_value = 0
+            mock_create.return_value = mock_info
+
+            with patch.object(registry, "complete"):
+                _run_wrap(["claude"], log)
+
+            spawn_call = mock_info.pty_session.spawn.call_args
+            env_arg = spawn_call[1].get("env") or spawn_call[0][1] if len(spawn_call[0]) > 1 else spawn_call[1]["env"]
+            assert "NODE_OPTIONS" not in env_arg
+            assert "CROSS_LISTEN_PORT" not in env_arg
+            assert "CROSS_SESSION_ID" not in env_arg
+
+    @patch("cross.cli._end_session")
+    @patch("cross.cli._start_ws_relay")
+    @patch("cross.cli._register_session")
+    @patch("shutil.which", return_value="/usr/local/bin/openclaw")
+    def test_openclaw_preserves_existing_node_options(self, mock_which, mock_register, mock_ws, mock_end):
+        """Existing NODE_OPTIONS should be preserved when wrapping OpenClaw."""
+        from cross.cli import _run_wrap
+        from cross.session import registry
+
+        log = logging.getLogger("test")
+
+        with (
+            patch.object(registry, "create") as mock_create,
+            patch.dict(os.environ, {"NODE_OPTIONS": "--max-old-space-size=4096"}, clear=False),
+        ):
+            mock_info = MagicMock()
+            mock_info.session_id = "oc_sess_4"
+            mock_info.agent = "openclaw"
+            mock_info.project = "test-project"
+            mock_info.cwd = "/tmp/test"
+            mock_info.started_at = 1234567890.0
+            mock_info.pty_session = MagicMock()
+            mock_info.pty_session.spawn.return_value = 0
+            mock_create.return_value = mock_info
+
+            with patch.object(registry, "complete"):
+                _run_wrap(["openclaw"], log)
+
+            spawn_call = mock_info.pty_session.spawn.call_args
+            env_arg = spawn_call[1].get("env") or spawn_call[0][1] if len(spawn_call[0]) > 1 else spawn_call[1]["env"]
+            assert "--import" in env_arg["NODE_OPTIONS"]
+            assert "--max-old-space-size=4096" in env_arg["NODE_OPTIONS"]

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 # Agents we detect on PATH (cross wrap should work with any CLI agent)
-KNOWN_AGENTS = ["claude"]
+KNOWN_AGENTS = ["claude", "openclaw"]
 
 DEFAULT_MODEL = "claude"
 
@@ -200,6 +200,58 @@ def _build_shell_wrappers(agents: list[str]) -> str:
     for agent in agents:
         lines.append(SHELL_WRAPPER_TEMPLATE.format(agent=agent))
     return "\n".join(lines)
+
+
+_OPENCLAW_PLIST = Path.home() / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+_OPENCLAW_HOOK_KEY = "NODE_OPTIONS"
+
+
+def _patch_openclaw_gateway(print_fn) -> bool:
+    """Patch the OpenClaw Gateway LaunchAgent to load the cross tool hook."""
+    if not _OPENCLAW_PLIST.exists():
+        return False
+
+    hook_path = Path(__file__).parent / "patches" / "openclaw_hook.mjs"
+    if not hook_path.exists():
+        print_fn(f"  Hook file not found: {hook_path}")
+        return False
+
+    content = _OPENCLAW_PLIST.read_text()
+    import_arg = f"--import {hook_path}"
+
+    # Already patched?
+    if str(hook_path) in content:
+        print_fn("  OpenClaw Gateway already patched.")
+        return True
+
+    # Backup before modifying
+    backup_path = _OPENCLAW_PLIST.with_suffix(".plist.bak")
+    backup_path.write_text(content)
+    print_fn(f"  Backup: {backup_path}")
+
+    # Inject NODE_OPTIONS into EnvironmentVariables
+    if "<key>NODE_OPTIONS</key>" in content:
+        # NODE_OPTIONS exists — append our --import
+        import re
+
+        pattern = r"(<key>NODE_OPTIONS</key>\s*<string>)(.*?)(</string>)"
+        replacement = rf"\g<1>\g<2> {import_arg}\g<3>"
+        content = re.sub(pattern, replacement, content)
+    else:
+        # Add NODE_OPTIONS before the closing </dict> of EnvironmentVariables
+        env_insert = f"    <key>{_OPENCLAW_HOOK_KEY}</key>\n    <string>{import_arg}</string>\n"
+        # Insert before the closing </dict> of EnvironmentVariables
+        # The EnvironmentVariables dict ends with </dict>, find it
+        last_dict_close = content.rfind("    </dict>")
+        if last_dict_close == -1:
+            print_fn("  Could not find EnvironmentVariables in plist.")
+            return False
+        content = content[:last_dict_close] + env_insert + content[last_dict_close:]
+
+    _OPENCLAW_PLIST.write_text(content)
+    print_fn(f"  Patched: {_OPENCLAW_PLIST}")
+    print_fn("  Restart Gateway: launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway")
+    return True
 
 
 def _install_launchd(cross_dir: Path, print_fn) -> bool:
@@ -436,7 +488,15 @@ def run_setup(
                 print_fn(f"  {_build_shell_wrappers(agents)}")
         print_fn("")
 
-    # ── Step 7: Auto-start daemon ──
+    # ── Step 7: Patch OpenClaw Gateway ──
+    if sys.platform == "darwin" and "openclaw" in agents and _OPENCLAW_PLIST.exists():
+        print_fn("OpenClaw Gateway detected.")
+        patch_answer = input_fn("Patch Gateway to enable cross tool gating? (Y/n): ").strip().lower()
+        if patch_answer not in ("n", "no"):
+            result["openclaw_patched"] = _patch_openclaw_gateway(print_fn)
+        print_fn("")
+
+    # ── Step 8: Auto-start daemon ──
     if sys.platform == "darwin":
         autostart_answer = input_fn("Auto-start cross daemon on login? (Y/n): ").strip().lower()
         if autostart_answer not in ("n", "no"):

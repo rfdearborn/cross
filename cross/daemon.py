@@ -7,6 +7,8 @@ import logging
 import os
 import shutil
 import subprocess
+import time
+import uuid
 from typing import Any
 
 from starlette.applications import Starlette
@@ -17,8 +19,8 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from cross.chain import GateChain
 from cross.config import settings
-from cross.evaluator import Action
-from cross.events import EventBus
+from cross.evaluator import Action, GateRequest
+from cross.events import EventBus, GateDecisionEvent, ToolUseEvent
 from cross.plugins.dashboard import DASHBOARD_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
 
@@ -161,6 +163,133 @@ async def _spawn_session(project: str, initial_message: str):
         start_new_session=True,
     )
     logger.info(f"Spawned new session for project '{project}' in {cwd} (pid {proc.pid})")
+
+
+# --- External gate API ---
+
+
+async def api_gate(request: Request) -> JSONResponse:
+    """POST /cross/api/gate — synchronous gate evaluation for external agents (e.g. OpenClaw)."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    tool_name = data.get("tool_name", "")
+    tool_input = data.get("tool_input", {})
+    agent = data.get("agent", "unknown")
+    session_id = data.get("session_id", "")
+    user_intent = data.get("user_intent", "")
+    cwd = data.get("cwd", "")
+
+    if not _gate_chain:
+        return JSONResponse({"action": "ALLOW", "reason": "No gate chain configured"})
+
+    tool_use_id = f"ext-{uuid.uuid4().hex[:12]}"
+
+    gate_request = GateRequest(
+        tool_use_id=tool_use_id,
+        tool_name=tool_name,
+        tool_input=tool_input,
+        agent=agent,
+        session_id=session_id,
+        timestamp=time.time(),
+        user_intent=user_intent,
+        cwd=cwd,
+    )
+
+    result = await _gate_chain.evaluate(gate_request)
+
+    # Publish tool call and gate decision events
+    await event_bus.publish(
+        ToolUseEvent(
+            name=tool_name,
+            tool_use_id=tool_use_id,
+            input=tool_input if isinstance(tool_input, dict) else {},
+        )
+    )
+    await event_bus.publish(
+        GateDecisionEvent(
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            action=result.action.name.lower(),
+            reason=result.reason,
+            rule_id=result.rule_id,
+            evaluator=result.evaluator,
+            confidence=result.confidence,
+            tool_input=tool_input if isinstance(tool_input, dict) else {},
+        )
+    )
+
+    # Handle escalation — wait for human approval
+    if result.action == Action.ESCALATE:
+        from cross.proxy import _approval_results, _pending_approvals
+
+        approval_event = asyncio.Event()
+        _pending_approvals[tool_use_id] = approval_event
+        logger.info(
+            f"ESCALATED external tool {tool_name} ({tool_use_id}), "
+            f"waiting for human approval (timeout={settings.gate_approval_timeout}s)"
+        )
+
+        try:
+            await asyncio.wait_for(
+                approval_event.wait(),
+                timeout=settings.gate_approval_timeout,
+            )
+            approved, username = _approval_results.pop(tool_use_id, (False, ""))
+        except asyncio.TimeoutError:
+            approved, username = False, ""
+            logger.warning(f"Gate approval timed out for external tool {tool_name} ({tool_use_id})")
+        finally:
+            _pending_approvals.pop(tool_use_id, None)
+
+        if approved:
+            logger.info(f"APPROVED external tool {tool_name} by {username}")
+            await event_bus.publish(
+                GateDecisionEvent(
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    action="allow",
+                    reason=f"Approved by human reviewer (@{username})",
+                    evaluator="human",
+                    tool_input=tool_input if isinstance(tool_input, dict) else {},
+                )
+            )
+            return JSONResponse(
+                {
+                    "action": "ALLOW",
+                    "reason": f"Approved by human reviewer (@{username})",
+                    "evaluator": "human",
+                }
+            )
+        else:
+            reason = f"Denied by human reviewer (@{username})" if username else "Timed out waiting for human approval"
+            await event_bus.publish(
+                GateDecisionEvent(
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    action="block",
+                    reason=reason,
+                    evaluator="human",
+                    tool_input=tool_input if isinstance(tool_input, dict) else {},
+                )
+            )
+            return JSONResponse(
+                {
+                    "action": "BLOCK",
+                    "reason": reason,
+                    "evaluator": "human",
+                }
+            )
+
+    return JSONResponse(
+        {
+            "action": result.action.name,
+            "reason": result.reason,
+            "evaluator": result.evaluator,
+        }
+    )
 
 
 # --- Dashboard routes ---
@@ -349,6 +478,7 @@ async def on_shutdown():
 _api_routes = [
     Route("/cross/sessions", api_register_session, methods=["POST"]),
     Route("/cross/sessions/{session_id}/end", api_end_session, methods=["POST"]),
+    Route("/cross/api/gate", api_gate, methods=["POST"]),
 ]
 
 

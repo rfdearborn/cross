@@ -71,6 +71,15 @@ class TestDetectAgents:
         agents = _detect_agents()
         assert agents == KNOWN_AGENTS
 
+    @patch("shutil.which")
+    def test_finds_openclaw(self, mock_which):
+        mock_which.side_effect = lambda name: f"/usr/local/bin/{name}" if name == "openclaw" else None
+        agents = _detect_agents()
+        assert agents == ["openclaw"]
+
+    def test_known_agents_includes_openclaw(self):
+        assert "openclaw" in KNOWN_AGENTS
+
 
 class TestCheckOllama:
     @patch("socket.create_connection")

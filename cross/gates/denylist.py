@@ -241,7 +241,8 @@ class DenylistGate(Gate):
 
         for rule in self.rules:
             # Check if rule applies to this tool
-            if "*" not in rule.tools and request.tool_name not in rule.tools:
+            tool_name_lower = request.tool_name.lower()
+            if "*" not in rule.tools and not any(t.lower() == tool_name_lower for t in rule.tools):
                 continue
 
             # Get the text to match against
