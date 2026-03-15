@@ -4,12 +4,14 @@ Tests cover:
 - _extract_user_intent: message parsing, system-reminder skipping, content types
 - _extract_request_event: request parsing, edge cases, body variations
 - _inject_blocked_tool_feedback: stale cleanup, message injection, edge cases
+- _build_retry_request_body: retry request body construction
+- _rewrite_content_block_index: SSE content block index rewriting
 - get_client: singleton behavior
 - handle_proxy_request: streaming vs non-streaming routing
 - _proxy_simple: non-streaming with/without gate chain, error responses
-- _gate_non_streaming_response: tool_use evaluation, cascade blocking
+- _gate_non_streaming_response: tool_use evaluation, cascade blocking/halting
 - _is_tool_use_block_start: SSE line classification
-- _proxy_streaming: SSE streaming with/without gate chain, buffering, blocking, alerts
+- _proxy_streaming: SSE streaming with/without gate chain, buffering, blocking, retries, halting, alerts
 - shutdown: client cleanup
 """
 
@@ -31,6 +33,7 @@ from cross.events import (
     ErrorEvent,
     EventBus,
     GateDecisionEvent,
+    GateRetryEvent,
     RequestEvent,
 )
 from cross.proxy import (
@@ -39,6 +42,7 @@ from cross.proxy import (
     _blocked_tool_ids,
     _blocked_tool_info,
     _blocked_tool_timestamps,
+    _build_retry_request_body,
     _extract_request_event,
     _extract_user_intent,
     _gate_non_streaming_response,
@@ -46,6 +50,7 @@ from cross.proxy import (
     _is_tool_use_block_start,
     _proxy_streaming,
     _recent_tools,
+    _rewrite_content_block_index,
     get_client,
     handle_proxy_request,
     resolve_gate_approval,
@@ -102,6 +107,16 @@ class AlertGate(Gate):
         return EvaluationResponse(
             action=Action.ALERT,
             reason="alert from gate",
+            evaluator=self.name,
+        )
+
+
+class HaltSessionGate(Gate):
+    async def evaluate(self, request: GateRequest) -> EvaluationResponse:
+        return EvaluationResponse(
+            action=Action.HALT_SESSION,
+            reason="halted by gate",
+            rule_id="test-halt-rule",
             evaluator=self.name,
         )
 
@@ -1436,8 +1451,8 @@ class TestProxyStreaming:
         assert len(output) == len(sse_lines)
 
     @pytest.mark.anyio
-    async def test_blocked_tool_suppressed(self):
-        """With a blocking gate, tool_use SSE lines should be suppressed and response terminated."""
+    async def test_halted_tool_suppressed(self):
+        """With a HALT_SESSION gate, tool_use SSE lines should be suppressed and response terminated."""
 
         sse_lines = [
             "event: message_start",
@@ -1460,7 +1475,7 @@ class TestProxyStreaming:
         upstream = _make_mock_upstream(sse_lines)
         client = _make_mock_streaming_client(upstream)
         event_bus = EventBus()
-        chain = GateChain(gates=[BlockGate(name="blocker")])
+        chain = GateChain(gates=[HaltSessionGate(name="halter")])
 
         result = await _proxy_streaming(
             client,
@@ -1557,7 +1572,7 @@ class TestProxyStreaming:
         event_bus = EventBus()
         events_received = []
         event_bus.subscribe(AsyncMock(side_effect=lambda e: events_received.append(e)))
-        chain = GateChain(gates=[BlockGate(name="blocker")])
+        chain = GateChain(gates=[HaltSessionGate(name="halter")])
 
         result = await _proxy_streaming(
             client,
@@ -1575,7 +1590,7 @@ class TestProxyStreaming:
         assert len(gate_events) == 1
         assert gate_events[0].tool_use_id == "toolu_1"
         assert gate_events[0].tool_name == "Bash"
-        assert gate_events[0].action == "block"
+        assert gate_events[0].action == "halt_session"
 
     @pytest.mark.anyio
     async def test_strips_transfer_and_content_encoding(self):
@@ -1631,14 +1646,14 @@ class TestProxyStreaming:
         upstream.aclose.assert_called_once()
 
     @pytest.mark.anyio
-    async def test_cascade_blocking(self):
-        """When first tool is blocked, response is terminated — second tool never reaches client."""
+    async def test_cascade_halt(self):
+        """When first tool is halted, response is terminated — second tool never reaches client."""
 
         sse_lines = [
             "event: message_start",
             'data: {"type":"message_start","message":{"id":"m1","model":"claude-3","role":"assistant"}}',
             "",
-            # First tool -- blocked by SelectiveBlockGate
+            # First tool -- halted by HaltSessionGate
             "event: content_block_start",
             'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_bash","name":"Bash"}}',
             "",
@@ -1648,7 +1663,7 @@ class TestProxyStreaming:
             "event: content_block_stop",
             'data: {"type":"content_block_stop","index":0}',
             "",
-            # Second tool -- never processed because response terminates after first block
+            # Second tool -- never processed because response terminates after first halt
             "event: content_block_start",
             'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_read","name":"Read"}}',
             "",
@@ -1666,7 +1681,7 @@ class TestProxyStreaming:
         upstream = _make_mock_upstream(sse_lines)
         client = _make_mock_streaming_client(upstream)
         event_bus = EventBus()
-        chain = GateChain(gates=[SelectiveBlockGate(name="selective")])
+        chain = GateChain(gates=[HaltSessionGate(name="halter")])
 
         result = await _proxy_streaming(
             client,
@@ -1681,10 +1696,10 @@ class TestProxyStreaming:
         output = await _collect_streaming_output(result)
         output_text = "".join(output)
 
-        # First tool blocked and suppressed
+        # First tool halted and suppressed
         assert "toolu_bash" in _blocked_tool_ids
         assert "rm -rf" not in output_text
-        # Second tool never reached client (response terminated after first block)
+        # Second tool never reached client (response terminated after first halt)
         assert "toolu_read" not in output_text
         # Synthetic message_stop ends the response
         assert "message_stop" in output_text
@@ -2630,3 +2645,433 @@ class TestProxyStreamingBufferOverflowWithEvents:
         delta_events = [e for e in events_received if isinstance(e, MessageDeltaEvent)]
         # At least one delta event should be the one from the overflow path
         assert any(e.output_tokens == 77 for e in delta_events)
+
+
+# ============================================================
+# _build_retry_request_body
+# ============================================================
+
+
+class TestBuildRetryRequestBody:
+    def test_basic_retry_body(self):
+        original = json.dumps(
+            {
+                "model": "claude-3",
+                "messages": [{"role": "user", "content": "do something"}],
+                "stream": True,
+            }
+        ).encode()
+        blocked_tools = [
+            {
+                "tool_use_id": "t1",
+                "name": "Bash",
+                "input": {"command": "rm -rf /"},
+                "reason": "dangerous command",
+            }
+        ]
+        result = _build_retry_request_body(original, blocked_tools)
+        data = json.loads(result)
+
+        assert len(data["messages"]) == 3
+        # Original user message
+        assert data["messages"][0]["role"] == "user"
+        # Appended assistant message with tool_use
+        assert data["messages"][1]["role"] == "assistant"
+        assert data["messages"][1]["content"][0]["type"] == "tool_use"
+        assert data["messages"][1]["content"][0]["id"] == "t1"
+        assert data["messages"][1]["content"][0]["name"] == "Bash"
+        # Appended user message with error tool_result
+        assert data["messages"][2]["role"] == "user"
+        assert data["messages"][2]["content"][0]["type"] == "tool_result"
+        assert data["messages"][2]["content"][0]["tool_use_id"] == "t1"
+        assert data["messages"][2]["content"][0]["is_error"] is True
+        assert "Cross blocked" in data["messages"][2]["content"][0]["content"]
+
+    def test_multiple_blocked_tools(self):
+        original = json.dumps(
+            {
+                "model": "claude-3",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": True,
+            }
+        ).encode()
+        blocked_tools = [
+            {"tool_use_id": "t1", "name": "Bash", "input": {"command": "rm"}, "reason": "r1"},
+            {"tool_use_id": "t2", "name": "Write", "input": {"file_path": "/etc/passwd"}, "reason": "r2"},
+        ]
+        result = _build_retry_request_body(original, blocked_tools)
+        data = json.loads(result)
+
+        # Two tool_use blocks in assistant message
+        assert len(data["messages"][1]["content"]) == 2
+        assert data["messages"][1]["content"][0]["id"] == "t1"
+        assert data["messages"][1]["content"][1]["id"] == "t2"
+        # Two tool_result blocks in user message
+        assert len(data["messages"][2]["content"]) == 2
+        assert data["messages"][2]["content"][0]["tool_use_id"] == "t1"
+        assert data["messages"][2]["content"][1]["tool_use_id"] == "t2"
+
+    def test_preserves_model_and_stream(self):
+        original = json.dumps(
+            {
+                "model": "claude-3-opus",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+                "tools": [{"name": "Bash"}],
+            }
+        ).encode()
+        blocked_tools = [
+            {"tool_use_id": "t1", "name": "Bash", "input": {}, "reason": "blocked"},
+        ]
+        result = _build_retry_request_body(original, blocked_tools)
+        data = json.loads(result)
+
+        assert data["model"] == "claude-3-opus"
+        assert data["stream"] is True
+        assert data["tools"] == [{"name": "Bash"}]
+
+
+# ============================================================
+# _rewrite_content_block_index
+# ============================================================
+
+
+class TestRewriteContentBlockIndex:
+    def test_rewrites_content_block_start(self):
+        data = {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        line = f"data: {json.dumps(data)}"
+        result = _rewrite_content_block_index(line, 2)
+        result_data = json.loads(result[6:])
+        assert result_data["index"] == 2
+
+    def test_rewrites_content_block_delta(self):
+        data = {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "hi"}}
+        line = f"data: {json.dumps(data)}"
+        result = _rewrite_content_block_index(line, 3)
+        result_data = json.loads(result[6:])
+        assert result_data["index"] == 4
+
+    def test_rewrites_content_block_stop(self):
+        data = {"type": "content_block_stop", "index": 0}
+        line = f"data: {json.dumps(data)}"
+        result = _rewrite_content_block_index(line, 5)
+        result_data = json.loads(result[6:])
+        assert result_data["index"] == 5
+
+    def test_no_rewrite_for_message_start(self):
+        data = {"type": "message_start", "message": {"id": "m1"}}
+        line = f"data: {json.dumps(data)}"
+        result = _rewrite_content_block_index(line, 3)
+        assert result == line  # unchanged
+
+    def test_no_rewrite_for_zero_offset(self):
+        data = {"type": "content_block_start", "index": 0}
+        line = f"data: {json.dumps(data)}"
+        result = _rewrite_content_block_index(line, 0)
+        assert result == line  # unchanged
+
+    def test_no_rewrite_for_non_data_line(self):
+        line = "event: content_block_start"
+        result = _rewrite_content_block_index(line, 5)
+        assert result == line  # unchanged
+
+    def test_no_rewrite_for_malformed_json(self):
+        line = "data: not valid json"
+        result = _rewrite_content_block_index(line, 5)
+        assert result == line  # unchanged
+
+    def test_no_rewrite_without_index_key(self):
+        data = {"type": "content_block_start", "content_block": {"type": "text"}}
+        line = f"data: {json.dumps(data)}"
+        result = _rewrite_content_block_index(line, 3)
+        assert result == line  # no index key, unchanged
+
+
+# ============================================================
+# BLOCK retry behavior (streaming)
+# ============================================================
+
+
+def _make_allow_sse_lines():
+    """Build SSE lines for a simple allowed text response."""
+    return [
+        "event: message_start",
+        'data: {"type":"message_start","message":{"id":"m2","model":"claude-3","role":"assistant"}}',
+        "",
+        "event: content_block_start",
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        "",
+        "event: content_block_delta",
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK I will try something else"}}',
+        "",
+        "event: content_block_stop",
+        'data: {"type":"content_block_stop","index":0}',
+        "",
+        "event: message_delta",
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8}}',
+        "",
+        "event: message_stop",
+        'data: {"type":"message_stop"}',
+        "",
+    ]
+
+
+class TestBlockRetryStreaming:
+    """Tests for BLOCK action triggering retry behavior in streaming proxy."""
+
+    @pytest.mark.anyio
+    async def test_block_triggers_retry(self):
+        """BLOCK should suppress tool_use and make a new API call with error feedback."""
+        # First upstream: model tries a blocked tool
+        first_sse = [
+            "event: message_start",
+            'data: {"type":"message_start","message":{"id":"m1","model":"claude-3","role":"assistant"}}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash"}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"rm -rf /\\"}"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "",
+            "event: message_delta",
+            'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":10}}',
+            "",
+        ]
+        # Second upstream (retry): model self-corrects
+        second_sse = _make_allow_sse_lines()
+
+        first_upstream = _make_mock_upstream(first_sse)
+        second_upstream = _make_mock_upstream(second_sse)
+
+        mock_client = AsyncMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(side_effect=[first_upstream, second_upstream])
+
+        event_bus = EventBus()
+        events_received = []
+        event_bus.subscribe(AsyncMock(side_effect=lambda e: events_received.append(e)))
+        chain = GateChain(gates=[BlockGate(name="blocker")])
+
+        with unittest.mock.patch.object(settings, "gate_max_retries", 3):
+            result = await _proxy_streaming(
+                mock_client,
+                event_bus,
+                "POST",
+                "/v1/messages",
+                {"host": "api.anthropic.com"},
+                _streaming_request_body(),
+                gate_chain=chain,
+            )
+            output = await _collect_streaming_output(result)
+
+        output_text = "".join(output)
+
+        # The blocked tool should NOT appear in output
+        assert "rm -rf" not in output_text
+        # The retry response text should appear
+        assert "try something else" in output_text
+        # Tool should NOT be in _blocked_tool_ids (retry handled it)
+        assert "toolu_1" not in _blocked_tool_ids
+        # A GateRetryEvent should have been published
+        retry_events = [e for e in events_received if isinstance(e, GateRetryEvent)]
+        assert len(retry_events) == 1
+        assert retry_events[0].tool_name == "Bash"
+        assert retry_events[0].retry_number == 1
+        # The client should have been called twice (original + retry)
+        assert mock_client.send.call_count == 2
+
+    @pytest.mark.anyio
+    async def test_block_retry_budget_exhausted(self):
+        """When max retries are exhausted, BLOCK falls back to HALT_SESSION behavior."""
+
+        # All upstreams return a blocked tool
+        def make_blocked_sse():
+            return [
+                "event: message_start",
+                'data: {"type":"message_start","message":{"id":"m1","model":"claude-3","role":"assistant"}}',
+                "",
+                "event: content_block_start",
+                'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash"}}',
+                "",
+                "event: content_block_delta",
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"rm -rf /\\"}"}}',
+                "",
+                "event: content_block_stop",
+                'data: {"type":"content_block_stop","index":0}',
+                "",
+            ]
+
+        # Create upstreams: 1 original + 1 retry (max_retries=1)
+        upstreams = [_make_mock_upstream(make_blocked_sse()) for _ in range(2)]
+
+        mock_client = AsyncMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(side_effect=upstreams)
+
+        event_bus = EventBus()
+        chain = GateChain(gates=[BlockGate(name="blocker")])
+
+        with unittest.mock.patch.object(settings, "gate_max_retries", 1):
+            result = await _proxy_streaming(
+                mock_client,
+                event_bus,
+                "POST",
+                "/v1/messages",
+                {"host": "api.anthropic.com"},
+                _streaming_request_body(),
+                gate_chain=chain,
+            )
+            output = await _collect_streaming_output(result)
+
+        output_text = "".join(output)
+
+        # After retry budget exhausted, should fall back to HALT_SESSION behavior
+        assert "message_stop" in output_text
+        assert "end_turn" in output_text
+        # Tool should be in _blocked_tool_ids (halted after exhaustion)
+        assert "toolu_1" in _blocked_tool_ids
+        # Client called twice: original + 1 retry
+        assert mock_client.send.call_count == 2
+
+    @pytest.mark.anyio
+    async def test_block_retry_skips_message_start(self):
+        """Retry response's message_start should be skipped (client already received one)."""
+        first_sse = [
+            "event: message_start",
+            'data: {"type":"message_start","message":{"id":"m1","model":"claude-3","role":"assistant"}}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash"}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"ls\\"}"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "",
+        ]
+        second_sse = _make_allow_sse_lines()
+
+        first_upstream = _make_mock_upstream(first_sse)
+        second_upstream = _make_mock_upstream(second_sse)
+
+        mock_client = AsyncMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(side_effect=[first_upstream, second_upstream])
+
+        event_bus = EventBus()
+        chain = GateChain(gates=[BlockGate(name="blocker")])
+
+        with unittest.mock.patch.object(settings, "gate_max_retries", 3):
+            result = await _proxy_streaming(
+                mock_client,
+                event_bus,
+                "POST",
+                "/v1/messages",
+                {"host": "api.anthropic.com"},
+                _streaming_request_body(),
+                gate_chain=chain,
+            )
+            output = await _collect_streaming_output(result)
+
+        output_text = "".join(output)
+
+        # The first attempt emits message_start (event: + data: lines = 2 occurrences).
+        # The retry should skip its message_start lines, so no additional occurrences.
+        count = output_text.count('"type":"message_start"')
+        assert count == 1  # only from the first attempt's data: line
+
+    @pytest.mark.anyio
+    async def test_halt_session_does_not_retry(self):
+        """HALT_SESSION should NOT trigger retry — it freezes immediately."""
+        sse_lines = [
+            "event: message_start",
+            'data: {"type":"message_start","message":{"id":"m1","model":"claude-3","role":"assistant"}}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash"}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"bad\\"}"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "",
+        ]
+
+        upstream = _make_mock_upstream(sse_lines)
+        mock_client = AsyncMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(return_value=upstream)
+
+        event_bus = EventBus()
+        chain = GateChain(gates=[HaltSessionGate(name="halter")])
+
+        with unittest.mock.patch.object(settings, "gate_max_retries", 3):
+            result = await _proxy_streaming(
+                mock_client,
+                event_bus,
+                "POST",
+                "/v1/messages",
+                {"host": "api.anthropic.com"},
+                _streaming_request_body(),
+                gate_chain=chain,
+            )
+            output = await _collect_streaming_output(result)
+
+        output_text = "".join(output)
+
+        # Should freeze: synthetic message_stop, tool in _blocked_tool_ids
+        assert "message_stop" in output_text
+        assert "toolu_1" in _blocked_tool_ids
+        # Client should only be called once (no retry)
+        assert mock_client.send.call_count == 1
+
+    @pytest.mark.anyio
+    async def test_zero_max_retries_falls_back_to_halt(self):
+        """With gate_max_retries=0, BLOCK immediately falls back to HALT_SESSION behavior."""
+        sse_lines = [
+            "event: message_start",
+            'data: {"type":"message_start","message":{"id":"m1","model":"claude-3","role":"assistant"}}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash"}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"rm\\"}"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "",
+        ]
+
+        upstream = _make_mock_upstream(sse_lines)
+        mock_client = AsyncMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(return_value=upstream)
+
+        event_bus = EventBus()
+        chain = GateChain(gates=[BlockGate(name="blocker")])
+
+        with unittest.mock.patch.object(settings, "gate_max_retries", 0):
+            result = await _proxy_streaming(
+                mock_client,
+                event_bus,
+                "POST",
+                "/v1/messages",
+                {"host": "api.anthropic.com"},
+                _streaming_request_body(),
+                gate_chain=chain,
+            )
+            output = await _collect_streaming_output(result)
+
+        output_text = "".join(output)
+
+        # Should fall back to HALT_SESSION behavior
+        assert "message_stop" in output_text
+        assert "toolu_1" in _blocked_tool_ids
+        # No retry attempt
+        assert mock_client.send.call_count == 1

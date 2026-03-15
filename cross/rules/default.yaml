@@ -111,7 +111,7 @@ rules:
   - name: credential-exfil
     tools: [Bash]
     field: command
-    action: block
+    action: halt_session
     description: Credential exfiltration via HTTP/network
     patterns:
       # curl/wget with sensitive file content
@@ -140,7 +140,7 @@ rules:
   - name: reverse-shell
     tools: [Bash]
     field: command
-    action: block
+    action: halt_session
     description: Reverse shell patterns
     patterns:
       - 'bash\s+-i\s+>&\s*/dev/tcp/'

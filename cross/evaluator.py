@@ -21,8 +21,8 @@ class Action(Enum):
     ALLOW = 1
     ALERT = 2
     ESCALATE = 3
-    BLOCK = 4  # gates only: prevent this tool call
-    HALT_SESSION = 5  # sentinels only: stop the session
+    BLOCK = 4  # prevent this tool call, proxy retries with error feedback
+    HALT_SESSION = 5  # freeze the session, require human intervention
 
 
 @dataclass

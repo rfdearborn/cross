@@ -75,6 +75,17 @@ class GateDecisionEvent:
 
 
 @dataclass
+class GateRetryEvent:
+    """Fired when a blocked tool call triggers a retry."""
+
+    tool_use_id: str
+    tool_name: str
+    reason: str
+    retry_number: int
+    max_retries: int
+
+
+@dataclass
 class SentinelReviewEvent:
     """Fired when the sentinel completes a periodic review."""
 
@@ -93,6 +104,7 @@ CrossEvent = (
     | MessageDeltaEvent
     | ErrorEvent
     | GateDecisionEvent
+    | GateRetryEvent
     | SentinelReviewEvent
 )
 

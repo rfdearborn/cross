@@ -283,10 +283,11 @@ class TestChainBackwardCompat:
         assert result.action == Action.ALLOW
 
     @pytest.mark.anyio
-    async def test_halt_session_remapped_to_block(self):
+    async def test_halt_session_preserved(self):
+        """HALT_SESSION should pass through without remapping."""
         chain = GateChain(gates=[StubGate(Action.HALT_SESSION)])
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
-        assert result.action == Action.BLOCK
+        assert result.action == Action.HALT_SESSION
 
     @pytest.mark.anyio
     async def test_gate_timeout(self):

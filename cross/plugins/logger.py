@@ -12,6 +12,7 @@ from cross.events import (
     CrossEvent,
     ErrorEvent,
     GateDecisionEvent,
+    GateRetryEvent,
     MessageDeltaEvent,
     MessageStartEvent,
     RequestEvent,
@@ -128,6 +129,19 @@ class LoggerPlugin:
                     }
                 )
                 logger.info(f"  gate: {event.tool_name} → {event.action} [{event.evaluator}]")
+
+            case GateRetryEvent():
+                self._write(
+                    {
+                        "type": "gate_retry",
+                        "tool_use_id": event.tool_use_id,
+                        "tool_name": event.tool_name,
+                        "reason": event.reason,
+                        "retry_number": event.retry_number,
+                        "max_retries": event.max_retries,
+                    }
+                )
+                logger.info(f"  gate_retry: {event.tool_name} attempt {event.retry_number}/{event.max_retries}")
 
             case SentinelReviewEvent():
                 self._write(

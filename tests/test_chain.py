@@ -145,18 +145,19 @@ class SlowGate(Gate):
         return EvaluationResponse(action=Action.BLOCK, reason="slow", evaluator=self.name)
 
 
-class TestHaltSessionRemap:
+class TestHaltSessionPreserved:
     @pytest.mark.anyio
-    async def test_halt_session_remapped_to_block(self):
+    async def test_halt_session_preserved(self):
+        """HALT_SESSION should pass through without remapping."""
         chain = GateChain(gates=[HaltSessionGate(name="halt")])
         r = await chain.evaluate(_req())
-        assert r.action == Action.BLOCK
+        assert r.action == Action.HALT_SESSION
 
     @pytest.mark.anyio
     async def test_halt_session_beats_allow(self):
         chain = GateChain(gates=[AllowGate(name="a"), HaltSessionGate(name="halt")])
         r = await chain.evaluate(_req())
-        assert r.action == Action.BLOCK
+        assert r.action == Action.HALT_SESSION
 
 
 class TestGateTimeout:

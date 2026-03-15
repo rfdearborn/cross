@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     llm_gate_justification: bool = False  # include explanation after verdict (costs tokens)
     llm_gate_shadow: bool = False  # LLM decides but human makes the final call
     gate_approval_timeout: int = 300  # seconds to wait for human approval on escalation
+    gate_max_retries: int = 3  # max retry attempts when a gate blocks a tool call
 
     # LLM sentinel — async periodic review of all activity
     llm_sentinel_enabled: bool = True

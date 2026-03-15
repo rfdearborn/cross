@@ -99,10 +99,6 @@ class GateChain:
         if max_response.action == Action.ABSTAIN:
             return EvaluationResponse(action=Action.ALLOW, evaluator="chain:all_abstained")
 
-        # Gates can't halt sessions — remap to BLOCK
-        if max_response.action == Action.HALT_SESSION:
-            max_response.action = Action.BLOCK
-
         return max_response
 
     async def _run_review(self, request: GateRequest, stage1_result: EvaluationResponse) -> EvaluationResponse | None:
