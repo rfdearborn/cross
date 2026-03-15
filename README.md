@@ -67,7 +67,7 @@ Tool call arrives
 
 **Layer 3: Sentinel** -- Async periodic reviewer that watches the full event stream over time. Detects patterns that per-call evaluation misses: tool calls that don't match user intent, suspicious sequences (read credentials then network call), escalating privilege patterns, and agents working around restrictions. Reports to the dashboard and Slack.
 
-Blocked tool calls are suppressed from the API response stream. The agent receives feedback explaining what was blocked and why, so it can adjust its approach.
+Blocked tool calls are suppressed from the API response stream. The proxy automatically retries with the block reason injected, so the agent self-corrects without user intervention. For critical threats (credential exfiltration, reverse shells), the session is halted entirely until a human intervenes.
 
 ## Supported Agents
 
