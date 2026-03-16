@@ -234,6 +234,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     border-radius: 4px;
     font-size: 13px;
     align-items: baseline;
+    cursor: pointer;
+    user-select: none;
   }
   .event-row:hover { background: var(--surface); }
   .event-row .time {
@@ -266,6 +268,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .event-row.expanded {
+    align-items: flex-start;
+  }
+  .event-row.expanded .detail {
+    white-space: pre-wrap;
+    overflow: visible;
+    text-overflow: unset;
+    word-break: break-word;
   }
 </style>
 </head>
@@ -375,12 +386,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function addEventRow(ev) {
     if (feedEmpty) feedEmpty.remove();
+    const full = detailText(ev);
     const row = document.createElement("div");
     row.className = "event-row";
     row.innerHTML =
       '<span class="time">' + formatTime(ev.ts || Date.now()/1000) + '</span>'
       + '<span class="badge ' + badgeClass(ev) + '">' + badgeLabel(ev) + '</span>'
-      + '<span class="detail">' + escHtml(truncate(detailText(ev), 120)) + '</span>';
+      + '<span class="detail">' + escHtml(truncate(full, 120)) + '</span>';
+    if (full.length > 120) {
+      row.addEventListener("click", function() {
+        const detail = row.querySelector(".detail");
+        const isExpanded = row.classList.toggle("expanded");
+        detail.textContent = isExpanded ? full : truncate(full, 120);
+      });
+    }
     eventFeed.prepend(row);
     while (eventFeed.children.length > MAX_FEED) {
       eventFeed.removeChild(eventFeed.lastChild);
