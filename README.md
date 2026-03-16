@@ -17,9 +17,15 @@ cross expands the capability-safety frontier: with a babysitter watching, you ca
 ## Quick Start
 
 ```bash
-git clone https://github.com/x-attn/cross && cd cross
-pip install -e ".[dev]"            # PyPI and Homebrew coming soon
+pip install cross-ai               # or: pip install cross-ai[slack] for Slack integration
 cross setup                        # interactive setup wizard (starts daemon automatically on macOS)
+```
+
+Or install from source:
+
+```bash
+git clone https://github.com/rfdearborn/cross && cd cross
+pip install -e ".[dev]"
 ```
 
 Then point your agent's API traffic through cross. For Claude Code, add a shell wrapper:
@@ -174,12 +180,12 @@ Both layers are coordinated by the daemon (`cross daemon`), which runs the proxy
 ## Notification Channels
 
 - **Web dashboard** (default) -- zero dependencies, always active at `/cross/dashboard`
-- **Slack** (optional) -- gate decisions, sentinel reviews, and interactive approval buttons. Configure with `CROSS_SLACK_BOT_TOKEN` and `CROSS_SLACK_APP_TOKEN`. Install the `slack` extra: `pip install cross[slack]`.
+- **Slack** (optional) -- gate decisions, sentinel reviews, and interactive approval buttons. Configure with `CROSS_SLACK_BOT_TOKEN` and `CROSS_SLACK_APP_TOKEN`. Install the `slack` extra: `pip install cross-ai[slack]`.
 
 ## Development
 
 ```bash
-git clone https://github.com/x-attn/cross
+git clone https://github.com/rfdearborn/cross
 cd cross
 pip install -e ".[dev,slack]"
 python -m pytest tests/

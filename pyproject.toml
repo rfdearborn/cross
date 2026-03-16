@@ -1,8 +1,22 @@
 [project]
-name = "cross"
+name = "cross-ai"
 version = "0.1.0"
 description = "Agent monitoring proxy and session manager — PTY wrapping, network interception, Slack relay, and gating"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+authors = [{ name = "Cross Attention Labs" }]
+keywords = ["ai", "agent", "safety", "monitoring", "proxy", "gating", "oversight"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Security",
+]
 dependencies = [
     "httpx>=0.28.0",
     "starlette>=0.52.0",
@@ -15,6 +29,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["mitmproxy>=12.0.0", "pytest>=8.0", "pytest-cov>=6.0", "anyio[trio]>=4.0", "pytest-anyio>=0.0.0"]
 slack = ["slack-sdk>=3.0.0", "aiohttp>=3.9.0"]
+
+[project.urls]
+Homepage = "https://github.com/rfdearborn/cross"
+Repository = "https://github.com/rfdearborn/cross"
+Issues = "https://github.com/rfdearborn/cross/issues"
 
 [project.scripts]
 cross = "cross.cli:main"
@@ -40,7 +59,7 @@ select = ["E", "F", "I", "W"]
 packages = ["cross"]
 
 [tool.hatch.build]
-include = ["cross/**/*.py", "cross/**/*.js", "cross/**/*.yaml"]
+include = ["cross/**/*.py", "cross/**/*.js", "cross/**/*.mjs", "cross/**/*.yaml"]
 
 [build-system]
 requires = ["hatchling"]
