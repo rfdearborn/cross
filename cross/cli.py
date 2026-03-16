@@ -39,6 +39,9 @@ def main():
     # cross reset — wipe configuration and start fresh
     sub.add_parser("reset", help="Remove cross configuration (~/.cross/.env and rules)")
 
+    # cross update — self-update cross to the latest version
+    sub.add_parser("update", help="Update cross to the latest version")
+
     # cross pending [approve|deny <tool_use_id>]
     pending_p = sub.add_parser("pending", help="Show or resolve pending gate escalations")
     pending_sub = pending_p.add_subparsers(dest="pending_action")
@@ -72,6 +75,8 @@ def main():
         if not argv:
             wrap_p.error("Usage: cross wrap -- <agent-command> [args...]")
         sys.exit(_run_wrap(argv, log))
+    elif args.command == "update":
+        sys.exit(_run_update())
     elif args.command == "pending":
         sys.exit(_run_pending(args))
     else:
@@ -108,6 +113,45 @@ def _run_reset() -> int:
         print("\nRun 'cross setup' to reconfigure.")
     else:
         print("Nothing removed.")
+    return 0
+
+
+def _run_update() -> int:
+    """Update cross to the latest version via pip."""
+    import importlib.metadata
+    import subprocess
+
+    try:
+        old_version = importlib.metadata.version("cross")
+    except importlib.metadata.PackageNotFoundError:
+        old_version = None
+
+    print(f"Current version: {old_version or 'unknown'}")
+    print("Updating cross...")
+
+    # Use the same Python interpreter that's running this process
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--upgrade", "cross"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(f"Update failed:\n{result.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    # Re-check version after update (use subprocess to avoid stale cache)
+    version_result = subprocess.run(
+        [sys.executable, "-c", "import importlib.metadata; print(importlib.metadata.version('cross'))"],
+        capture_output=True,
+        text=True,
+    )
+    new_version = version_result.stdout.strip() if version_result.returncode == 0 else None
+
+    if new_version and new_version != old_version:
+        print(f"Updated cross: {old_version} -> {new_version}")
+    else:
+        print(f"cross is already up to date ({new_version or old_version}).")
     return 0
 
 
