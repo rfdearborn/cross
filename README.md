@@ -8,11 +8,11 @@ cross makes AI agents more trustworthy *and* more capable with lightweight gatin
 
 ## Why cross
 
-Your agents are overeager. They're so locked in on finishing your task that they'll `rm -rf` an errant directory or push your credentials public without a second thought.
+Your agents are overeager. They're so locked in on your task that they'll `rm -rf` an errant directory or push your credentials public without a second thought.
 
-cross watches from the outside, like a copilot keeping situational awareness while the pilot flies the plane, to guard against this. It pairs agents with spotters which, with separate context and fresh eyes, check actions and monitor sessions.
+cross is a minimal-friction harness of deterministic and LLM checking layers to guard against errors and misalignment. It pairs agents with spotters which screen actions and monitor sessions with separate context and fresh eyes. It expands the capability-safety frontier and relieves the pit that's been growing in your stomach since you stopped reviewing tool calls 🙂.
 
-cross expands the capability-safety frontier: with a babysitter watching, you can give agents more rope. You can stop pre-screening tool calls without feeling a pit in your stomach. More throughput, fewer surprises.
+**New:** cross supports gate and sentinel screening via Claude Code, and so adds no cost at the margin for Claude subscribers!
 
 ## Quick Start
 
