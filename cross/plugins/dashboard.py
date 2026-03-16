@@ -135,10 +135,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     font-weight: 600;
     letter-spacing: -0.5px;
   }
+  header .notif-btn {
+    margin-left: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  header .notif-btn:hover { opacity: 0.85; }
+  header .notif-btn.granted { color: var(--green); border-color: var(--green); }
+  header .notif-btn.denied { color: var(--red); border-color: var(--red); cursor: not-allowed; }
   header .status {
     font-size: 12px;
     color: var(--text-dim);
-    margin-left: auto;
   }
   header .status .dot {
     display: inline-block;
@@ -285,6 +298,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none"
     style="display:block"><path d="M12 2v20M2 12h20"
     stroke="white" stroke-width="3" stroke-linecap="round"/></svg></h1>
+  <button class="notif-btn" id="notif-btn" style="display:none" onclick="requestNotifPermission()">Enable notifications</button>
   <span class="status">
     <span class="dot disconnected" id="ws-dot"></span>
     <span id="ws-status">connecting...</span>
@@ -406,16 +420,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  // --- Browser Notifications ---
+  const notifBtn = document.getElementById("notif-btn");
+  function updateNotifBtn() {
+    if (!("Notification" in window)) { notifBtn.style.display = "none"; return; }
+    notifBtn.style.display = "";
+    var perm = Notification.permission;
+    if (perm === "granted") {
+      notifBtn.textContent = "Notifications on";
+      notifBtn.className = "notif-btn granted";
+    } else if (perm === "denied") {
+      notifBtn.textContent = "Notifications blocked";
+      notifBtn.className = "notif-btn denied";
+    } else {
+      notifBtn.textContent = "Enable notifications";
+      notifBtn.className = "notif-btn";
+    }
+  }
+  window.requestNotifPermission = function() {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "denied") return;
+    Notification.requestPermission().then(updateNotifBtn);
+  };
+  updateNotifBtn();
+
+  function showNotification(title, body, tag) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      var n = new Notification(title, {body: body, tag: tag || "", icon: ""});
+      n.onclick = function() { window.focus(); n.close(); };
+    } catch(e) {}
+  }
+
   function handleEvent(ev) {
     addEventRow(ev);
     if (ev.event_type === "GateDecisionEvent") {
       if (ev.action === "escalate") {
         pendingMap[ev.tool_use_id] = ev;
         renderPending();
+        showNotification(
+          "cross — approval needed",
+          (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
+          "escalate-" + ev.tool_use_id
+        );
       } else if ((ev.action === "allow" || ev.action === "block") && pendingMap[ev.tool_use_id]) {
         delete pendingMap[ev.tool_use_id];
         renderPending();
       }
+    }
+    if (ev.event_type === "SentinelReviewEvent" && ev.action && ev.action !== "allow") {
+      showNotification(
+        "cross — sentinel " + ev.action,
+        ev.summary || ev.concerns || "",
+        "sentinel-" + (ev.ts || "")
+      );
     }
   }
 
