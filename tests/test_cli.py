@@ -9,7 +9,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cross.cli import _end_session, _on_pty_output, _parse_agent_argv, _register_session, _run_update, main
+from cross.cli import (
+    _end_session,
+    _get_installed_version,
+    _on_pty_output,
+    _parse_agent_argv,
+    _register_session,
+    _run_update,
+    main,
+)
 
 
 class TestParseAgentArgv:
@@ -594,35 +602,54 @@ class TestRunWrapOpenClaw:
             assert "--max-old-space-size=4096" in env_arg["NODE_OPTIONS"]
 
 
+class TestGetInstalledVersion:
+    @patch("importlib.metadata.version", return_value="0.1.0")
+    def test_finds_cross_ai(self, mock_version):
+        assert _get_installed_version() == "0.1.0"
+        mock_version.assert_called_with("cross-ai")
+
+    @patch(
+        "importlib.metadata.version",
+        side_effect=[__import__("importlib").metadata.PackageNotFoundError, "0.1.0"],
+    )
+    def test_falls_back_to_cross(self, mock_version):
+        assert _get_installed_version() == "0.1.0"
+        assert mock_version.call_count == 2
+
+    @patch(
+        "importlib.metadata.version",
+        side_effect=__import__("importlib").metadata.PackageNotFoundError,
+    )
+    def test_returns_none_when_not_found(self, mock_version):
+        assert _get_installed_version() is None
+
+
 class TestRunUpdate:
     @patch("subprocess.run")
-    @patch("importlib.metadata.version", return_value="0.1.0")
-    def test_successful_update(self, mock_version, mock_run):
-        # pip install succeeds
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        # version check subprocess returns new version
+    @patch("cross.cli._get_installed_version", return_value="0.1.0")
+    def test_successful_update(self, mock_get_version, mock_run):
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # pip install
             MagicMock(returncode=0, stdout="0.2.0\n", stderr=""),  # version check
         ]
         exit_code = _run_update()
         assert exit_code == 0
-        # First subprocess.run call should be pip install --upgrade cross
+        # First subprocess.run call should be pip install --upgrade cross-ai
         pip_call_args = mock_run.call_args_list[0][0][0]
         assert "pip" in pip_call_args
         assert "--upgrade" in pip_call_args
-        assert "cross" in pip_call_args
+        assert "cross-ai" in pip_call_args
 
     @patch("subprocess.run")
-    @patch("importlib.metadata.version", return_value="0.1.0")
-    def test_update_failure(self, mock_version, mock_run):
+    @patch("cross.cli._get_installed_version", return_value="0.1.0")
+    def test_update_failure(self, mock_get_version, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="some error")
         exit_code = _run_update()
         assert exit_code == 1
 
     @patch("subprocess.run")
-    @patch("importlib.metadata.version", return_value="0.1.0")
-    def test_already_up_to_date(self, mock_version, mock_run):
+    @patch("cross.cli._get_installed_version", return_value="0.1.0")
+    def test_already_up_to_date(self, mock_get_version, mock_run):
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # pip install
             MagicMock(returncode=0, stdout="0.1.0\n", stderr=""),  # version check
@@ -631,8 +658,8 @@ class TestRunUpdate:
         assert exit_code == 0
 
     @patch("subprocess.run")
-    @patch("importlib.metadata.version", side_effect=__import__("importlib").metadata.PackageNotFoundError)
-    def test_unknown_current_version(self, mock_version, mock_run):
+    @patch("cross.cli._get_installed_version", return_value=None)
+    def test_unknown_current_version(self, mock_get_version, mock_run):
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # pip install
             MagicMock(returncode=0, stdout="0.1.0\n", stderr=""),  # version check

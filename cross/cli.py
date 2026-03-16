@@ -116,22 +116,41 @@ def _run_reset() -> int:
     return 0
 
 
+_PYPI_PACKAGE = "cross-ai"
+
+_VERSION_CHECK = (
+    "import importlib.metadata\n"
+    "try:\n"
+    "    print(importlib.metadata.version('cross-ai'))\n"
+    "except importlib.metadata.PackageNotFoundError:\n"
+    "    print(importlib.metadata.version('cross'))\n"
+)
+
+
+def _get_installed_version() -> str | None:
+    """Get the installed version of cross, checking both package names."""
+    import importlib.metadata
+
+    for name in ("cross-ai", "cross"):
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return None
+
+
 def _run_update() -> int:
     """Update cross to the latest version via pip."""
-    import importlib.metadata
     import subprocess
 
-    try:
-        old_version = importlib.metadata.version("cross")
-    except importlib.metadata.PackageNotFoundError:
-        old_version = None
+    old_version = _get_installed_version()
 
     print(f"Current version: {old_version or 'unknown'}")
     print("Updating cross...")
 
     # Use the same Python interpreter that's running this process
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "cross"],
+        [sys.executable, "-m", "pip", "install", "--upgrade", _PYPI_PACKAGE],
         capture_output=True,
         text=True,
     )
@@ -142,7 +161,7 @@ def _run_update() -> int:
 
     # Re-check version after update (use subprocess to avoid stale cache)
     version_result = subprocess.run(
-        [sys.executable, "-c", "import importlib.metadata; print(importlib.metadata.version('cross'))"],
+        [sys.executable, "-c", _VERSION_CHECK],
         capture_output=True,
         text=True,
     )
