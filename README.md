@@ -189,4 +189,4 @@ Ruff for linting (`ruff check`).
 
 ## License
 
-TBD
+MIT
