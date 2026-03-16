@@ -329,10 +329,16 @@ def run_setup(
 
     # ── Step 1: Welcome ──
     print_fn("")
-    print_fn("Welcome to cross!")
+    print_fn("       │")
+    print_fn("       │")
+    print_fn("  ─────┼─────")
+    print_fn("       │")
+    print_fn("       │")
     print_fn("")
-    print_fn("cross makes AI agents more trustworthy and more capable with lightweight")
-    print_fn("gating and monitoring.")
+    print_fn("  Welcome to cross!")
+    print_fn("")
+    print_fn("  cross makes AI agents more trustworthy and more capable with lightweight")
+    print_fn("  gating and monitoring.")
     print_fn("")
 
     # ── Step 2: Detect agents ──
