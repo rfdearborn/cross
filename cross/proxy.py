@@ -28,9 +28,27 @@ from cross.chain import GateChain
 from cross.config import settings
 from cross.evaluator import Action, GateRequest
 from cross.events import ErrorEvent, EventBus, GateDecisionEvent, GateRetryEvent, RequestEvent, ToolUseEvent
+from cross.script_resolver import resolve_script_contents
 from cross.sse import SSEParser
 
 logger = logging.getLogger("cross.proxy")
+
+# Tool names that execute bash commands (for script resolution)
+_BASH_TOOL_NAMES = {"bash", "exec"}
+
+
+def _resolve_scripts_for_tool(tool_name: str, tool_input: Any, cwd: str = "") -> dict[str, str]:
+    """Resolve script file contents if this is a Bash/exec tool call."""
+    if tool_name.lower() not in _BASH_TOOL_NAMES:
+        return {}
+    command = ""
+    if isinstance(tool_input, dict):
+        command = tool_input.get("command", "")
+    elif isinstance(tool_input, str):
+        command = tool_input
+    if not command:
+        return {}
+    return resolve_script_contents(command, cwd=cwd)
 
 _client: httpx.AsyncClient | None = None
 
@@ -403,6 +421,9 @@ async def _gate_non_streaming_response(
         tool_name = block.get("name", "")
         tool_input = block.get("input")
 
+        # Resolve script contents for Bash/exec tool calls
+        script_contents = _resolve_scripts_for_tool(tool_name, tool_input)
+
         gate_request = GateRequest(
             tool_use_id=tool_id,
             tool_name=tool_name,
@@ -412,6 +433,7 @@ async def _gate_non_streaming_response(
             agent=model,
             tool_index_in_message=i,
             recent_tools=list(_recent_tools),
+            script_contents=script_contents,
         )
         result = await gate_chain.evaluate(gate_request)
 
@@ -429,6 +451,7 @@ async def _gate_non_streaming_response(
                 evaluator=result.evaluator,
                 confidence=result.confidence,
                 tool_input=tool_input,
+                script_contents=script_contents or None,
             )
         )
 
@@ -655,6 +678,10 @@ async def _proxy_streaming(
                                 await event_bus.publish(ev)
 
                         if tool_event:
+                            # Resolve script contents for Bash/exec tool calls
+                            script_contents = _resolve_scripts_for_tool(tool_event.name, tool_event.input)
+                            tool_event.script_contents = script_contents or None
+
                             # Tool_use block complete — run gate evaluation
                             gate_request = GateRequest(
                                 tool_use_id=tool_event.tool_use_id,
@@ -665,6 +692,7 @@ async def _proxy_streaming(
                                 agent=model,
                                 tool_index_in_message=tool_index,
                                 recent_tools=list(_recent_tools),
+                                script_contents=script_contents,
                             )
                             tool_index += 1
                             result = await gate_chain.evaluate(gate_request)
@@ -683,6 +711,7 @@ async def _proxy_streaming(
                                     evaluator=result.evaluator,
                                     confidence=result.confidence,
                                     tool_input=tool_event.input,
+                                    script_contents=script_contents or None,
                                 )
                             )
 

@@ -200,6 +200,33 @@ rules:
       - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?a\+rwx\s+[/~\.]'
       - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?ugo\+rwx\s+[/~\.]'
 
+  # ── Script execution (LLM review) ──
+
+  - name: script-execution
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: Script file execution — LLM gate reviews script contents
+    patterns:
+      # python/python3 running a .py file
+      - '\bpython[23w]?(?:\.\d+)?\s+(?:-\S+\s+)*\S+\.py\b'
+      # node running a .js/.ts/.mjs/.cjs file
+      - '\bnode\s+(?:-\S+\s+)*\S+\.(js|ts|mjs|cjs)\b'
+      # ruby running a .rb file
+      - '\bruby\s+(?:-\S+\s+)*\S+\.rb\b'
+      # perl running a .pl file
+      - '\bperl\s+(?:-\S+\s+)*\S+\.pl\b'
+      # php running a .php file
+      - '\bphp\s+(?:-\S+\s+)*\S+\.php\b'
+      # shell interpreters running a script file
+      - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+(?:-\S+\s+)*\S+\.(sh|bash|zsh)\b'
+      # Rscript
+      - '\bRscript\s+(?:-\S+\s+)*\S+\.[rR]\b'
+      # lua
+      - '\blua\s+(?:-\S+\s+)*\S+\.lua\b'
+      # Script execution via path (./script.py, ../scripts/run.sh, etc.)
+      - '(?:^|&&|\|\||;)\s*(?:sudo\s+)?\./\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\b'
+
   # ── Sensitive file reads (alert, not block) ──
 
   - name: sensitive-file-read

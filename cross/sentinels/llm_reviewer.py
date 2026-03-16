@@ -84,7 +84,16 @@ def _format_event_for_review(event: dict[str, Any]) -> str:
         input_str = json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input)
         if len(input_str) > 200:
             input_str = input_str[:200] + "..."
-        return f"[tool_use] {name}: {input_str}"
+        result = f"[tool_use] {name}: {input_str}"
+        # Include script contents if resolved
+        script_contents = event.get("script_contents")
+        if script_contents:
+            for script_path, source in script_contents.items():
+                # Truncate for sentinel review window
+                if len(source) > 500:
+                    source = source[:500] + "... [truncated]"
+                result += f"\n  [script: {script_path}]\n  {source}"
+        return result
     elif event_type == "gate_decision":
         name = event.get("tool_name", "?")
         action = event.get("action", "?")
@@ -102,6 +111,13 @@ def _format_event_for_review(event: dict[str, Any]) -> str:
             if len(input_str) > 200:
                 input_str = input_str[:200] + "..."
             result += f" input={input_str}"
+        # Include script contents if resolved
+        script_contents = event.get("script_contents")
+        if script_contents:
+            for script_path, source in script_contents.items():
+                if len(source) > 500:
+                    source = source[:500] + "... [truncated]"
+                result += f"\n  [script: {script_path}]\n  {source}"
         return result
     else:
         return f"[{event_type}] {json.dumps(event)[:150]}"
@@ -173,17 +189,18 @@ class LLMSentinel(Sentinel):
                     }
                 )
         elif isinstance(event, ToolUseEvent):
-            self._events.append(
-                {
-                    "type": "tool_use",
-                    "name": event.name,
-                    "tool_use_id": event.tool_use_id,
-                    "input": event.input,
-                    "ts": time.time(),
-                }
-            )
-        elif isinstance(event, GateDecisionEvent):
             entry: dict[str, Any] = {
+                "type": "tool_use",
+                "name": event.name,
+                "tool_use_id": event.tool_use_id,
+                "input": event.input,
+                "ts": time.time(),
+            }
+            if event.script_contents:
+                entry["script_contents"] = event.script_contents
+            self._events.append(entry)
+        elif isinstance(event, GateDecisionEvent):
+            gate_entry: dict[str, Any] = {
                 "type": "gate_decision",
                 "tool_name": event.tool_name,
                 "tool_use_id": event.tool_use_id,
@@ -194,8 +211,10 @@ class LLMSentinel(Sentinel):
                 "ts": time.time(),
             }
             if event.tool_input:
-                entry["input"] = event.tool_input
-            self._events.append(entry)
+                gate_entry["input"] = event.tool_input
+            if event.script_contents:
+                gate_entry["script_contents"] = event.script_contents
+            self._events.append(gate_entry)
 
     def start(self) -> None:
         """Start the periodic review loop."""

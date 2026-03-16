@@ -35,6 +35,8 @@ Consider:
 - Whether the flagged pattern is a genuine risk or incidental
 - The user's stated intent (if available)
 - Whether the action could cause irreversible damage
+- If script file contents are provided, review the actual code in the script — \
+the script contents are what will actually execute, not just the command line
 - Writes to user dotfiles (~/.bashrc, ~/.zshrc, ~/.profile, etc.) should be \
 ESCALATED even if the content looks benign — agents should not silently modify \
 shell configuration
@@ -60,6 +62,18 @@ def _format_review_prompt(request: GateRequest) -> str:
     else:
         input_str = str(request.tool_input) if request.tool_input else "(empty)"
     parts.append(f"Input:\n{input_str}")
+
+    # Script contents (resolved from the command)
+    if request.script_contents:
+        parts.append("\nScript file contents:")
+        for script_path, script_source in request.script_contents.items():
+            parts.append(f"--- {script_path} ---")
+            # Truncate very long scripts for the review prompt
+            if len(script_source) > 10000:
+                parts.append(script_source[:10000] + "\n... [truncated]")
+            else:
+                parts.append(script_source)
+            parts.append(f"--- end {script_path} ---")
 
     # Why it was flagged
     if request.prior_result:
