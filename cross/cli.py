@@ -39,6 +39,12 @@ def main():
     # cross reset — wipe configuration and start fresh
     sub.add_parser("reset", help="Remove cross configuration (~/.cross/.env and rules)")
 
+    # cross stop — stop the running daemon
+    sub.add_parser("stop", help="Stop the running cross daemon")
+
+    # cross restart — restart the daemon
+    sub.add_parser("restart", help="Restart the cross daemon")
+
     # cross update — self-update cross to the latest version
     update_p = sub.add_parser("update", help="Update cross to the latest version")
     update_p.add_argument(
@@ -71,6 +77,11 @@ def main():
     elif args.command == "reset":
         sys.exit(_run_reset())
     elif args.command == "daemon":
+        _run_daemon()
+    elif args.command == "stop":
+        sys.exit(_run_stop())
+    elif args.command == "restart":
+        _run_stop(quiet=True)
         _run_daemon()
     elif args.command == "proxy":
         _run_proxy()
@@ -256,16 +267,71 @@ def _run_pending(args) -> int:
     return 0
 
 
+_PID_FILE = os.path.join(os.path.expanduser("~/.cross"), "daemon.pid")
+
+
+def _write_pid():
+    """Write the current process PID to the PID file."""
+    os.makedirs(os.path.dirname(_PID_FILE), exist_ok=True)
+    with open(_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _read_pid() -> int | None:
+    """Read the daemon PID from the PID file, or None if not found."""
+    try:
+        with open(_PID_FILE) as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _remove_pid():
+    """Remove the PID file."""
+    try:
+        os.remove(_PID_FILE)
+    except FileNotFoundError:
+        pass
+
+
+def _run_stop(quiet: bool = False) -> int:
+    """Stop the running daemon by sending SIGTERM."""
+    import signal
+
+    pid = _read_pid()
+    if pid is None:
+        if not quiet:
+            print("No daemon PID file found.")
+        return 1
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        if not quiet:
+            print(f"Daemon (pid {pid}) is not running.")
+        _remove_pid()
+        return 1
+
+    if not quiet:
+        print(f"Stopped daemon (pid {pid}).")
+    _remove_pid()
+    return 0
+
+
 def _run_daemon():
     """Start the central daemon."""
     import uvicorn
 
-    uvicorn.run(
-        "cross.daemon:app",
-        host=settings.listen_host,
-        port=settings.listen_port,
-        log_level="warning",
-    )
+    _write_pid()
+    try:
+        uvicorn.run(
+            "cross.daemon:app",
+            host=settings.listen_host,
+            port=settings.listen_port,
+            log_level="warning",
+        )
+    finally:
+        _remove_pid()
 
 
 def _run_proxy():
