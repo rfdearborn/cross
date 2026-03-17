@@ -208,24 +208,28 @@ rules:
     action: escalate
     description: Script file execution — LLM gate reviews script contents
     patterns:
-      # python/python3 running a .py file
-      - '\bpython[23w]?(?:\.\d+)?\s+(?:-\S+\s+)*\S+\.py\b'
+      # python/python3 running a .py file (with optional env/exec/sudo prefix)
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*python[23w]?(?:\.\d+)?\s+(?:-\S+\s+)*\S+\.py\b'
       # node running a .js/.ts/.mjs/.cjs file
-      - '\bnode\s+(?:-\S+\s+)*\S+\.(js|ts|mjs|cjs)\b'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*node\s+(?:-\S+\s+)*\S+\.(js|ts|mjs|cjs)\b'
       # ruby running a .rb file
-      - '\bruby\s+(?:-\S+\s+)*\S+\.rb\b'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*ruby\s+(?:-\S+\s+)*\S+\.rb\b'
       # perl running a .pl file
-      - '\bperl\s+(?:-\S+\s+)*\S+\.pl\b'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*perl\s+(?:-\S+\s+)*\S+\.pl\b'
       # php running a .php file
-      - '\bphp\s+(?:-\S+\s+)*\S+\.php\b'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*php\s+(?:-\S+\s+)*\S+\.php\b'
       # shell interpreters running a script file
-      - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+(?:-\S+\s+)*\S+\.(sh|bash|zsh)\b'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*(ba|z|fi|c|da|a|tc|k)?sh\s+(?:-\S+\s+)*\S+\.(sh|bash|zsh)\b'
       # Rscript
-      - '\bRscript\s+(?:-\S+\s+)*\S+\.[rR]\b'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*Rscript\s+(?:-\S+\s+)*\S+\.[rR]\b'
       # lua
-      - '\blua\s+(?:-\S+\s+)*\S+\.lua\b'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*lua\s+(?:-\S+\s+)*\S+\.lua\b'
       # Script execution via path (./script.py, ../scripts/run.sh, etc.)
-      - '(?:^|&&|\|\||;)\s*(?:sudo\s+)?\./\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\b'
+      - '(?:^|&&|\|\||;)\s*(?:(?:sudo|env|exec|time)\s+)*\./\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\b'
+      # Stdin redirect to interpreter (python < script.py)
+      - '(?:(?:sudo|env|exec)\s+)*(?:python[23w]?(?:\.\d+)?|node|ruby|perl|php|(?:ba|z|fi|c|da|a|tc|k)?sh)\s+.*<\s*\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\b'
+      # Piped script execution (cat script.py | python)
+      - '\bcat\s+\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\s*\|\s*(?:(?:sudo|env|exec)\s+)*(?:python[23w]?(?:\.\d+)?|node|ruby|perl|php|(?:ba|z|fi|c|da|a|tc|k)?sh)\b'
 
   # ── Sensitive file reads (alert, not block) ──
 

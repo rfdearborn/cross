@@ -111,13 +111,7 @@ def _format_event_for_review(event: dict[str, Any]) -> str:
             if len(input_str) > 200:
                 input_str = input_str[:200] + "..."
             result += f" input={input_str}"
-        # Include script contents if resolved
-        script_contents = event.get("script_contents")
-        if script_contents:
-            for script_path, source in script_contents.items():
-                if len(source) > 500:
-                    source = source[:500] + "... [truncated]"
-                result += f"\n  [script: {script_path}]\n  {source}"
+        # Script contents omitted here — already shown in the preceding [tool_use] event
         return result
     else:
         return f"[{event_type}] {json.dumps(event)[:150]}"

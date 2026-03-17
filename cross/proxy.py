@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import deque
 from typing import Any
@@ -422,7 +423,8 @@ async def _gate_non_streaming_response(
         tool_input = block.get("input")
 
         # Resolve script contents for Bash/exec tool calls
-        script_contents = _resolve_scripts_for_tool(tool_name, tool_input)
+        proxy_cwd = os.getcwd()
+        script_contents = _resolve_scripts_for_tool(tool_name, tool_input, cwd=proxy_cwd)
 
         gate_request = GateRequest(
             tool_use_id=tool_id,
@@ -434,6 +436,7 @@ async def _gate_non_streaming_response(
             tool_index_in_message=i,
             recent_tools=list(_recent_tools),
             script_contents=script_contents,
+            cwd=proxy_cwd,
         )
         result = await gate_chain.evaluate(gate_request)
 
@@ -679,7 +682,8 @@ async def _proxy_streaming(
 
                         if tool_event:
                             # Resolve script contents for Bash/exec tool calls
-                            script_contents = _resolve_scripts_for_tool(tool_event.name, tool_event.input)
+                            proxy_cwd = os.getcwd()
+                            script_contents = _resolve_scripts_for_tool(tool_event.name, tool_event.input, cwd=proxy_cwd)
                             tool_event.script_contents = script_contents or None
 
                             # Tool_use block complete — run gate evaluation
@@ -693,6 +697,7 @@ async def _proxy_streaming(
                                 tool_index_in_message=tool_index,
                                 recent_tools=list(_recent_tools),
                                 script_contents=script_contents,
+                                cwd=proxy_cwd,
                             )
                             tool_index += 1
                             result = await gate_chain.evaluate(gate_request)

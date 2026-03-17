@@ -21,7 +21,7 @@ _MAX_SCRIPT_BYTES = 50_000
 _INTERPRETER_RE = re.compile(
     r"""
     (?:^|&&|\|\||;|\|)\s*       # start of command or chained command
-    (?:sudo\s+)?                # optional sudo
+    (?:(?:sudo|env|exec|time|nice|nohup|strace)\s+)*  # optional prefixes
     (?:
         python[23w]?(?:\.\d+)?  # python, python3, python3.11, pythonw
       | node                    # node
@@ -41,7 +41,7 @@ _INTERPRETER_RE = re.compile(
 _NO_SCRIPT_FLAGS = re.compile(r"^-[cme]$")
 
 # Flags that take a value argument (skip these and their values)
-_FLAG_WITH_VALUE_RE = re.compile(r"^-[WXEIOQ]$|^--\w+=")
+_FLAG_WITH_VALUE_RE = re.compile(r"^-[WX]$|^--\w+=")
 
 # File extensions that are clearly scripts (not binaries)
 _SCRIPT_EXTENSIONS = {
@@ -65,6 +65,15 @@ def _looks_like_script_path(token: str) -> bool:
     return False
 
 
+# Pattern for `cat script.py | python` style piped execution
+_PIPE_TO_INTERPRETER_RE = re.compile(
+    r"""
+    \bcat\s+(\S+\.(?:py|js|ts|rb|pl|php|sh|bash|lua|r|R))\s*\|
+    """,
+    re.VERBOSE,
+)
+
+
 def extract_script_paths(command: str) -> list[str]:
     """Extract probable script file paths from a bash command string.
 
@@ -72,16 +81,28 @@ def extract_script_paths(command: str) -> list[str]:
     """
     paths: list[str] = []
 
+    # Check for `cat script | interpreter` pattern
+    for pipe_match in _PIPE_TO_INTERPRETER_RE.finditer(command):
+        paths.append(pipe_match.group(1))
+
     for match in _INTERPRETER_RE.finditer(command):
         # Get everything after the interpreter
         rest = command[match.end():]
         tokens = rest.split()
 
         i = 0
+        found_script = False
         while i < len(tokens):
             token = tokens[i]
-            # Stop at shell operators
-            if token in ("&&", "||", ";", "|", ">", ">>", "<", "2>", "2>>"):
+            # stdin redirect — next token is the script path
+            if token == "<" and i + 1 < len(tokens):
+                redirect_target = tokens[i + 1]
+                if _looks_like_script_path(redirect_target):
+                    paths.append(redirect_target)
+                found_script = True
+                break
+            # Stop at other shell operators
+            if token in ("&&", "||", ";", "|", "&", ">", ">>", "<<", "<<<", "2>", "2>>"):
                 break
             # Skip flags
             if token.startswith("-"):
@@ -97,6 +118,7 @@ def extract_script_paths(command: str) -> list[str]:
             # First non-flag token is the script path
             if _looks_like_script_path(token):
                 paths.append(token)
+            found_script = True
             break
 
     return paths

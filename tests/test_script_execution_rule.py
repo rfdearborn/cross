@@ -95,6 +95,26 @@ class TestScriptExecutionRule:
         assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
+    async def test_env_python_script(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "env python script.py"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_exec_python_script(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "exec python3 script.py"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_stdin_redirect(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "python < script.py"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_cat_pipe_to_python(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "cat script.py | python"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
     async def test_safe_python_module_allowed(self):
         """python -m pytest should NOT trigger the script-execution rule."""
         r = await self.gate.evaluate(_req("Bash", {"command": "python -m pytest tests/"}))
@@ -177,7 +197,8 @@ class TestScriptContentsInSentinelEvents:
         assert "[script: /home/user/script.py]" in result
         assert "print('hello')" in result
 
-    def test_gate_decision_with_script_contents(self):
+    def test_gate_decision_omits_script_contents(self):
+        """Gate decision events don't duplicate script contents (shown in tool_use event)."""
         event = {
             "type": "gate_decision",
             "tool_name": "Bash",
@@ -188,8 +209,7 @@ class TestScriptContentsInSentinelEvents:
             "script_contents": {"/home/user/script.py": "import subprocess"},
         }
         result = _format_event_for_review(event)
-        assert "[script: /home/user/script.py]" in result
-        assert "import subprocess" in result
+        assert "[script:" not in result  # deduped — shown in tool_use event instead
 
     def test_event_without_script_contents(self):
         event = {

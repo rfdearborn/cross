@@ -90,6 +90,43 @@ class TestExtractScriptPaths:
         paths = extract_script_paths("python script.py | grep error")
         assert paths == ["script.py"]
 
+    def test_env_prefix(self):
+        paths = extract_script_paths("env python script.py")
+        assert paths == ["script.py"]
+
+    def test_exec_prefix(self):
+        paths = extract_script_paths("exec python3 script.py")
+        assert paths == ["script.py"]
+
+    def test_time_prefix(self):
+        paths = extract_script_paths("time python script.py")
+        assert paths == ["script.py"]
+
+    def test_python_O_flag(self):
+        """python -O script.py should still extract the script (not skip it)."""
+        paths = extract_script_paths("python -O script.py")
+        assert paths == ["script.py"]
+
+    def test_python_E_flag(self):
+        paths = extract_script_paths("python -E script.py")
+        assert paths == ["script.py"]
+
+    def test_python_I_flag(self):
+        paths = extract_script_paths("python -I script.py")
+        assert paths == ["script.py"]
+
+    def test_stdin_redirect(self):
+        paths = extract_script_paths("python < script.py")
+        assert paths == ["script.py"]
+
+    def test_cat_pipe_to_python(self):
+        paths = extract_script_paths("cat script.py | python")
+        assert paths == ["script.py"]
+
+    def test_cat_pipe_to_node(self):
+        paths = extract_script_paths("cat app.js | node")
+        assert paths == ["app.js"]
+
 
 class TestResolveScriptContents:
     def test_resolves_existing_script(self, tmp_path):

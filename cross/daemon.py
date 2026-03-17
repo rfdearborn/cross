@@ -188,6 +188,11 @@ async def api_gate(request: Request) -> JSONResponse:
 
     tool_use_id = f"ext-{uuid.uuid4().hex[:12]}"
 
+    # Resolve script contents for Bash/exec tool calls
+    from cross.proxy import _resolve_scripts_for_tool
+
+    script_contents = _resolve_scripts_for_tool(tool_name, tool_input, cwd=cwd)
+
     gate_request = GateRequest(
         tool_use_id=tool_use_id,
         tool_name=tool_name,
@@ -197,6 +202,7 @@ async def api_gate(request: Request) -> JSONResponse:
         timestamp=time.time(),
         user_intent=user_intent,
         cwd=cwd,
+        script_contents=script_contents,
     )
 
     result = await _gate_chain.evaluate(gate_request)
@@ -207,6 +213,7 @@ async def api_gate(request: Request) -> JSONResponse:
             name=tool_name,
             tool_use_id=tool_use_id,
             input=tool_input if isinstance(tool_input, dict) else {},
+            script_contents=script_contents or None,
         )
     )
     await event_bus.publish(
@@ -219,6 +226,7 @@ async def api_gate(request: Request) -> JSONResponse:
             evaluator=result.evaluator,
             confidence=result.confidence,
             tool_input=tool_input if isinstance(tool_input, dict) else {},
+            script_contents=script_contents or None,
         )
     )
 
