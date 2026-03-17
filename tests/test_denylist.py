@@ -706,6 +706,241 @@ class TestSensitiveFileReadsExpanded:
         assert r.action == Action.ALERT
 
 
+class TestDestructiveGit:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_force_push(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git push --force origin main"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_force_push_short(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git push -f"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_force_with_lease(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git push --force-with-lease"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_reset_hard(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git reset --hard HEAD~3"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_clean_force(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git clean -fd"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_checkout_dot(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git checkout -- ."}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_checkout_dot_bare(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git checkout ."}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_restore_dot(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git restore ."}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_branch_force_delete(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git branch -D feature-branch"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_stash_drop(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git stash drop"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_stash_clear(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git stash clear"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_rebase(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git rebase main"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_push_to_main_escalates(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git push origin main"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_push_to_feature_allowed(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git push origin feature-branch"}))
+        assert r.action == Action.ALLOW
+
+    @pytest.mark.anyio
+    async def test_amend_commit(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git commit --amend -m 'fix'"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_git_config_global(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git config --global user.name 'test'"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_safe_reset_allowed(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git reset HEAD~1"}))
+        assert r.action == Action.ALLOW
+
+    @pytest.mark.anyio
+    async def test_branch_soft_delete(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "git branch -d feature-branch"}))
+        assert r.action == Action.ESCALATE
+
+
+class TestProcessKill:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_kill(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "kill -9 1234"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_killall(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "killall nginx"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_pkill(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "pkill -f python"}))
+        assert r.action == Action.ESCALATE
+
+
+class TestSudo:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_sudo(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "sudo rm -rf /tmp/stuff"}))
+        assert r.action == Action.ESCALATE
+
+
+class TestMutatingHttp:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_curl_post(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "curl -X POST http://api.example.com/data"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_curl_delete(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "curl --request DELETE http://api.example.com/item/1"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_curl_data(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": 'curl -d \'{"key":"val"}\' http://api.example.com'}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_curl_get_allowed(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "curl http://example.com"}))
+        assert r.action == Action.ALLOW
+
+
+class TestDestructiveDocker:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_docker_rm(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "docker rm container1"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_docker_system_prune(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "docker system prune -af"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_docker_ps_allowed(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "docker ps"}))
+        assert r.action == Action.ALLOW
+
+
+class TestSystemConfig:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_launchctl(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "launchctl load /Library/LaunchDaemons/foo.plist"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_defaults_write(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "defaults write com.apple.dock autohide -bool true"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_crontab(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "crontab -e"}))
+        assert r.action == Action.ESCALATE
+
+
+class TestDestructivePackages:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_npm_publish(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "npm publish"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_pip_uninstall(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "pip uninstall requests"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_brew_uninstall(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "brew uninstall node"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_pip_install_allowed(self):
+        r = await self.gate.evaluate(_req("Bash", {"command": "pip install requests"}))
+        assert r.action == Action.ALLOW
+
+
+class TestShellConfigEdit:
+    def setup_method(self):
+        self.gate = DenylistGate()
+
+    @pytest.mark.anyio
+    async def test_zshrc_edit(self):
+        r = await self.gate.evaluate(_req("Edit", {"file_path": "/Users/rob/.zshrc"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_bashrc_edit(self):
+        r = await self.gate.evaluate(_req("Edit", {"file_path": "/home/rob/.bashrc"}))
+        assert r.action == Action.ESCALATE
+
+    @pytest.mark.anyio
+    async def test_regular_file_allowed(self):
+        r = await self.gate.evaluate(_req("Edit", {"file_path": "/Users/rob/project/main.py"}))
+        assert r.action == Action.ALLOW
+
+
 class TestUserRules:
     @pytest.mark.anyio
     async def test_load_json_rules(self, tmp_path):

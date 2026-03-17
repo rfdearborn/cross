@@ -106,6 +106,118 @@ rules:
       - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\bmkfs\.'
       - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\bdd\b.*\bof=/dev/'
 
+  # ── Destructive git operations ──
+
+  - name: destructive-git
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: Destructive git commands that can lose work or rewrite history
+    patterns:
+      # Force push (--force, -f, --force-with-lease)
+      - '\bgit\s+push\b.*(-\w*f|--force)\b'
+      # Hard reset
+      - '\bgit\s+reset\b.*--hard\b'
+      # Clean (removes untracked files)
+      - '\bgit\s+clean\b.*-\w*f'
+      # Checkout/restore that discards changes (checkout -- ., checkout ., restore .)
+      - '\bgit\s+checkout\b.*--\s*\.'
+      - '\bgit\s+checkout\b\s+\.\s*$'
+      - '\bgit\s+restore\b.*\.\s*$'
+      # Delete branch (-d/-D)
+      - '\bgit\s+branch\b.*-\w*d'
+      # Stash drop/clear
+      - '\bgit\s+stash\s+(drop|clear)\b'
+      # Rebase (rewrites history)
+      - '\bgit\s+rebase\b'
+      # Amend commits
+      - '\bgit\s+commit\b.*--amend\b'
+      # Push to main/master
+      - '\bgit\s+push\b.*\b(main|master)\b'
+      # Modify global/system git config
+      - '\bgit\s+config\b.*--(global|system)\b'
+
+  # ── Process termination ──
+
+  - name: process-kill
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: Process termination commands
+    patterns:
+      - '\b(kill|killall|pkill)\b'
+
+  # ── Privilege escalation ──
+
+  - name: sudo
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: Commands run with elevated privileges
+    patterns:
+      - '\bsudo\b'
+
+  # ── Mutating HTTP requests ──
+
+  - name: mutating-http
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: HTTP requests that modify remote state
+    patterns:
+      - '\bcurl\b.*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE)|-d\s|--data)'
+      - '\bwget\b.*--post'
+
+  # ── Container destruction ──
+
+  - name: destructive-docker
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: Docker commands that remove or stop containers/images
+    patterns:
+      - '\bdocker\s+(rm|rmi|stop|kill)\b'
+      - '\bdocker\s+system\s+prune\b'
+      - '\bdocker\s+(volume|network)\s+rm\b'
+
+  # ── System configuration ──
+
+  - name: system-config
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: Commands that modify system-level configuration
+    patterns:
+      - '\blaunchctl\b'
+      - '\bdefaults\s+write\b'
+      - '\bcrontab\b'
+
+  # ── Package management (destructive) ──
+
+  - name: destructive-packages
+    tools: [Bash, exec]
+    field: command
+    action: escalate
+    description: Package publish, uninstall, or removal
+    patterns:
+      - '\bnpm\s+publish\b'
+      - '\btwine\s+upload\b'
+      - '\b(pip|pip3)\s+uninstall\b'
+      - '\bnpm\s+uninstall\s+-g\b'
+      - '\bbrew\s+(uninstall|remove)\b'
+
+  # ── Shell config edits ──
+
+  - name: shell-config-edit
+    tools: [Write, Edit]
+    field: file_path
+    action: escalate
+    description: Edits to shell configuration files
+    patterns:
+      - '~/?\.(zshrc|bashrc|zprofile|bash_profile|profile)$'
+      - '/Users/\w+/\.(zshrc|bashrc|zprofile|bash_profile|profile)$'
+      - '/home/\w+/\.(zshrc|bashrc|zprofile|bash_profile|profile)$'
+
   # ── Credential exfiltration ──
 
   - name: credential-exfil
