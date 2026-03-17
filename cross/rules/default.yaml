@@ -11,7 +11,7 @@
 #   name:        unique identifier (for overrides/disable)
 #   tools:       tool names to match, or ["*"] for all
 #   field:       input field to check ("command", "file_path", or "" for all)
-#   action:      block | alert (default: block)
+#   action:      escalate | block | alert | halt_session (default: block)
 #   description: human explanation
 #   patterns:    regex patterns (case-insensitive, any match triggers)
 #   contains:    substrings (case-insensitive, any match triggers)
@@ -30,7 +30,7 @@ rules:
   - name: destructive-rm
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Recursive forced deletes targeting root, home, or cwd
     patterns:
       # rm -rf / rm -fr (merged flags)
@@ -51,7 +51,7 @@ rules:
   - name: rm-outside-project
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Deleting files in user directories outside typical project scope
     patterns:
       # ~/Downloads/..., ~/Documents/..., etc. (tilde form)
@@ -64,7 +64,7 @@ rules:
   - name: destructive-alt
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Alternative file destruction commands
     patterns:
       - 'find\s+/\s+.*-delete\b'
@@ -76,7 +76,7 @@ rules:
   - name: destructive-disk
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Disk-level destructive operations
     patterns:
       - '\bdd\b.*\bof=/dev/'
@@ -90,7 +90,7 @@ rules:
   - name: fork-bomb
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Fork bombs
     patterns:
       - ':\(\)\s*\{\s*:\|:\s*&\s*\}\s*;'
@@ -98,7 +98,7 @@ rules:
   - name: shell-wrapper-destructive
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Destructive commands hidden inside shell wrappers (bash -c, eval)
     patterns:
       - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\brm\s+-\w*r\w*f'
@@ -160,7 +160,7 @@ rules:
   - name: system-path-write
     tools: [Write, Edit]
     field: file_path
-    action: block
+    action: escalate
     description: Writes to system directories
     contains:
       - "/etc/"
@@ -179,7 +179,7 @@ rules:
   - name: system-path-write-bash
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Bash writes to system directories via redirection/cp/mv/tee/install/ln/sed
     patterns:
       - '>\s*/(etc|usr|System|boot|sbin|bin|Library)/'
@@ -192,7 +192,7 @@ rules:
   - name: dangerous-chmod
     tools: [Bash, exec]
     field: command
-    action: block
+    action: escalate
     description: Recursive chmod 777/a+rwx on root, home, or cwd
     patterns:
       - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+[/~\.]'

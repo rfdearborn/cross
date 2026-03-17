@@ -20,57 +20,57 @@ class TestDestructiveCommands:
     @pytest.mark.anyio
     async def test_rm_rf_root(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_home(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf ~/"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_dot_no_trailing_space(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf ."}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_dot_trailing_space(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf . "}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_dotdot(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf .."}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_home_var(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf $HOME"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_fr_root(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -fr /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_r_f_split_flags(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -r -f /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_f_r_split_flags(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -f -r /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_recursive_force_long_form(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm --recursive --force /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_force_recursive_long_form(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm --force --recursive /etc"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_node_modules_allowed(self):
@@ -90,17 +90,17 @@ class TestDestructiveCommands:
     @pytest.mark.anyio
     async def test_mkfs(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "mkfs.ext4 /dev/sda1"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_dd_to_disk(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "dd if=/dev/zero of=/dev/sda"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_fork_bomb(self):
         r = await self.gate.evaluate(_req("Bash", {"command": ":(){ :|:& };:"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
 
 class TestCredentialExfiltration:
@@ -197,22 +197,22 @@ class TestSystemPathWrites:
     @pytest.mark.anyio
     async def test_write_etc(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/etc/passwd"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_edit_etc(self):
         r = await self.gate.evaluate(_req("Edit", {"file_path": "/etc/shadow", "old_string": "x", "new_string": "y"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_write_usr(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/usr/bin/malware"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_write_system(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/System/Library/something"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_write_user_dir_allowed(self):
@@ -222,22 +222,22 @@ class TestSystemPathWrites:
     @pytest.mark.anyio
     async def test_bash_redirect_to_etc(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "echo 'x' > /etc/crontab"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_cp_to_usr(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "cp malware /usr/bin/malware"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_mv_to_etc(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "mv payload /etc/init.d/backdoor"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_tee_to_etc(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "echo 'evil' | tee /etc/passwd"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_cp_local_allowed(self):
@@ -272,7 +272,7 @@ class TestChmod:
     @pytest.mark.anyio
     async def test_chmod_777_root(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "chmod -R 777 /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_chmod_safe(self):
@@ -322,40 +322,40 @@ class TestDestructiveRmExpanded:
     @pytest.mark.anyio
     async def test_rm_rf_star(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf /*"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_dotslash(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf ./"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_home_braces(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf ${HOME}"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_etc(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf /etc"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_recursive_short_force(self):
         """Mixed: rm --recursive -f /"""
         r = await self.gate.evaluate(_req("Bash", {"command": "rm --recursive -f /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_force_short_recursive(self):
         """Mixed: rm -r --force /"""
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -r --force /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_force_long_short_r(self):
         """Mixed: rm --force -r /etc"""
         r = await self.gate.evaluate(_req("Bash", {"command": "rm --force -r /etc"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rm_rf_subdir_allowed(self):
@@ -373,27 +373,27 @@ class TestDestructiveAlt:
     @pytest.mark.anyio
     async def test_find_delete(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "find / -name '*.log' -delete"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_find_exec_rm(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "find / -type f -exec rm {} ;"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_python_shutil_rmtree(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "python3 -c 'import shutil; shutil.rmtree(\"/\")' "}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_perl_rmtree(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "perl -e 'use File::Path; rmtree(\"/tmp\")' "}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_rsync_delete_root(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rsync --delete empty/ /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_find_delete_local_allowed(self):
@@ -411,32 +411,32 @@ class TestDestructiveDisk:
     async def test_dd_reversed_args(self):
         """dd with of= before if= should still be caught."""
         r = await self.gate.evaluate(_req("Bash", {"command": "dd of=/dev/sda if=/dev/zero"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_dd_zero_nvme(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "dd if=/dev/zero of=/dev/nvme0n1"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_shred_device(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "shred -vfz /dev/sda"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_wipefs_device(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "wipefs -a /dev/sda1"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_redirect_to_nvme(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "cat payload > /dev/nvme0n1"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_redirect_to_mmcblk(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "echo x > /dev/mmcblk0"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
 
 class TestPathCanonicalization:
@@ -448,24 +448,24 @@ class TestPathCanonicalization:
     @pytest.mark.anyio
     async def test_traversal_to_etc(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/tmp/../etc/passwd"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_traversal_to_usr(self):
         r = await self.gate.evaluate(
             _req("Edit", {"file_path": "/home/user/../../usr/bin/x", "old_string": "a", "new_string": "b"})
         )
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_macos_private_etc(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/private/etc/hosts"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_macos_private_var(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/private/var/root/something"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_safe_path_with_dots(self):
@@ -482,42 +482,42 @@ class TestSystemPathWritesExpanded:
     @pytest.mark.anyio
     async def test_write_sbin(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/sbin/malware"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_write_bin(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/bin/evil"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_write_lib(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/lib/x86_64-linux-gnu/libc.so"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_write_lib64(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/lib64/something"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_write_macos_library(self):
         r = await self.gate.evaluate(_req("Write", {"file_path": "/Library/LaunchDaemons/evil.plist"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_install_to_usr(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "install -m 755 payload /usr/local/bin/evil"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_ln_to_bin(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "ln -sf payload /bin/evil"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_sed_inplace_etc(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "sed -i 's/root/evil/' /etc/passwd"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
 
 class TestChmodExpanded:
@@ -529,17 +529,17 @@ class TestChmodExpanded:
     @pytest.mark.anyio
     async def test_chmod_a_plus_rwx(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "chmod -R a+rwx /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_chmod_ugo_plus_rwx(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "chmod -R ugo+rwx ~/"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_chmod_777_reverse_flags(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "chmod 777 -R /home"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
 
 class TestCredentialExfilExpanded:
@@ -763,7 +763,7 @@ class TestUserRules:
 
         # Default rule still works
         r = await gate.evaluate(_req("Bash", {"command": "rm -rf /"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
 
 class TestBareListFormat:
@@ -847,7 +847,7 @@ class TestDisableRules:
         gate = DenylistGate(rules_dir=tmp_path, include_defaults=True)
         # fork bomb should still be blocked
         r = await gate.evaluate(_req("Bash", {"command": ":(){ :|:& };:"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
 
 class TestInvalidRegex:
@@ -901,32 +901,32 @@ class TestShellWrapperBypass:
     @pytest.mark.anyio
     async def test_bash_c_rm_rf(self):
         r = await self.gate.evaluate(_req("Bash", {"command": 'bash -c "rm -rf /"'}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_sh_c_rm_rf(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "sh -c 'rm -rf /'"}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_zsh_c_rm_rf(self):
         r = await self.gate.evaluate(_req("Bash", {"command": 'zsh -c "rm -rf /etc"'}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_eval_rm_rf(self):
         r = await self.gate.evaluate(_req("Bash", {"command": 'eval "rm -rf /"'}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_c_mkfs(self):
         r = await self.gate.evaluate(_req("Bash", {"command": 'bash -c "mkfs.ext4 /dev/sda"'}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_c_dd(self):
         r = await self.gate.evaluate(_req("Bash", {"command": 'bash -c "dd if=/dev/zero of=/dev/sda"'}))
-        assert r.action == Action.BLOCK
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_bash_c_safe_allowed(self):
