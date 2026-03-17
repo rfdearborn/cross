@@ -1,3 +1,5 @@
 """cross — Configurable Runtime Oversight and Safety Standard."""
 
-__version__ = "0.5.0"
+from importlib.metadata import version as _pkg_version
+
+__version__ = _pkg_version("cross-ai")
