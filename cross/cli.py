@@ -23,9 +23,11 @@ def main():
     parser = argparse.ArgumentParser(prog="cross", description="Agent monitoring proxy and session manager")
     sub = parser.add_subparsers(dest="command")
 
-    # cross daemon — start the central daemon (proxy + slack + session mgmt)
+    # cross start / cross daemon — start the central daemon (proxy + slack + session mgmt)
     daemon_p = sub.add_parser("daemon", help="Start the cross daemon (proxy + Slack + session management)")
     daemon_p.add_argument("--foreground", "-f", action="store_true", help="Run in foreground (default: background)")
+    start_p = sub.add_parser("start", help="Start the cross daemon (alias for daemon)")
+    start_p.add_argument("--foreground", "-f", action="store_true", help="Run in foreground (default: background)")
 
     # cross proxy — start just the network proxy (no Slack, no session mgmt)
     sub.add_parser("proxy", help="Start only the network monitoring proxy")
@@ -77,7 +79,7 @@ def main():
         return
     elif args.command == "reset":
         sys.exit(_run_reset())
-    elif args.command == "daemon":
+    elif args.command in ("daemon", "start"):
         if args.foreground:
             _run_daemon()
         else:
