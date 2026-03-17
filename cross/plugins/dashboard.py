@@ -298,7 +298,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none"
     style="display:block"><path d="M12 2v20M2 12h20"
     stroke="white" stroke-width="3" stroke-linecap="round"/></svg></h1>
-  <button class="notif-btn" id="notif-btn" style="display:none" onclick="requestNotifPermission()">Enable notifications</button>
+  <button class="notif-btn" id="notif-btn" style="display:none"
+    onclick="requestNotifPermission()">Enable notifications</button>
   <span class="status">
     <span class="dot disconnected" id="ws-dot"></span>
     <span id="ws-status">connecting...</span>

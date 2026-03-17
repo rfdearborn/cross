@@ -65,11 +65,11 @@ class TestOnPtyOutput:
 
 
 class TestMainCommandRouting:
-    @patch("cross.cli._run_daemon")
-    def test_daemon_command(self, mock_run_daemon):
+    @patch("cross.cli._run_daemon_background")
+    def test_daemon_command(self, mock_run_daemon_bg):
         with patch("sys.argv", ["cross", "daemon"]):
             main()
-        mock_run_daemon.assert_called_once()
+        mock_run_daemon_bg.assert_called_once()
 
     @patch("cross.cli._run_proxy")
     def test_proxy_command(self, mock_run_proxy):

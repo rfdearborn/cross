@@ -45,9 +45,25 @@ _FLAG_WITH_VALUE_RE = re.compile(r"^-[WX]$|^--\w+=")
 
 # File extensions that are clearly scripts (not binaries)
 _SCRIPT_EXTENSIONS = {
-    ".py", ".js", ".ts", ".mjs", ".cjs", ".rb", ".pl", ".pm",
-    ".php", ".lua", ".r", ".R", ".sh", ".bash", ".zsh",
-    ".ksh", ".fish", ".tcl", ".awk",
+    ".py",
+    ".js",
+    ".ts",
+    ".mjs",
+    ".cjs",
+    ".rb",
+    ".pl",
+    ".pm",
+    ".php",
+    ".lua",
+    ".r",
+    ".R",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".ksh",
+    ".fish",
+    ".tcl",
+    ".awk",
 }
 
 
@@ -87,11 +103,10 @@ def extract_script_paths(command: str) -> list[str]:
 
     for match in _INTERPRETER_RE.finditer(command):
         # Get everything after the interpreter
-        rest = command[match.end():]
+        rest = command[match.end() :]
         tokens = rest.split()
 
         i = 0
-        found_script = False
         while i < len(tokens):
             token = tokens[i]
             # stdin redirect — next token is the script path
@@ -99,7 +114,6 @@ def extract_script_paths(command: str) -> list[str]:
                 redirect_target = tokens[i + 1]
                 if _looks_like_script_path(redirect_target):
                     paths.append(redirect_target)
-                found_script = True
                 break
             # Stop at other shell operators
             if token in ("&&", "||", ";", "|", "&", ">", ">>", "<<", "<<<", "2>", "2>>"):
@@ -118,7 +132,6 @@ def extract_script_paths(command: str) -> list[str]:
             # First non-flag token is the script path
             if _looks_like_script_path(token):
                 paths.append(token)
-            found_script = True
             break
 
     return paths

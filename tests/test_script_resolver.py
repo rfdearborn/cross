@@ -1,9 +1,5 @@
 """Tests for cross.script_resolver — script content resolution."""
 
-import os
-
-import pytest
-
 from cross.script_resolver import extract_script_paths, resolve_script_contents
 
 

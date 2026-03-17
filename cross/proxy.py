@@ -51,6 +51,7 @@ def _resolve_scripts_for_tool(tool_name: str, tool_input: Any, cwd: str = "") ->
         return {}
     return resolve_script_contents(command, cwd=cwd)
 
+
 _client: httpx.AsyncClient | None = None
 
 # Blocked tool_use_ids -> reason, info, timestamp for next-request feedback injection
@@ -683,7 +684,11 @@ async def _proxy_streaming(
                         if tool_event:
                             # Resolve script contents for Bash/exec tool calls
                             proxy_cwd = os.getcwd()
-                            script_contents = _resolve_scripts_for_tool(tool_event.name, tool_event.input, cwd=proxy_cwd)
+                            script_contents = _resolve_scripts_for_tool(
+                                tool_event.name,
+                                tool_event.input,
+                                cwd=proxy_cwd,
+                            )
                             tool_event.script_contents = script_contents or None
 
                             # Tool_use block complete — run gate evaluation
