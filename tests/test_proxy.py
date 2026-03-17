@@ -67,11 +67,16 @@ def _reset_proxy_globals():
     _blocked_tool_info.clear()
     _blocked_tool_timestamps.clear()
     _recent_tools.clear()
+    # Reset sentinel halt state
+    proxy_module._sentinel_halted = False
+    proxy_module._sentinel_halt_reason = ""
     # Reset the singleton client
     old_client = proxy_module._client
     proxy_module._client = None
     yield
     # Restore after test
+    proxy_module._sentinel_halted = False
+    proxy_module._sentinel_halt_reason = ""
     proxy_module._client = old_client
 
 
@@ -784,6 +789,23 @@ def _make_mock_request(body_dict: dict, method: str = "POST", path: str = "/v1/m
 
 
 class TestHandleProxyRequest:
+    @pytest.mark.anyio
+    async def test_sentinel_halt_blocks_requests(self):
+        """When sentinel has halted, proxy should reject requests with 403."""
+        body = {"model": "claude-3", "stream": False, "messages": [{"role": "user", "content": "hi"}]}
+        req = _make_mock_request(body)
+        event_bus = EventBus()
+
+        proxy_module._sentinel_halted = True
+        proxy_module._sentinel_halt_reason = "Agent exfiltrating credentials"
+
+        resp = await handle_proxy_request(req, event_bus)
+
+        assert resp.status_code == 403
+        resp_data = json.loads(resp.body)
+        assert "sentinel" in resp_data["error"]["message"].lower()
+        assert "exfiltrating credentials" in resp_data["error"]["message"]
+
     @pytest.mark.anyio
     async def test_routes_streaming_request(self):
         body = {"model": "claude-3", "stream": True, "messages": [{"role": "user", "content": "hi"}]}

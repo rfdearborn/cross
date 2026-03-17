@@ -293,6 +293,10 @@ class LLMSentinel(Sentinel):
             logger.warning(f"Sentinel ESCALATE ({len(events)} events): {concerns}")
         elif action == Action.HALT_SESSION:
             logger.critical(f"Sentinel HALT ({len(events)} events): {concerns}")
+            # Actually halt the proxy — stop forwarding requests
+            from cross.proxy import set_sentinel_halt
+
+            set_sentinel_halt(concerns or summary or "Sentinel issued HALT verdict")
 
         return response
 
