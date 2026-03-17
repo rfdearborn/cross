@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     gate_approval_timeout: int = 300  # seconds to wait for human approval on escalation
     gate_max_retries: int = 3  # max retry attempts when a gate blocks a tool call
 
+    # Native desktop notifications (macOS, via terminal-notifier)
+    native_notifications_enabled: bool = False
+
     # LLM sentinel — async periodic review of all activity
     llm_sentinel_enabled: bool = True
     llm_sentinel_model: str = "cli/claude"

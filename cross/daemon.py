@@ -24,6 +24,9 @@ from cross.event_store import EventStore
 from cross.events import EventBus, GateDecisionEvent, ToolUseEvent
 from cross.plugins.dashboard import DASHBOARD_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
+from cross.plugins.notifier import handle_event as notify_event
+from cross.plugins.notifier import is_available as native_notifications_available
+from cross.plugins.notifier import set_browser_check
 
 logger = logging.getLogger("cross.daemon")
 
@@ -383,6 +386,12 @@ async def on_startup():
     _dashboard = DashboardPlugin(event_store=store, resolve_approval_callback=_resolve_gate)
     event_bus.subscribe(_dashboard.handle_event)
     logger.info("Dashboard active at /cross/dashboard")
+
+    # Register native desktop notifications (macOS)
+    if native_notifications_available():
+        set_browser_check(lambda: len(_dashboard._ws_clients) > 0)
+        event_bus.subscribe(notify_event)
+        logger.info("Native desktop notifications active")
 
     # Set up gate chain
     if settings.gating_enabled:
