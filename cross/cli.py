@@ -24,7 +24,8 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # cross daemon — start the central daemon (proxy + slack + session mgmt)
-    sub.add_parser("daemon", help="Start the cross daemon (proxy + Slack + session management)")
+    daemon_p = sub.add_parser("daemon", help="Start the cross daemon (proxy + Slack + session management)")
+    daemon_p.add_argument("--foreground", "-f", action="store_true", help="Run in foreground (default: background)")
 
     # cross proxy — start just the network proxy (no Slack, no session mgmt)
     sub.add_parser("proxy", help="Start only the network monitoring proxy")
@@ -77,12 +78,15 @@ def main():
     elif args.command == "reset":
         sys.exit(_run_reset())
     elif args.command == "daemon":
-        _run_daemon()
+        if args.foreground:
+            _run_daemon()
+        else:
+            _run_daemon_background()
     elif args.command == "stop":
         sys.exit(_run_stop())
     elif args.command == "restart":
         _run_stop(quiet=True)
-        _run_daemon()
+        _run_daemon_background()
     elif args.command == "proxy":
         _run_proxy()
     elif args.command == "wrap":
@@ -352,6 +356,25 @@ def _run_daemon():
         )
     finally:
         _remove_pid()
+
+
+def _run_daemon_background():
+    """Start the daemon as a background process."""
+    import subprocess
+    import time
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "cross", "daemon", "--foreground"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    # Brief wait to check it didn't crash immediately
+    time.sleep(0.5)
+    if proc.poll() is not None:
+        print("Daemon failed to start.", file=sys.stderr)
+        sys.exit(1)
+    print(f"Daemon started (pid {proc.pid}) on port {settings.listen_port}.")
 
 
 def _run_proxy():
