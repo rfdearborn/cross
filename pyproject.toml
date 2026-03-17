@@ -1,6 +1,6 @@
 [project]
 name = "cross-ai"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent monitoring proxy and session manager — PTY wrapping, network interception, Slack relay, and gating"
 readme = "README.md"
 license = "MIT"
