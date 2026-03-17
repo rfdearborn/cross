@@ -66,6 +66,24 @@ _recent_tools: deque[dict[str, Any]] = deque(maxlen=max(settings.llm_gate_contex
 _MAX_BUFFER_LINES = 500  # Flush buffer if it exceeds this many lines
 _BLOCKED_TOOL_TTL = 300.0  # Seconds before stale blocked tool entries are cleaned up
 
+# Sentinel halt flag — when set, proxy rejects all requests
+_sentinel_halted = False
+_sentinel_halt_reason = ""
+
+
+def set_sentinel_halt(reason: str) -> None:
+    """Called by the sentinel when it issues a HALT verdict."""
+    global _sentinel_halted, _sentinel_halt_reason
+    _sentinel_halted = True
+    _sentinel_halt_reason = reason
+    logger.critical(f"Proxy halted by sentinel: {reason}")
+
+
+def is_sentinel_halted() -> bool:
+    """Check if the sentinel has halted the proxy."""
+    return _sentinel_halted
+
+
 # Gate approval infrastructure (for ESCALATE → human review)
 _pending_approvals: dict[str, asyncio.Event] = {}
 _approval_results: dict[str, tuple[bool, str]] = {}  # tool_use_id -> (approved, username)
@@ -320,6 +338,19 @@ async def handle_proxy_request(
     gate_chain: GateChain | None = None,
 ) -> Response:
     """Handle a proxy request, publishing events to the given EventBus."""
+    if _sentinel_halted:
+        return Response(
+            content=json.dumps({
+                "type": "error",
+                "error": {
+                    "type": "request_blocked",
+                    "message": f"Session halted by sentinel: {_sentinel_halt_reason}",
+                },
+            }).encode(),
+            status_code=403,
+            headers={"content-type": "application/json"},
+        )
+
     body = await request.body()
     path = request.url.path
     if request.url.query:
