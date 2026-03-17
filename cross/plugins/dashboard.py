@@ -1,20 +1,18 @@
 """Web dashboard plugin — local approval surface and live event feed.
 
-Subscribes to EventBus events, maintains in-memory state for recent events
-and pending escalations, and exposes methods for HTTP/WS routes to query.
+Subscribes to EventBus events, tracks pending escalations, and broadcasts
+to WebSocket clients. Event storage is handled by EventStore.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import time
-from collections import deque
-from dataclasses import asdict
 from typing import Any
 
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from cross.event_store import EventStore, event_to_dict
 from cross.events import (
     CrossEvent,
     GateDecisionEvent,
@@ -22,26 +20,12 @@ from cross.events import (
 
 logger = logging.getLogger("cross.plugins.dashboard")
 
-# Maximum number of recent events to keep in memory
-_MAX_EVENTS = 100
-
-
-def _event_to_dict(event: CrossEvent) -> dict[str, Any]:
-    """Convert a CrossEvent dataclass to a JSON-serializable dict."""
-    d = asdict(event)
-    d["event_type"] = type(event).__name__
-    d["ts"] = time.time()
-    # Remove raw_body from RequestEvent — too large for the dashboard
-    d.pop("raw_body", None)
-    return d
-
 
 class DashboardPlugin:
-    """Maintains state for the web dashboard and broadcasts to WebSocket clients."""
+    """Tracks pending escalations and broadcasts events to WebSocket clients."""
 
-    def __init__(self, resolve_approval_callback=None):
-        # Recent events (bounded deque)
-        self._events: deque[dict[str, Any]] = deque(maxlen=_MAX_EVENTS)
+    def __init__(self, event_store: EventStore, resolve_approval_callback=None):
+        self._store = event_store
         # Pending escalations: tool_use_id -> event dict
         self._pending: dict[str, dict[str, Any]] = {}
         # Connected WebSocket clients
@@ -50,9 +34,8 @@ class DashboardPlugin:
         self._resolve_approval_callback = resolve_approval_callback
 
     async def handle_event(self, event: CrossEvent):
-        """EventBus handler — store event and broadcast to WS clients."""
-        event_dict = _event_to_dict(event)
-        self._events.append(event_dict)
+        """EventBus handler — track escalations and broadcast to WS clients."""
+        event_dict = event_to_dict(event)
 
         # Track pending escalations
         if isinstance(event, GateDecisionEvent):
@@ -79,8 +62,8 @@ class DashboardPlugin:
         self._ws_clients -= disconnected
 
     def get_events(self) -> list[dict[str, Any]]:
-        """Return recent events as a list (newest last)."""
-        return list(self._events)
+        """Return recent events as a list (oldest first)."""
+        return self._store.get_events()
 
     def get_pending(self) -> list[dict[str, Any]]:
         """Return pending escalations as a list."""

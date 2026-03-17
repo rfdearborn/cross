@@ -20,6 +20,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from cross.chain import GateChain
 from cross.config import settings
 from cross.evaluator import Action, GateRequest
+from cross.event_store import EventStore
 from cross.events import EventBus, GateDecisionEvent, ToolUseEvent
 from cross.plugins.dashboard import DASHBOARD_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
@@ -364,10 +365,14 @@ async def on_startup():
     event_bus.subscribe(log_plugin.handle)
     logger.info(f"Daemon starting on port {settings.listen_port}")
 
+    # Register event store (persists events to JSONL)
+    store = EventStore()
+    event_bus.subscribe(store.handle_event)
+
     # Register dashboard plugin (always active — no config gating)
     from cross.proxy import resolve_gate_approval as _resolve_gate
 
-    _dashboard = DashboardPlugin(resolve_approval_callback=_resolve_gate)
+    _dashboard = DashboardPlugin(event_store=store, resolve_approval_callback=_resolve_gate)
     event_bus.subscribe(_dashboard.handle_event)
     logger.info("Dashboard active at /cross/dashboard")
 

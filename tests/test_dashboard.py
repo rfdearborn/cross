@@ -7,13 +7,30 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from cross.event_store import EventStore, event_to_dict
 from cross.events import (
     GateDecisionEvent,
     RequestEvent,
     SentinelReviewEvent,
     ToolUseEvent,
 )
-from cross.plugins.dashboard import DashboardPlugin, _event_to_dict
+from cross.plugins.dashboard import DashboardPlugin
+
+
+@pytest.fixture(autouse=True)
+def _isolate_events_file(tmp_path, monkeypatch):
+    """Ensure tests don't read/write the real events file."""
+    monkeypatch.setattr(
+        "cross.event_store._DEFAULT_PATH",
+        str(tmp_path / "events.jsonl"),
+    )
+
+
+@pytest.fixture()
+def store(tmp_path):
+    """Create an EventStore backed by a temp file."""
+    return EventStore(path=str(tmp_path / "events.jsonl"))
+
 
 # ---------------------------------------------------------------------------
 # DashboardPlugin unit tests
@@ -21,11 +38,11 @@ from cross.plugins.dashboard import DashboardPlugin, _event_to_dict
 
 
 class TestEventToDict:
-    """Test the _event_to_dict helper."""
+    """Test the event_to_dict helper."""
 
     def test_tool_use_event(self):
         ev = ToolUseEvent(name="Bash", tool_use_id="tu_1", input={"command": "ls"})
-        d = _event_to_dict(ev)
+        d = event_to_dict(ev)
         assert d["event_type"] == "ToolUseEvent"
         assert d["name"] == "Bash"
         assert d["tool_use_id"] == "tu_1"
@@ -38,13 +55,13 @@ class TestEventToDict:
             action="block",
             reason="dangerous",
         )
-        d = _event_to_dict(ev)
+        d = event_to_dict(ev)
         assert d["event_type"] == "GateDecisionEvent"
         assert d["action"] == "block"
 
     def test_request_event_strips_raw_body(self):
         ev = RequestEvent(method="POST", path="/v1/messages", raw_body={"big": "data"})
-        d = _event_to_dict(ev)
+        d = event_to_dict(ev)
         assert "raw_body" not in d
         assert d["method"] == "POST"
 
@@ -56,7 +73,7 @@ class TestEventToDict:
             event_count=5,
             evaluator="llm_sentinel",
         )
-        d = _event_to_dict(ev)
+        d = event_to_dict(ev)
         assert d["event_type"] == "SentinelReviewEvent"
         assert d["event_count"] == 5
 
@@ -65,9 +82,10 @@ class TestDashboardPluginEventHandling:
     """Test event handling, pending tracking, and resolution."""
 
     @pytest.mark.anyio
-    async def test_events_stored(self):
-        plugin = DashboardPlugin()
+    async def test_events_stored(self, store):
+        plugin = DashboardPlugin(event_store=store)
         ev = ToolUseEvent(name="Read", tool_use_id="tu_10", input={})
+        await store.handle_event(ev)
         await plugin.handle_event(ev)
 
         events = plugin.get_events()
@@ -75,18 +93,18 @@ class TestDashboardPluginEventHandling:
         assert events[0]["name"] == "Read"
 
     @pytest.mark.anyio
-    async def test_max_events_bounded(self):
-        plugin = DashboardPlugin()
+    async def test_max_events_bounded(self, store):
+        plugin = DashboardPlugin(event_store=store)
         for i in range(150):
             ev = ToolUseEvent(name=f"tool_{i}", tool_use_id=f"tu_{i}", input={})
-            await plugin.handle_event(ev)
+            await store.handle_event(ev)
 
         events = plugin.get_events()
         assert len(events) == 100  # bounded by _MAX_EVENTS
 
     @pytest.mark.anyio
-    async def test_escalate_adds_to_pending(self):
-        plugin = DashboardPlugin()
+    async def test_escalate_adds_to_pending(self, store):
+        plugin = DashboardPlugin(event_store=store)
         ev = GateDecisionEvent(
             tool_use_id="tu_esc",
             tool_name="Bash",
@@ -101,8 +119,8 @@ class TestDashboardPluginEventHandling:
         assert pending[0]["tool_use_id"] == "tu_esc"
 
     @pytest.mark.anyio
-    async def test_allow_removes_from_pending(self):
-        plugin = DashboardPlugin()
+    async def test_allow_removes_from_pending(self, store):
+        plugin = DashboardPlugin(event_store=store)
         # First escalate
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_res", tool_name="Bash", action="escalate"))
         assert len(plugin.get_pending()) == 1
@@ -112,22 +130,22 @@ class TestDashboardPluginEventHandling:
         assert len(plugin.get_pending()) == 0
 
     @pytest.mark.anyio
-    async def test_block_removes_from_pending(self):
-        plugin = DashboardPlugin()
+    async def test_block_removes_from_pending(self, store):
+        plugin = DashboardPlugin(event_store=store)
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_blk", tool_name="Bash", action="escalate"))
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_blk", tool_name="Bash", action="block"))
         assert len(plugin.get_pending()) == 0
 
     @pytest.mark.anyio
-    async def test_non_escalate_gate_not_pending(self):
-        plugin = DashboardPlugin()
+    async def test_non_escalate_gate_not_pending(self, store):
+        plugin = DashboardPlugin(event_store=store)
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_ok", tool_name="Read", action="allow"))
         assert len(plugin.get_pending()) == 0
 
     @pytest.mark.anyio
-    async def test_resolve_calls_callback(self):
+    async def test_resolve_calls_callback(self, store):
         callback = MagicMock()
-        plugin = DashboardPlugin(resolve_approval_callback=callback)
+        plugin = DashboardPlugin(event_store=store, resolve_approval_callback=callback)
 
         # Add a pending escalation
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_cb", tool_name="Bash", action="escalate"))
@@ -138,16 +156,16 @@ class TestDashboardPluginEventHandling:
         assert len(plugin.get_pending()) == 0
 
     @pytest.mark.anyio
-    async def test_resolve_without_callback(self):
-        plugin = DashboardPlugin()
+    async def test_resolve_without_callback(self, store):
+        plugin = DashboardPlugin(event_store=store)
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_nc", tool_name="Bash", action="escalate"))
         # Should not raise even without callback
         plugin.resolve("tu_nc", False)
         assert len(plugin.get_pending()) == 0
 
     @pytest.mark.anyio
-    async def test_broadcast_sends_to_ws_clients(self):
-        plugin = DashboardPlugin()
+    async def test_broadcast_sends_to_ws_clients(self, store):
+        plugin = DashboardPlugin(event_store=store)
         mock_ws = AsyncMock()
         plugin._ws_clients.add(mock_ws)
 
@@ -159,8 +177,8 @@ class TestDashboardPluginEventHandling:
         assert sent_data["name"] == "Edit"
 
     @pytest.mark.anyio
-    async def test_broadcast_removes_failed_clients(self):
-        plugin = DashboardPlugin()
+    async def test_broadcast_removes_failed_clients(self, store):
+        plugin = DashboardPlugin(event_store=store)
         good_ws = AsyncMock()
         bad_ws = AsyncMock()
         bad_ws.send_text.side_effect = RuntimeError("closed")
@@ -174,10 +192,10 @@ class TestDashboardPluginEventHandling:
         assert good_ws in plugin._ws_clients
 
     @pytest.mark.anyio
-    async def test_ws_handler_accepts_and_cleans_up(self):
+    async def test_ws_handler_accepts_and_cleans_up(self, store):
         from starlette.websockets import WebSocketDisconnect
 
-        plugin = DashboardPlugin()
+        plugin = DashboardPlugin(event_store=store)
         mock_ws = AsyncMock()
         mock_ws.receive_text = AsyncMock(side_effect=WebSocketDisconnect())
 
@@ -239,11 +257,12 @@ class TestDashboardRoutes:
         assert b"cross" in response.body
 
     @pytest.mark.anyio
-    async def test_api_events_with_dashboard(self):
+    async def test_api_events_with_dashboard(self, store):
         import cross.daemon as daemon
 
-        plugin = DashboardPlugin()
-        await plugin.handle_event(ToolUseEvent(name="Read", tool_use_id="tu_e1", input={}))
+        ev = ToolUseEvent(name="Read", tool_use_id="tu_e1", input={})
+        await store.handle_event(ev)
+        plugin = DashboardPlugin(event_store=store)
         daemon._dashboard = plugin
 
         mock_request = AsyncMock()
@@ -264,10 +283,10 @@ class TestDashboardRoutes:
         assert json.loads(response.body) == []
 
     @pytest.mark.anyio
-    async def test_api_pending_with_escalation(self):
+    async def test_api_pending_with_escalation(self, store):
         import cross.daemon as daemon
 
-        plugin = DashboardPlugin()
+        plugin = DashboardPlugin(event_store=store)
         await plugin.handle_event(
             GateDecisionEvent(tool_use_id="tu_p1", tool_name="Bash", action="escalate", reason="dangerous")
         )
@@ -281,21 +300,21 @@ class TestDashboardRoutes:
         assert body[0]["tool_use_id"] == "tu_p1"
 
     @pytest.mark.anyio
-    async def test_api_pending_empty(self):
+    async def test_api_pending_empty(self, store):
         import cross.daemon as daemon
 
-        daemon._dashboard = DashboardPlugin()
+        daemon._dashboard = DashboardPlugin(event_store=store)
         mock_request = AsyncMock()
         response = await daemon.api_pending(mock_request)
         assert response.status_code == 200
         assert json.loads(response.body) == []
 
     @pytest.mark.anyio
-    async def test_api_resolve_pending_approve(self):
+    async def test_api_resolve_pending_approve(self, store):
         import cross.daemon as daemon
 
         callback = MagicMock()
-        plugin = DashboardPlugin(resolve_approval_callback=callback)
+        plugin = DashboardPlugin(event_store=store, resolve_approval_callback=callback)
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_r1", tool_name="Bash", action="escalate"))
         daemon._dashboard = plugin
 
@@ -311,11 +330,11 @@ class TestDashboardRoutes:
         callback.assert_called_once_with("tu_r1", True, "alice")
 
     @pytest.mark.anyio
-    async def test_api_resolve_pending_deny(self):
+    async def test_api_resolve_pending_deny(self, store):
         import cross.daemon as daemon
 
         callback = MagicMock()
-        plugin = DashboardPlugin(resolve_approval_callback=callback)
+        plugin = DashboardPlugin(event_store=store, resolve_approval_callback=callback)
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_r2", tool_name="Write", action="escalate"))
         daemon._dashboard = plugin
 
@@ -384,10 +403,12 @@ class TestDashboardStartup:
         with (
             patch("cross.daemon.event_bus") as mock_bus,
             patch("cross.daemon.LoggerPlugin") as mock_logger_cls,
+            patch("cross.daemon.EventStore") as mock_store_cls,
             patch("cross.daemon.settings", _mock_settings()),
             patch("cross.proxy.resolve_gate_approval"),
         ):
             mock_logger_cls.return_value = MagicMock()
+            mock_store_cls.return_value = MagicMock()
             mock_bus.subscribe = MagicMock()
             await daemon.on_startup()
 
