@@ -40,7 +40,11 @@ def main():
     sub.add_parser("reset", help="Remove cross configuration (~/.cross/.env and rules)")
 
     # cross update — self-update cross to the latest version
-    sub.add_parser("update", help="Update cross to the latest version")
+    update_p = sub.add_parser("update", help="Update cross to the latest version")
+    update_p.add_argument(
+        "--path", metavar="PATH", nargs="?", const=".", help="Install from local source (default: current directory)"
+    )
+    update_p.add_argument("--head", action="store_true", help="Install from main branch on GitHub")
 
     # cross pending [approve|deny <tool_use_id>]
     pending_p = sub.add_parser("pending", help="Show or resolve pending gate escalations")
@@ -76,7 +80,7 @@ def main():
             wrap_p.error("Usage: cross wrap -- <agent-command> [args...]")
         sys.exit(_run_wrap(argv, log))
     elif args.command == "update":
-        sys.exit(_run_update())
+        sys.exit(_run_update(local_path=args.path, from_head=args.head))
     elif args.command == "pending":
         sys.exit(_run_pending(args))
     else:
@@ -117,6 +121,7 @@ def _run_reset() -> int:
 
 
 _PYPI_PACKAGE = "cross-ai"
+_GITHUB_REPO = "https://github.com/rfdearborn/cross"
 
 _VERSION_CHECK = (
     "import importlib.metadata\n"
@@ -139,18 +144,32 @@ def _get_installed_version() -> str | None:
     return None
 
 
-def _run_update() -> int:
+def _run_update(local_path: str | None = None, from_head: bool = False) -> int:
     """Update cross to the latest version via pip."""
     import subprocess
+
+    if local_path and from_head:
+        print("Cannot use --path and --head together.", file=sys.stderr)
+        return 1
 
     old_version = _get_installed_version()
 
     print(f"Current version: {old_version or 'unknown'}")
-    print("Updating cross...")
+
+    if local_path:
+        local_path = os.path.abspath(local_path)
+        print(f"Installing from local source: {local_path}")
+        pip_args = [sys.executable, "-m", "pip", "install", "--upgrade", local_path]
+    elif from_head:
+        print(f"Installing from main branch: {_GITHUB_REPO}")
+        pip_args = [sys.executable, "-m", "pip", "install", "--upgrade", f"git+{_GITHUB_REPO}@main"]
+    else:
+        print("Updating cross...")
+        pip_args = [sys.executable, "-m", "pip", "install", "--upgrade", _PYPI_PACKAGE]
 
     # Use the same Python interpreter that's running this process
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", _PYPI_PACKAGE],
+        pip_args,
         capture_output=True,
         text=True,
     )
