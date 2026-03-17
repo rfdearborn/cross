@@ -294,15 +294,35 @@ def _remove_pid():
         pass
 
 
+def _find_pid_by_port(port: int) -> int | None:
+    """Find the PID of a process listening on the given port."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().splitlines()[0])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _run_stop(quiet: bool = False) -> int:
     """Stop the running daemon by sending SIGTERM."""
     import signal
 
     pid = _read_pid()
     if pid is None:
-        if not quiet:
-            print("No daemon PID file found.")
-        return 1
+        # Fall back to finding by port
+        pid = _find_pid_by_port(settings.listen_port)
+        if pid is None:
+            if not quiet:
+                print("No running daemon found.")
+            return 1
 
     try:
         os.kill(pid, signal.SIGTERM)
