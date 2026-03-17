@@ -340,13 +340,15 @@ async def handle_proxy_request(
     """Handle a proxy request, publishing events to the given EventBus."""
     if _sentinel_halted:
         return Response(
-            content=json.dumps({
-                "type": "error",
-                "error": {
-                    "type": "request_blocked",
-                    "message": f"Session halted by sentinel: {_sentinel_halt_reason}",
-                },
-            }).encode(),
+            content=json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "request_blocked",
+                        "message": f"Session halted by sentinel: {_sentinel_halt_reason}",
+                    },
+                }
+            ).encode(),
             status_code=403,
             headers={"content-type": "application/json"},
         )
