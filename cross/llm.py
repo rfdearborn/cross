@@ -82,9 +82,17 @@ class LLMConfig:
 
 
 def parse_model_ref(model: str) -> tuple[str, str]:
-    """Parse 'provider/model' into (provider, model_id). Default provider: anthropic."""
+    """Parse 'provider/model' into (provider, model_id). Default provider: anthropic.
+
+    Special case: 'anthropic/claude-code/model' routes through the CLI
+    provider (claude -p --model) using the user's Claude subscription.
+    """
     if not model:
         return ("", "")
+    # anthropic/claude-code/model → cli provider with model spec
+    if model.lower().startswith("anthropic/claude-code/"):
+        model_name = model.split("/", 2)[2].strip()
+        return ("cli", model_name)
     parts = model.split("/", 1)
     if len(parts) == 2 and parts[0].strip() and parts[1].strip():
         return (parts[0].strip().lower(), parts[1].strip())
@@ -303,7 +311,12 @@ async def _complete_cli(
     recursive proxying through cross.
     """
     prompt = _build_cli_prompt(system, messages)
-    cmd = config.model_id  # e.g. "claude"
+
+    # model_id is either "claude" (bare, uses CC default) or a model name
+    # like "claude-sonnet-4-6" (from anthropic/claude-code/claude-sonnet-4-6)
+    model_id = config.model_id
+    cmd = "claude"
+    model_flag = model_id if model_id != "claude" else None
 
     # Build a clean env: strip CROSS_* vars, point at real Anthropic API
     # to avoid recursive proxying through cross.
@@ -319,13 +332,16 @@ async def _complete_cli(
     env = {k: v for k, v in os.environ.items() if not k.startswith("CROSS_") and k not in strip_keys}
     env["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
 
-    logger.debug(f"CLI invoke: {cmd} -p (prompt length {len(prompt)})")
+    model_desc = f" --model {model_flag}" if model_flag else ""
+    logger.debug(f"CLI invoke: {cmd} -p{model_desc} (prompt length {len(prompt)})")
+
+    cli_args = [cmd, "-p", prompt]
+    if model_flag:
+        cli_args = [cmd, "--model", model_flag, "-p", prompt]
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            cmd,
-            "-p",
-            prompt,
+            *cli_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,

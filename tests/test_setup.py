@@ -255,15 +255,15 @@ class TestRunSetupDefaultModel:
         )
 
         assert result["llm_enabled"] is True
-        assert result["model"] == "cli/claude"
-        assert result["sentinel_model"] is None  # None = same as gate
+        assert result["model"] == "anthropic/claude-code/claude-sonnet-4-6"
+        assert result["sentinel_model"] == "anthropic/claude-code/claude-opus-4-6"
         assert result["agents_found"] == ["claude"]
 
         env_file = cross_dir / ".env"
         assert env_file.exists()
         env_content = env_file.read_text()
-        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
-        assert "CROSS_LLM_SENTINEL_MODEL=cli/claude" in env_content
+        assert "CROSS_LLM_GATE_MODEL=anthropic/claude-code/claude-sonnet-4-6" in env_content
+        assert "CROSS_LLM_SENTINEL_MODEL=anthropic/claude-code/claude-opus-4-6" in env_content
         # cli provider should NOT write an API key
         assert "CROSS_LLM_GATE_API_KEY" not in env_content
 
@@ -392,12 +392,12 @@ class TestRunSetupSeparateSentinel:
             print_fn=output.append,
         )
 
-        assert result["model"] == "cli/claude"
+        assert result["model"] == "anthropic/claude-code/claude-sonnet-4-6"
         assert result["sentinel_model"] == "google/gemini-2.5-flash"
         assert result["sentinel_interval"] == 120
 
         env_content = (cross_dir / ".env").read_text()
-        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
+        assert "CROSS_LLM_GATE_MODEL=anthropic/claude-code/claude-sonnet-4-6" in env_content
         assert "CROSS_LLM_SENTINEL_MODEL=google/gemini-2.5-flash" in env_content
         assert "CROSS_LLM_SENTINEL_INTERVAL_SECONDS=120" in env_content
 
@@ -772,11 +772,11 @@ class TestRunSetupClaudeModel:
             print_fn=output.append,
         )
 
-        assert result["model"] == "cli/claude"
+        assert result["model"] == "anthropic/claude-code/claude-sonnet-4-6"
         assert result["llm_enabled"] is True
         env_content = (cross_dir / ".env").read_text()
-        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
-        assert "CROSS_LLM_SENTINEL_MODEL=cli/claude" in env_content
+        assert "CROSS_LLM_GATE_MODEL=anthropic/claude-code/claude-sonnet-4-6" in env_content
+        assert "CROSS_LLM_SENTINEL_MODEL=anthropic/claude-code/claude-opus-4-6" in env_content
         # cli provider should not write API key
         assert "API_KEY" not in env_content
 
@@ -796,10 +796,10 @@ class TestRunSetupClaudeModel:
             print_fn=output.append,
         )
 
-        assert result["model"] == "cli/claude"
+        assert result["model"] == "anthropic/claude-code/claude-sonnet-4-6"
         assert result["llm_enabled"] is True
         env_content = (cross_dir / ".env").read_text()
-        assert "CROSS_LLM_GATE_MODEL=cli/claude" in env_content
+        assert "CROSS_LLM_GATE_MODEL=anthropic/claude-code/claude-sonnet-4-6" in env_content
 
 
 @patch("cross.setup.sys")

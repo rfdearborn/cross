@@ -13,7 +13,8 @@ from pathlib import Path
 # Agents we detect on PATH (cross wrap should work with any CLI agent)
 KNOWN_AGENTS = ["claude", "openclaw"]
 
-DEFAULT_MODEL = "claude"
+DEFAULT_GATE_MODEL = "anthropic/claude-code/claude-sonnet-4-6"
+DEFAULT_SENTINEL_MODEL = "anthropic/claude-code/claude-opus-4-6"
 
 # Provider → env var name for API key lookup
 _KEY_ENV_VARS: dict[str, str] = {
@@ -71,8 +72,10 @@ def _strip_ansi(s: str) -> str:
 def _parse_provider(model: str) -> str:
     """Extract provider from a provider/model string.
 
-    Bare "claude" is treated as cli provider (cli/claude).
+    Bare "claude" and "anthropic/claude-code/*" are treated as cli provider.
     """
+    if model.lower().startswith("anthropic/claude-code/"):
+        return "cli"
     if "/" in model:
         return model.split("/", 1)[0].lower()
     if model.lower() == "claude":
@@ -142,11 +145,11 @@ def _detect_shell_rc() -> Path | None:
 def _print_model_options(print_fn, none_label: str = "skip"):
     """Print the shared model choice sub-bullets."""
     print_fn(f'  Enter "none" to {none_label}')
-    print_fn('  Enter "claude" to use your Claude Code subscription (no API key needed)')
-    print_fn("  Enter provider/model to use API or local models --")
+    print_fn("  Enter provider/model for API or local models --")
     print_fn(
         "    e.g. anthropic/claude-haiku-4-5, google/gemini-3-flash-preview, openai/gpt-5-mini, ollama/llama3.1:8b"
     )
+    print_fn('  Enter "anthropic/claude-code/<model>" to route through Claude Code (no API cost for Pro/Max users)')
 
 
 def _build_env_lines(
@@ -360,7 +363,7 @@ def run_setup(
     print_fn("")
     print_fn("Choice for tool call reviewing?")
     _print_model_options(print_fn, none_label="skip")
-    model_input = input_fn(f"Choice [{DEFAULT_MODEL}]: ").strip()
+    model_input = input_fn(f"Choice [{DEFAULT_GATE_MODEL}]: ").strip()
 
     if model_input.lower() == "none":
         gate_model = None
@@ -371,10 +374,10 @@ def run_setup(
         sentinel_interval = None
         print_fn("LLM review disabled. Deterministic denylist rules only.")
     else:
-        gate_model = model_input if model_input else DEFAULT_MODEL
-        # Bare "claude" → cli/claude
-        if gate_model.lower() == "claude":
-            gate_model = "cli/claude"
+        if not model_input or model_input.lower() in ("claude", "cli/claude"):
+            gate_model = DEFAULT_GATE_MODEL
+        else:
+            gate_model = model_input
         llm_enabled = True
         gate_api_key = _resolve_model_key(gate_model, getpass_fn, print_fn)
         if gate_api_key is None and _parse_provider(gate_model) not in ("ollama", "cli"):
@@ -389,27 +392,22 @@ def run_setup(
 
     if llm_enabled:
         print_fn("")
-        gate_display = gate_model or DEFAULT_MODEL
-        # Show shorthand for cli/ models (cli/claude → claude)
-        if gate_display.startswith("cli/"):
-            gate_display = gate_display[4:]
         print_fn("Choice for periodic session monitoring?")
         _print_model_options(print_fn, none_label="disable session monitoring")
-        sentinel_input = input_fn(f"Choice [{gate_display}]: ").strip()
+        sentinel_input = input_fn(f"Choice [{DEFAULT_SENTINEL_MODEL}]: ").strip()
 
         if sentinel_input.lower() == "none":
             sentinel_model = "none"  # signals disabled
-        elif sentinel_input:
-            sentinel_model = sentinel_input
-            # Bare "claude" → cli/claude
-            if sentinel_model.lower() == "claude":
-                sentinel_model = "cli/claude"
+        else:
+            if not sentinel_input or sentinel_input.lower() in ("claude", "cli/claude"):
+                sentinel_model = DEFAULT_SENTINEL_MODEL
+            else:
+                sentinel_model = sentinel_input
             sentinel_provider = _parse_provider(sentinel_model)
             gate_provider = _parse_provider(gate_model)
             # Only ask for a key if it's a different provider
             if sentinel_provider != gate_provider and sentinel_provider not in ("ollama", "cli"):
                 sentinel_api_key = _resolve_model_key(sentinel_model, getpass_fn, print_fn)
-        # else: sentinel_model stays None → _build_env_lines falls back to gate_model
 
         if sentinel_model != "none":
             print_fn("")
