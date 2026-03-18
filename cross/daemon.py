@@ -46,6 +46,19 @@ _project_cwds: dict[str, str] = {}
 _pending_injects: dict[str, str] = {}
 
 
+def get_active_agent_label() -> str:
+    """Return 'agent - project' label for the most recently active session."""
+    if not _sessions:
+        return ""
+    # Use the most recently registered session
+    last = list(_sessions.values())[-1]
+    agent = last.get("agent", "")
+    project = last.get("project", "")
+    if agent and project:
+        return f"{agent} - {project}"
+    return agent or project or ""
+
+
 # --- Local API routes (for wrap processes) ---
 
 

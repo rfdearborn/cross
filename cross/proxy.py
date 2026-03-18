@@ -107,26 +107,33 @@ def get_client() -> httpx.AsyncClient:
     return _client
 
 
+_SKIP_PREFIXES = ("<system-reminder>", "[Request interrupted by user]")
+
+
 def _extract_user_intent(req_data: dict) -> str:
-    """Extract the last user text from a parsed request body, skipping system-reminders."""
+    """Extract user text from the last user message."""
     msgs = req_data.get("messages", [])
-    if not msgs:
+    for msg in reversed(msgs):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            if content and not content.startswith(_SKIP_PREFIXES):
+                return content[:500]
+        elif isinstance(content, list):
+            for b in reversed(content):
+                if b.get("type") == "text":
+                    text = b.get("text", "")
+                    if text and not text.startswith(_SKIP_PREFIXES):
+                        return text[:500]
         return ""
-    last = msgs[-1]
-    content = last.get("content", "")
-    if isinstance(content, str):
-        return content[:500]
-    if isinstance(content, list):
-        for b in content:
-            if b.get("type") == "text":
-                text = b.get("text", "")
-                if text and not text.startswith("<system-reminder>"):
-                    return text[:500]
     return ""
 
 
 def _extract_request_event(method: str, path: str, body: bytes | None) -> RequestEvent:
-    event = RequestEvent(method=method, path=path)
+    from cross.daemon import get_active_agent_label
+
+    event = RequestEvent(method=method, path=path, agent=get_active_agent_label())
     if body:
         try:
             data = json.loads(body)
@@ -146,9 +153,6 @@ def _extract_request_event(method: str, path: str, body: bytes | None) -> Reques
                 intent = _extract_user_intent(data)
                 if intent:
                     event.last_message_preview = intent[:200]
-                elif isinstance(last.get("content"), list):
-                    types = [b.get("type", "?") for b in last["content"]]
-                    event.last_message_preview = f"[{', '.join(types)}]"
         except (json.JSONDecodeError, KeyError):
             pass
     return event

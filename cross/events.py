@@ -17,6 +17,7 @@ class RequestEvent:
     last_message_role: str | None = None
     last_message_preview: str | None = None
     raw_body: dict[str, Any] | None = None
+    agent: str = ""
 
 
 @dataclass

@@ -354,8 +354,8 @@ class TestExtractRequestEvent:
         event = _extract_request_event("POST", "/v1/messages", body)
         assert len(event.last_message_preview) == 200
 
-    def test_list_content_with_types_preview(self):
-        """When user_intent is empty, preview shows content block types."""
+    def test_tool_result_only_no_preview(self):
+        """When last user message has only tool results, preview is None."""
         body = json.dumps(
             {
                 "messages": [
@@ -370,7 +370,7 @@ class TestExtractRequestEvent:
             }
         ).encode()
         event = _extract_request_event("POST", "/v1/messages", body)
-        assert event.last_message_preview == "[tool_result, image]"
+        assert event.last_message_preview is None
 
     def test_stream_defaults_to_false(self):
         body = json.dumps({"model": "claude-3", "messages": []}).encode()
@@ -398,11 +398,11 @@ class TestExtractRequestEvent:
         ).encode()
         event = _extract_request_event("POST", "/v1/messages", body)
         assert event.last_message_role == "assistant"
-        # _extract_user_intent gets text from the last message (the assistant one)
-        assert event.last_message_preview == "Hi there"
+        # _extract_user_intent searches backwards for the last user message
+        assert event.last_message_preview == "Hello"
 
-    def test_system_reminder_content_shows_types_fallback(self):
-        """When all text blocks are system-reminders, falls back to type list."""
+    def test_system_reminder_only_no_preview(self):
+        """When all text blocks are system-reminders, preview is None."""
         body = json.dumps(
             {
                 "messages": [
@@ -416,8 +416,7 @@ class TestExtractRequestEvent:
             }
         ).encode()
         event = _extract_request_event("POST", "/v1/messages", body)
-        # _extract_user_intent returns "", so fallback to types
-        assert event.last_message_preview == "[text]"
+        assert event.last_message_preview is None
 
 
 # ============================================================

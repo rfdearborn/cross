@@ -269,13 +269,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     min-width: 80px;
     text-align: center;
   }
-  .badge-tool_use { background: #1f3a5f; color: var(--accent); }
+  .badge-tool_use { background: #2d333b; color: var(--text); }
   .badge-gate_allow { background: #1a3a2a; color: var(--green); }
   .badge-gate_block { background: #3d1f1f; color: var(--red); }
   .badge-gate_alert { background: #3d2f1f; color: var(--orange); }
   .badge-gate_escalate { background: #3d2f1f; color: var(--yellow); }
   .badge-sentinel { background: #2a1f3d; color: #bc8cff; }
-  .badge-request { background: #1f2a3d; color: var(--text-dim); }
+  .badge-request { background: #1f2a3d; color: var(--accent); }
+  .badge-text { background: #2d333b; color: var(--text); }
+  .event-row .agent {
+    color: var(--text-dim);
+    font-size: 12px;
+    flex-shrink: 0;
+    width: 80px;
+  }
   .event-row .detail {
     color: var(--text);
     white-space: nowrap;
@@ -373,39 +380,58 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (t === "GateDecisionEvent") return "badge-gate_" + (ev.action || "allow");
     if (t === "SentinelReviewEvent") return "badge-sentinel";
     if (t === "RequestEvent") return "badge-request";
+    if (t === "TextEvent") return "badge-text";
     return "";
   }
 
   function badgeLabel(ev) {
     const t = ev.event_type;
-    if (t === "ToolUseEvent") return "tool_use";
+    if (t === "ToolUseEvent") return "tool call";
     if (t === "GateDecisionEvent") return "gate:" + (ev.action || "?");
     if (t === "SentinelReviewEvent") return "sentinel";
     if (t === "RequestEvent") return "request";
+    if (t === "TextEvent") return "response";
     return t.replace("Event", "").toLowerCase();
   }
 
   function detailText(ev) {
     const t = ev.event_type;
     if (t === "ToolUseEvent") {
-      let s = ev.name || "";
-      if (ev.input && ev.input.command) s += ": " + ev.input.command;
-      else if (ev.input && ev.input.file_path) s += ": " + ev.input.file_path;
-      return s;
+      var name = ev.name || "unknown";
+      var detail = "";
+      if (ev.input && ev.input.command) detail = ev.input.command;
+      else if (ev.input && ev.input.file_path) detail = ev.input.file_path;
+      else if (ev.input && ev.input.pattern) detail = ev.input.pattern;
+      else if (ev.input) {
+        var s = JSON.stringify(ev.input);
+        if (s !== "{}") detail = s;
+      }
+      return detail ? name + ": " + detail : name;
     }
     if (t === "GateDecisionEvent") return (ev.tool_name || "") + (ev.reason ? " — " + ev.reason : "");
     if (t === "SentinelReviewEvent") return ev.summary || ev.concerns || "";
-    if (t === "RequestEvent") return (ev.method || "") + " " + (ev.path || "") + " model=" + (ev.model || "?");
+    if (t === "RequestEvent") return ev.last_message_preview || (ev.model || "");
+    if (t === "TextEvent") return ev.text || "";
     return "";
+  }
+
+  // Propagate agent label from request events to subsequent events
+  let currentAgent = "";
+
+  function agentLabel(ev) {
+    if (ev.agent) { currentAgent = ev.agent; return ev.agent; }
+    return currentAgent;
   }
 
   function addEventRow(ev) {
     if (feedEmpty) feedEmpty.remove();
     const full = detailText(ev);
+    var agent = agentLabel(ev);
     const row = document.createElement("div");
     row.className = "event-row";
     row.innerHTML =
       '<span class="time">' + formatTime(ev.ts || Date.now()/1000) + '</span>'
+      + '<span class="agent">' + escHtml(agent) + '</span>'
       + '<span class="badge ' + badgeClass(ev) + '">' + badgeLabel(ev) + '</span>'
       + '<span class="detail">' + escHtml(truncate(full, 120)) + '</span>';
     if (full.length > 120) {
@@ -453,7 +479,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     } catch(e) {}
   }
 
+  // Events not worth showing in the feed
+  const HIDDEN_EVENTS = new Set(["MessageDeltaEvent", "MessageStartEvent"]);
+
+  let lastRequestPreview = "";
+
+  function shouldHide(ev) {
+    if (HIDDEN_EVENTS.has(ev.event_type)) return true;
+    // Hide denylist allows (pass-through noise), but show LLM gate allows (reviewed)
+    if (ev.event_type === "GateDecisionEvent" && ev.action === "allow" && ev.evaluator === "denylist") return true;
+    if (ev.event_type === "RequestEvent") {
+      if (!ev.last_message_preview) return true;
+      if (ev.last_message_preview === lastRequestPreview) return true;
+      lastRequestPreview = ev.last_message_preview;
+    }
+    return false;
+  }
+
   function handleEvent(ev) {
+    if (shouldHide(ev)) return;
     addEventRow(ev);
     if (ev.event_type === "GateDecisionEvent") {
       if (ev.action === "escalate") {
@@ -519,7 +563,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // Initial load: fetch existing events and pending
   fetch("/cross/api/events").then(function(r) { return r.json(); }).then(function(events) {
-    for (const ev of events) { addEventRow(ev); }
+    for (const ev of events) {
+      if (!shouldHide(ev)) addEventRow(ev);
+    }
   }).catch(function() {});
 
   fetch("/cross/api/pending").then(function(r) { return r.json(); }).then(function(pending) {
