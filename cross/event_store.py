@@ -19,7 +19,12 @@ from cross.events import CrossEvent
 logger = logging.getLogger("cross.event_store")
 
 _MAX_EVENTS = 100
-_DEFAULT_PATH = os.path.join(os.path.expanduser("~/.cross"), "events.jsonl")
+
+
+def _default_path() -> str:
+    from cross.config import settings
+
+    return os.path.join(os.path.expanduser(settings.config_dir), "events.jsonl")
 
 
 def event_to_dict(event: CrossEvent) -> dict[str, Any]:
@@ -35,7 +40,9 @@ def event_to_dict(event: CrossEvent) -> dict[str, Any]:
 class EventStore:
     """Bounded, JSONL-persisted event buffer."""
 
-    def __init__(self, path: str = _DEFAULT_PATH, max_events: int = _MAX_EVENTS):
+    def __init__(self, path: str | None = None, max_events: int = _MAX_EVENTS):
+        if path is None:
+            path = _default_path()
         self._max_events = max_events
         self._path = path
         self._events: deque[dict[str, Any]] = deque(maxlen=max_events)

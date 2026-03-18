@@ -339,12 +339,16 @@ async def _complete_cli(
     if model_flag:
         cli_args = [cmd, "--model", model_flag, "-p", prompt]
 
+    # Run from cross config dir so Claude Code session state accumulates there
+    cross_dir = os.path.expanduser(cross_settings.config_dir)
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *cli_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            cwd=cross_dir,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
 

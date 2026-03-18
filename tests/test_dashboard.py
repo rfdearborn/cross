@@ -21,8 +21,8 @@ from cross.plugins.dashboard import DashboardPlugin
 def _isolate_events_file(tmp_path, monkeypatch):
     """Ensure tests don't read/write the real events file."""
     monkeypatch.setattr(
-        "cross.event_store._DEFAULT_PATH",
-        str(tmp_path / "events.jsonl"),
+        "cross.event_store._default_path",
+        lambda: str(tmp_path / "events.jsonl"),
     )
 
 

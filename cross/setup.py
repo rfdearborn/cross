@@ -331,7 +331,9 @@ def run_setup(
     }
 
     if cross_dir is None:
-        cross_dir = Path.home() / ".cross"
+        from cross.config import settings
+
+        cross_dir = Path(settings.config_dir).expanduser()
 
     result["config_dir"] = str(cross_dir)
 

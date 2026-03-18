@@ -273,7 +273,7 @@ def _run_pending(args) -> int:
     return 0
 
 
-_PID_FILE = os.path.join(os.path.expanduser("~/.cross"), "daemon.pid")
+_PID_FILE = os.path.join(os.path.expanduser(settings.config_dir), "daemon.pid")
 
 
 def _write_pid():

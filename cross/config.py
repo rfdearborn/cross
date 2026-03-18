@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    config_dir: str = "~/.cross"
     anthropic_base_url: str = "https://api.anthropic.com"
     listen_host: str = "127.0.0.1"
     listen_port: int = 2767
