@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     listen_host: str = "127.0.0.1"
     listen_port: int = 2767
     log_file: str = "data/cross.log"
+    cli_strip_anthropic_api_key: bool = True  # strip ANTHROPIC_API_KEY from claude -p env (workaround for CC#33996)
 
     # Slack
     slack_bot_token: str = ""

@@ -306,7 +306,17 @@ async def _complete_cli(
     cmd = config.model_id  # e.g. "claude"
 
     # Build a clean env: strip CROSS_* vars, point at real Anthropic API
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CROSS_")}
+    # to avoid recursive proxying through cross.
+    #
+    # By default, also strip ANTHROPIC_API_KEY so claude -p uses the
+    # user's Max/Pro subscription instead of making billed API calls.
+    # Claude Code headless mode has a bug where it uses the API key even
+    # when "use custom API key" is set to false in config.
+    # See: https://github.com/anthropics/claude-code/issues/33996
+    from cross.config import settings as cross_settings
+
+    strip_keys = {"ANTHROPIC_API_KEY"} if cross_settings.cli_strip_anthropic_api_key else set()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CROSS_") and k not in strip_keys}
     env["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
 
     logger.debug(f"CLI invoke: {cmd} -p (prompt length {len(prompt)})")
