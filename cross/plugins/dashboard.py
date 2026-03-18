@@ -298,6 +298,53 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     text-overflow: unset;
     word-break: break-word;
   }
+  .event-row.hidden { display: none; }
+
+  /* Filter bar */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-bar input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--text);
+    outline: none;
+    width: 200px;
+  }
+  .filter-bar input:focus { border-color: var(--accent); }
+  .filter-bar input::placeholder { color: var(--text-dim); }
+  .filter-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .filter-pill.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .filter-pill:hover { opacity: 0.85; }
+  .filter-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 2px;
+  }
 </style>
 </head>
 <body>
@@ -319,6 +366,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </section>
   <section>
     <h2>Live Event Feed</h2>
+    <div class="filter-bar" id="filter-bar">
+      <input type="text" id="filter-search" placeholder="Search events...">
+      <div class="filter-sep"></div>
+      <span id="agent-filters"></span>
+      <div class="filter-sep"></div>
+      <span class="filter-pill active" data-filter="type" data-value="all">all</span>
+      <span class="filter-pill" data-filter="type" data-value="request">request</span>
+      <span class="filter-pill" data-filter="type" data-value="tool call">tool call</span>
+      <span class="filter-pill" data-filter="type" data-value="response">response</span>
+      <span class="filter-pill" data-filter="type" data-value="gate">gate</span>
+      <span class="filter-pill" data-filter="type" data-value="sentinel">sentinel</span>
+    </div>
     <div id="event-feed" class="event-feed"><p class="empty" id="feed-empty">Waiting for events...</p></div>
   </section>
 </main>
@@ -427,8 +486,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (feedEmpty) feedEmpty.remove();
     const full = detailText(ev);
     var agent = agentLabel(ev);
+    var label = badgeLabel(ev);
     const row = document.createElement("div");
     row.className = "event-row";
+    // Store filterable data on the element
+    row.dataset.type = label.startsWith("gate:") ? "gate" : label;
+    row.dataset.agent = agent;
+    row.dataset.search = (agent + " " + label + " " + full).toLowerCase();
     row.innerHTML =
       '<span class="time">' + formatTime(ev.ts || Date.now()/1000) + '</span>'
       + '<span class="agent">' + escHtml(agent) + '</span>'
@@ -441,11 +505,81 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         detail.textContent = isExpanded ? full : truncate(full, 120);
       });
     }
+    // Track agent for agent filter pills
+    if (agent && !knownAgents.has(agent)) {
+      knownAgents.add(agent);
+      addAgentPill(agent);
+    }
     eventFeed.prepend(row);
     while (eventFeed.children.length > MAX_FEED) {
       eventFeed.removeChild(eventFeed.lastChild);
     }
+    applyFiltersToRow(row);
   }
+
+  // --- Filtering ---
+  const knownAgents = new Set();
+  let activeTypeFilter = "all";
+  let activeAgentFilter = "all";
+  let searchQuery = "";
+
+  function addAgentPill(agent) {
+    var pill = document.createElement("span");
+    pill.className = "filter-pill";
+    pill.dataset.filter = "agent";
+    pill.dataset.value = agent;
+    pill.textContent = agent;
+    pill.addEventListener("click", function() { toggleFilter(pill); });
+    document.getElementById("agent-filters").appendChild(pill);
+  }
+
+  function applyFiltersToRow(row) {
+    var show = true;
+    if (activeTypeFilter !== "all" && row.dataset.type !== activeTypeFilter) show = false;
+    if (activeAgentFilter !== "all" && row.dataset.agent !== activeAgentFilter) show = false;
+    if (searchQuery && row.dataset.search.indexOf(searchQuery) < 0) show = false;
+    row.classList.toggle("hidden", !show);
+  }
+
+  function applyAllFilters() {
+    var rows = eventFeed.querySelectorAll(".event-row");
+    for (var i = 0; i < rows.length; i++) applyFiltersToRow(rows[i]);
+  }
+
+  function toggleFilter(pill) {
+    var group = pill.dataset.filter;
+    var value = pill.dataset.value;
+    // Deactivate siblings
+    document.querySelectorAll('.filter-pill[data-filter="' + group + '"]').forEach(function(p) {
+      p.classList.remove("active");
+    });
+    pill.classList.add("active");
+    if (group === "type") activeTypeFilter = value;
+    if (group === "agent") activeAgentFilter = value;
+    applyAllFilters();
+  }
+
+  // Wire up type filter pills
+  document.querySelectorAll('.filter-pill[data-filter="type"]').forEach(function(pill) {
+    pill.addEventListener("click", function() { toggleFilter(pill); });
+  });
+
+  // Wire up search
+  document.getElementById("filter-search").addEventListener("input", function(e) {
+    searchQuery = e.target.value.toLowerCase();
+    applyAllFilters();
+  });
+
+  // Add "all" agent pill
+  (function() {
+    var allPill = document.createElement("span");
+    allPill.className = "filter-pill active";
+    allPill.dataset.filter = "agent";
+    allPill.dataset.value = "all";
+    allPill.textContent = "all";
+    allPill.addEventListener("click", function() { toggleFilter(allPill); });
+    document.getElementById("agent-filters").appendChild(allPill);
+  })();
 
   // --- Browser Notifications ---
   const notifBtn = document.getElementById("notif-btn");
