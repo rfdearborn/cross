@@ -244,7 +244,7 @@ class TestRunSetupDefaultModel:
         mock_shell_rc.return_value = shell_rc
 
         # "" gate (default cli/claude, no key), "" sentinel, "" interval, N slack, Y wrappers
-        inputs = iter(["", "", "", "N", "Y"])
+        inputs = iter(["", "", "", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -282,7 +282,7 @@ class TestRunSetupAnthropicModel:
         cross_dir = tmp_path / ".cross"
 
         # anthropic model, "" sentinel (same), "" interval, N slack
-        inputs = iter(["anthropic/claude-haiku-4-5", "", "", "N"])
+        inputs = iter(["anthropic/claude-haiku-4-5", "", "", "N", "Y"])
         secrets = iter(["sk-ant-test-key"])
 
         output = []
@@ -308,7 +308,7 @@ class TestRunSetupOpenAIModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["openai/gpt-5-mini", "", "", "N"])
+        inputs = iter(["openai/gpt-5-mini", "", "", "N", "Y"])
         secrets = iter(["sk-openai-test"])
 
         output = []
@@ -334,7 +334,7 @@ class TestRunSetupOllamaModel:
         cross_dir = tmp_path / ".cross"
 
         # ollama gate, "" sentinel (same), "" interval, N slack
-        inputs = iter(["ollama/llama3.1:8b", "", "", "N"])
+        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -355,7 +355,7 @@ class TestRunSetupOllamaModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["ollama/llama3.1:8b", "", "", "N"])
+        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -381,7 +381,7 @@ class TestRunSetupSeparateSentinel:
         cross_dir = tmp_path / ".cross"
 
         # cli/claude gate, google sentinel (different provider, asks for key), 120s, N slack
-        inputs = iter(["", "google/gemini-2.5-flash", "120", "N"])
+        inputs = iter(["", "google/gemini-2.5-flash", "120", "N", "Y"])
         secrets = iter(["google-key"])
 
         output = []
@@ -407,7 +407,7 @@ class TestRunSetupSeparateSentinel:
         cross_dir = tmp_path / ".cross"
 
         # cli/claude gate, anthropic sentinel (different provider, asks for key), "" interval, N slack
-        inputs = iter(["", "anthropic/claude-haiku-4-5", "", "N"])
+        inputs = iter(["", "anthropic/claude-haiku-4-5", "", "N", "Y"])
         secrets = iter(["ant-key"])
 
         output = []
@@ -432,7 +432,7 @@ class TestRunSetupCustomInterval:
         cross_dir = tmp_path / ".cross"
 
         # default gate (cli/claude, no key prompt), "" sentinel (same), 300s interval, N slack
-        inputs = iter(["", "", "300", "N"])
+        inputs = iter(["", "", "300", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -452,7 +452,7 @@ class TestRunSetupCustomInterval:
         cross_dir = tmp_path / ".cross"
 
         # default gate (cli/claude, no key prompt), "" sentinel (same), "abc" interval, N slack
-        inputs = iter(["", "", "abc", "N"])
+        inputs = iter(["", "", "abc", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -475,7 +475,7 @@ class TestRunSetupNoneLLM:
         cross_dir = tmp_path / ".cross"
 
         # "none" skips sentinel + interval prompts entirely
-        inputs = iter(["none", "N"])
+        inputs = iter(["none", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -503,7 +503,7 @@ class TestRunSetupEmptyApiKey:
         cross_dir = tmp_path / ".cross"
 
         # Explicit google model, empty key, no env → disables LLM → skips sentinel
-        inputs = iter(["google/gemini-3-flash-preview", "N"])
+        inputs = iter(["google/gemini-3-flash-preview", "N", "Y"])
         secrets = iter([""])  # empty key
 
         output = []
@@ -526,7 +526,7 @@ class TestRunSetupEmptyApiKey:
         cross_dir = tmp_path / ".cross"
 
         # Explicit google model, empty key (env fallback), "" sentinel, "" interval, N slack
-        inputs = iter(["google/gemini-3-flash-preview", "", "", "N"])
+        inputs = iter(["google/gemini-3-flash-preview", "", "", "N", "Y"])
         secrets = iter([""])  # empty key
 
         output = []
@@ -552,7 +552,7 @@ class TestRunSetupSlack:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "y"])
+        inputs = iter(["none", "y", "Y"])
         secrets = iter(["xoxb-bot-token", "xapp-app-token"])
 
         output = []
@@ -573,7 +573,7 @@ class TestRunSetupSlack:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "y"])
+        inputs = iter(["none", "y", "Y"])
         secrets = iter(["", ""])
 
         output = []
@@ -600,7 +600,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "Y"])
+        inputs = iter(["none", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -624,7 +624,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text(f'# existing\n{SHELL_WRAPPER_HEADER}\nclaude() {{ cross wrap -- claude "$@"; }}\n')
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "Y"])
+        inputs = iter(["none", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -647,7 +647,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "n"])
+        inputs = iter(["none", "N", "n", "Y"])
 
         output = []
         result = run_setup(
@@ -666,7 +666,7 @@ class TestRunSetupShellWrappers:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "Y"])
+        inputs = iter(["none", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -688,7 +688,7 @@ class TestRunSetupDefaultRulesCopy:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N"])
+        inputs = iter(["none", "N", "Y"])
 
         output = []
         run_setup(
@@ -712,7 +712,7 @@ class TestRunSetupDefaultRulesCopy:
         existing_rules = rules_dir / "default.yaml"
         existing_rules.write_text("# my custom rules\n")
 
-        inputs = iter(["none", "N"])
+        inputs = iter(["none", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -735,7 +735,7 @@ class TestRunSetupCustomModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["google/gemini-2.5-flash", "", "", "N"])
+        inputs = iter(["google/gemini-2.5-flash", "", "", "N", "Y"])
         secrets = iter(["my-key"])
 
         output = []
@@ -762,7 +762,7 @@ class TestRunSetupClaudeModel:
         cross_dir = tmp_path / ".cross"
 
         # "claude" gate model → cli/claude, no key prompt, "" sentinel (same), "" interval, N slack
-        inputs = iter(["claude", "", "", "N"])
+        inputs = iter(["claude", "", "", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -786,7 +786,7 @@ class TestRunSetupClaudeModel:
         cross_dir = tmp_path / ".cross"
 
         # "cli/claude" gate model, no key prompt, "" sentinel (same), "" interval, N slack
-        inputs = iter(["cli/claude", "", "", "N"])
+        inputs = iter(["cli/claude", "", "", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -810,7 +810,7 @@ class TestRunSetupSummaryOutput:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "n"])
+        inputs = iter(["none", "N", "n", "Y"])
 
         output = []
         run_setup(

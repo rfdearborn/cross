@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # Native desktop notifications (macOS, via terminal-notifier)
     native_notifications_enabled: bool = False
 
+    # Auto-update
+    auto_update_enabled: bool = True
+    auto_update_interval_hours: int = 24
+
     # LLM sentinel — async periodic review of all activity
     llm_sentinel_enabled: bool = True
     llm_sentinel_model: str = "anthropic/claude-code/claude-opus-4-6"

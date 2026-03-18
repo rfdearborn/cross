@@ -482,6 +482,15 @@ async def on_startup():
             logger.warning(f"Slack failed to start: {e}")
             _slack = None
 
+    # Start auto-update background task
+    if settings.auto_update_enabled:
+        from cross.auto_update import run_update_loop
+        from cross.plugins.notifier import _notify as native_notify
+
+        notify_fn = native_notify if native_notifications_available() else None
+        asyncio.create_task(run_update_loop(settings.auto_update_interval_hours, notify_fn=notify_fn))
+        logger.info(f"Auto-update active (every {settings.auto_update_interval_hours}h)")
+
 
 async def on_shutdown():
     if _sentinel:

@@ -235,6 +235,7 @@ def _mock_settings(**overrides):
         "slack_app_token": "",
         "listen_port": 2767,
         "log_file": "/dev/null",
+        "auto_update_enabled": False,
     }
     defaults.update(overrides)
     mock = MagicMock()
