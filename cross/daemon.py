@@ -44,6 +44,99 @@ _session_ws: dict[str, WebSocket] = {}
 _project_cwds: dict[str, str] = {}
 # session_id -> initial message to inject after WS connects
 _pending_injects: dict[str, str] = {}
+# Agents seen via the gate API (not registered via cross wrap)
+_gate_agents: set[str] = set()
+
+
+def _detect_hooked_agents() -> set[str]:
+    """Detect agents that have the cross hook installed (monitored even before first call)."""
+    from pathlib import Path
+
+    hooked: set[str] = set()
+    # Check OpenClaw: if the gateway plist has the cross hook, it's monitored
+    openclaw_plist = Path.home() / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+    if openclaw_plist.exists():
+        try:
+            content = openclaw_plist.read_text()
+            if "openclaw_hook" in content:
+                hooked.add("openclaw")
+        except OSError:
+            pass
+    return hooked
+
+
+def _detect_running_agents() -> dict[str, list[int]]:
+    """Detect running agent processes. Returns {agent_name: [pids]}."""
+    import subprocess
+
+    # Pattern per agent — more specific than just the name to avoid false positives
+    agent_patterns = {
+        "claude": ["-x", "claude"],  # exact binary name match
+        "openclaw": ["-f", "openclaw-gateway"],  # runs as openclaw-gateway
+    }
+
+    own_pid = str(os.getpid())
+    result: dict[str, list[int]] = {}
+    for agent, pgrep_args in agent_patterns.items():
+        try:
+            proc = subprocess.run(
+                ["pgrep"] + pgrep_args,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                pids = [int(p) for p in proc.stdout.strip().splitlines() if p != own_pid]
+                if pids:
+                    result[agent] = pids
+        except (OSError, ValueError):
+            continue
+    return result
+
+
+def get_agent_status() -> dict[str, Any]:
+    """Return monitoring coverage: monitored sessions and unmonitored agents."""
+    running = _detect_running_agents()
+    running_agent_names = set(running.keys())
+
+    # Clean up stale sessions (process no longer running)
+    stale = [sid for sid, s in _sessions.items() if s.get("agent") not in running_agent_names]
+    for sid in stale:
+        del _sessions[sid]
+
+    # Clean up stale gate agents (process no longer running)
+    _gate_agents.intersection_update(running_agent_names | {s.get("agent") for s in _sessions.values()})
+
+    monitored = []
+    monitored_pids: set[int] = set()
+    for session in _sessions.values():
+        agent = session.get("agent", "unknown")
+        project = session.get("project", "")
+        label = f"{agent} - {project}" if project else agent
+        pid = session.get("pid")
+        monitored.append({"agent": agent, "project": project, "label": label})
+        if pid:
+            monitored_pids.add(int(pid))
+
+    monitored_agents = {s.get("agent") for s in _sessions.values()} | _gate_agents
+
+    # Add gate-only agents (e.g. OpenClaw) to monitored list
+    for agent in _gate_agents:
+        if agent not in {s.get("agent") for s in _sessions.values()}:
+            monitored.append({"agent": agent, "project": "", "label": agent})
+
+    unmonitored = []
+    for agent, pids in running.items():
+        # Filter out PIDs we know are monitored
+        unmonitored_pids = [p for p in pids if p not in monitored_pids]
+        if unmonitored_pids and agent not in monitored_agents:
+            unmonitored.append({"agent": agent, "count": len(unmonitored_pids)})
+
+    return {
+        "monitored": monitored,
+        "unmonitored": unmonitored,
+        "monitored_count": len(monitored),
+        "unmonitored_count": len(unmonitored),
+    }
 
 
 def get_active_agent_label() -> str:
@@ -198,6 +291,10 @@ async def api_gate(request: Request) -> JSONResponse:
     session_id = data.get("session_id", "")
     user_intent = data.get("user_intent", "")
     cwd = data.get("cwd", "")
+
+    # Track this agent as monitored via gate API
+    if agent and agent != "unknown":
+        _gate_agents.add(agent)
 
     if not _gate_chain:
         return JSONResponse({"action": "ALLOW", "reason": "No gate chain configured"})
@@ -400,6 +497,12 @@ async def on_startup():
     event_bus.subscribe(_dashboard.handle_event)
     logger.info("Dashboard active at /cross/dashboard")
 
+    # Pre-populate monitored agents from hook configuration
+    hooked = _detect_hooked_agents()
+    _gate_agents.update(hooked)
+    if hooked:
+        logger.info(f"Detected hooked agents: {', '.join(hooked)}")
+
     # Register native desktop notifications (macOS)
     if native_notifications_available():
         set_browser_check(lambda: len(_dashboard._ws_clients) > 0)
@@ -532,10 +635,16 @@ async def favicon(request: Request) -> Response:
     return Response(status_code=204)
 
 
+async def api_status(request: Request) -> JSONResponse:
+    """GET /cross/api/status — monitoring coverage."""
+    return JSONResponse(get_agent_status())
+
+
 _dashboard_routes = [
     Route("/", root_redirect, methods=["GET"]),
     Route("/favicon.ico", favicon, methods=["GET"]),
     Route("/cross/dashboard", dashboard_page, methods=["GET"]),
+    Route("/cross/api/status", api_status, methods=["GET"]),
     Route("/cross/api/events", api_events, methods=["GET"]),
     Route("/cross/api/pending", api_pending, methods=["GET"]),
     Route("/cross/api/pending/{tool_use_id}/resolve", api_resolve_pending, methods=["POST"]),

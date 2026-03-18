@@ -234,6 +234,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .btn-approve { background: var(--green); color: #fff; }
   .btn-deny { background: var(--red); color: #fff; }
 
+  /* Agent status bar */
+  .agent-status {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 8px 0;
+    font-size: 13px;
+  }
+  .agent-status .status-summary {
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .agent-status .agent-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  .agent-chip.monitored { color: var(--green); border-color: var(--green); }
+  .agent-chip.unmonitored { color: var(--text-dim); border-color: var(--border); }
+  .agent-chip .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    display: inline-block;
+  }
+  .agent-chip.monitored .dot { background: var(--green); }
+  .agent-chip.unmonitored .dot { background: var(--text-dim); }
+
   /* Event feed */
   .event-feed {
     display: flex;
@@ -360,6 +391,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </span>
 </header>
 <main>
+  <section id="status-section">
+    <h2>Agents</h2>
+    <div id="agent-status" class="agent-status"></div>
+  </section>
   <section id="pending-section">
     <h2>Pending Approvals</h2>
     <div id="pending-list"><p class="empty">No pending approvals</p></div>
@@ -694,6 +729,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try { handleEvent(JSON.parse(msg.data)); } catch(e) {}
     };
   }
+
+  // --- Agent Status ---
+  const agentStatusEl = document.getElementById("agent-status");
+
+  function renderStatus(data) {
+    var html = "";
+    for (var i = 0; i < data.monitored.length; i++) {
+      var m = data.monitored[i];
+      html += '<span class="agent-chip monitored"><span class="dot"></span>' + escHtml(m.label) + '</span>';
+    }
+    for (var i = 0; i < data.unmonitored.length; i++) {
+      var u = data.unmonitored[i];
+      html += '<span class="agent-chip unmonitored"><span class="dot"></span>' + escHtml(u.agent) + '</span>';
+    }
+    if (!data.monitored.length && !data.unmonitored.length) {
+      html = '<span class="status-summary">No agents detected</span>';
+    }
+    agentStatusEl.innerHTML = html;
+  }
+
+  function refreshStatus() {
+    fetch("/cross/api/status").then(function(r) { return r.json(); }).then(renderStatus).catch(function() {});
+  }
+  refreshStatus();
+  setInterval(refreshStatus, 10000);
 
   // Initial load: fetch existing events and pending
   fetch("/cross/api/events").then(function(r) { return r.json(); }).then(function(events) {
