@@ -682,9 +682,10 @@ class TestRunSetupShellWrappers:
 
 
 @patch("cross.setup.sys")
-class TestRunSetupDefaultRulesCopy:
+class TestRunSetupDefaultRules:
     @patch("cross.setup._detect_agents", return_value=[])
-    def test_copies_default_rules(self, mock_agents, mock_sys, tmp_path):
+    def test_no_default_yaml_copied(self, mock_agents, mock_sys, tmp_path):
+        """Default rules are loaded from the package, not copied to rules.d."""
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
@@ -699,31 +700,31 @@ class TestRunSetupDefaultRulesCopy:
         )
 
         rules_file = cross_dir / "rules.d" / "default.yaml"
-        assert rules_file.exists()
-        content = rules_file.read_text()
-        assert "Cross Default Denylist Rules" in content
+        assert not rules_file.exists()
 
     @patch("cross.setup._detect_agents", return_value=[])
-    def test_does_not_overwrite_existing_rules(self, mock_agents, mock_sys, tmp_path):
+    def test_stale_default_yaml_removed(self, mock_agents, mock_sys, tmp_path):
+        """Running setup removes stale default.yaml from prior installations."""
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
         rules_dir = cross_dir / "rules.d"
         rules_dir.mkdir(parents=True)
-        existing_rules = rules_dir / "default.yaml"
-        existing_rules.write_text("# my custom rules\n")
+        stale = rules_dir / "default.yaml"
+        stale.write_text("# old defaults\n")
 
         inputs = iter(["none", "N", "Y"])
 
         output = []
-        result = run_setup(
+        run_setup(
             cross_dir=cross_dir,
             input_fn=lambda p: next(inputs),
             getpass_fn=lambda p: "",
             print_fn=output.append,
         )
 
-        assert result["rules_copied"] is False
-        assert existing_rules.read_text() == "# my custom rules\n"
+        assert not stale.exists()
+        full_output = "\n".join(output)
+        assert "stale" in full_output.lower()
 
 
 @patch("cross.setup.sys")

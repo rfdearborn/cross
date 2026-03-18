@@ -464,17 +464,20 @@ def run_setup(
             slack_app_token = None
     print_fn("")
 
-    # ── Step 5: Create config directory and write files ──
+    # ── Step 5: Create config directory ──
     rules_dir = cross_dir / "rules.d"
     rules_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy default rules if not already present
-    default_rules_dest = rules_dir / "default.yaml"
-    if not default_rules_dest.exists():
-        default_rules_src = Path(__file__).parent / "rules" / "default.yaml"
-        if default_rules_src.exists():
-            shutil.copy2(default_rules_src, default_rules_dest)
-            result["rules_copied"] = True
+    # Default rules are loaded from the package at runtime — no copy needed.
+    # User overrides and additions go in rules.d/.
+    # Remove stale default.yaml copies from prior installations.
+    stale_defaults = rules_dir / "default.yaml"
+    if stale_defaults.exists():
+        try:
+            stale_defaults.unlink()
+            print_fn(f"Removed stale {stale_defaults} (defaults now loaded from package)")
+        except OSError:
+            pass
 
     env_file = cross_dir / ".env"
 
