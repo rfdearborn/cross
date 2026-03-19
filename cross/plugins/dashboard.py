@@ -683,13 +683,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // --- Browser Notifications ---
   const notifBtn = document.getElementById("notif-btn");
+  let notifMuted = localStorage.getItem("cross-notif-muted") === "1";
+
   function updateNotifBtn() {
     if (!("Notification" in window)) { notifBtn.style.display = "none"; return; }
     notifBtn.style.display = "";
     var perm = Notification.permission;
-    if (perm === "granted") {
+    if (perm === "granted" && !notifMuted) {
       notifBtn.textContent = "Notifications on";
       notifBtn.className = "notif-btn granted";
+    } else if (perm === "granted" && notifMuted) {
+      notifBtn.textContent = "Notifications off";
+      notifBtn.className = "notif-btn";
     } else if (perm === "denied") {
       notifBtn.textContent = "Notifications blocked";
       notifBtn.className = "notif-btn denied";
@@ -701,6 +706,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   window.requestNotifPermission = function() {
     if (!("Notification" in window)) return;
     if (Notification.permission === "denied") return;
+    if (Notification.permission === "granted") {
+      // Toggle mute
+      notifMuted = !notifMuted;
+      localStorage.setItem("cross-notif-muted", notifMuted ? "1" : "0");
+      updateNotifBtn();
+      return;
+    }
     Notification.requestPermission().then(updateNotifBtn);
   };
   updateNotifBtn();
@@ -714,6 +726,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     modal.style.display = "flex";
     document.getElementById("notif-modal-enable").addEventListener("click", function() {
       modal.style.display = "none";
+      notifMuted = false;
+      localStorage.setItem("cross-notif-muted", "0");
       Notification.requestPermission().then(updateNotifBtn);
     });
     document.getElementById("notif-modal-skip").addEventListener("click", function() {
@@ -723,6 +737,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   })();
 
   function showNotification(title, body, tag) {
+    if (notifMuted) return;
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     try {
       var n = new Notification(title, {body: body, tag: tag || "", icon: ""});
