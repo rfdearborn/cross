@@ -73,14 +73,14 @@ class TestDestructiveCommands:
         assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
-    async def test_rm_rf_node_modules_allowed(self):
+    async def test_rm_rf_node_modules_escalates(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf node_modules"}))
-        assert r.action == Action.ALLOW
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
-    async def test_rm_rf_build_dir_allowed(self):
+    async def test_rm_rf_build_dir_escalates(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf build/"}))
-        assert r.action == Action.ALLOW
+        assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
     async def test_safe_rm_allowed(self):
@@ -358,10 +358,10 @@ class TestDestructiveRmExpanded:
         assert r.action == Action.ESCALATE
 
     @pytest.mark.anyio
-    async def test_rm_rf_subdir_allowed(self):
-        """rm -rf on a non-dangerous path is fine."""
+    async def test_rm_rf_subdir_escalates(self):
+        """All rm -rf commands escalate to LLM review."""
         r = await self.gate.evaluate(_req("Bash", {"command": "rm -rf dist/"}))
-        assert r.action == Action.ALLOW
+        assert r.action == Action.ESCALATE
 
 
 class TestDestructiveAlt:

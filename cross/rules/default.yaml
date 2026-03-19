@@ -31,22 +31,21 @@ rules:
     tools: [Bash, exec]
     field: command
     action: escalate
-    description: Recursive forced deletes targeting root, home, or cwd
+    description: Recursive forced deletes (any target — LLM reviews context)
     patterns:
-      # rm -rf / rm -fr (merged flags)
-      - 'rm\s+-\w*r\w*f\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*f\w*r\w*\s+{{dangerous_path}}'
-      # rm -r -f / rm -f -r (split flags)
-      - 'rm\s+-\w*r\w*\s+-\w*f\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*f\w*\s+-\w*r\w*\s+{{dangerous_path}}'
-      # rm --recursive --force (long flags)
-      - 'rm\s+--recursive\s+--force\s+{{dangerous_path}}'
-      - 'rm\s+--force\s+--recursive\s+{{dangerous_path}}'
+      # rm with both -r and -f in any combination (short flags)
+      - '\brm\s+-\w*r\w*f'
+      - '\brm\s+-\w*f\w*r'
+      - '\brm\s+-\w*r\w*\s+-\w*f'
+      - '\brm\s+-\w*f\w*\s+-\w*r'
+      # Long flags
+      - '\brm\s+--recursive\b.*--force\b'
+      - '\brm\s+--force\b.*--recursive\b'
       # Mixed long+short
-      - 'rm\s+--recursive\s+-\w*f\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*f\w*\s+--recursive\s+{{dangerous_path}}'
-      - 'rm\s+--force\s+-\w*r\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*r\w*\s+--force\s+{{dangerous_path}}'
+      - '\brm\s+--recursive\b.*-\w*f'
+      - '\brm\s+-\w*f\w*\s+--recursive\b'
+      - '\brm\s+--force\b.*-\w*r'
+      - '\brm\s+-\w*r\w*\s+--force\b'
 
   - name: rm-outside-project
     tools: [Bash, exec]
