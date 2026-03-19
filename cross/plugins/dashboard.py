@@ -376,9 +376,74 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     background: var(--border);
     margin: 0 2px;
   }
+
+  /* Notification modal */
+  .notif-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .notif-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    max-width: 400px;
+    text-align: center;
+  }
+  .notif-modal h3 {
+    font-size: 18px;
+    margin-bottom: 12px;
+  }
+  .notif-modal p {
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 20px;
+  }
+  .notif-modal .btn-row {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+  }
+  .notif-modal .btn-enable {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .notif-modal .btn-enable:hover { opacity: 0.85; }
+  .notif-modal .btn-skip {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 24px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .notif-modal .btn-skip:hover { opacity: 0.85; }
 </style>
 </head>
 <body>
+<div class="notif-modal-overlay" id="notif-modal" style="display:none">
+  <div class="notif-modal">
+    <h3>Enable notifications</h3>
+    <p>Get notified when an agent needs approval or the sentinel flags something.</p>
+    <div class="btn-row">
+      <button class="btn-enable" id="notif-modal-enable">Enable</button>
+      <button class="btn-skip" id="notif-modal-skip">Not now</button>
+    </div>
+  </div>
+</div>
 <header>
   <h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none"
     style="display:block"><path d="M12 2v20M2 12h20"
@@ -639,6 +704,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     Notification.requestPermission().then(updateNotifBtn);
   };
   updateNotifBtn();
+
+  // Show modal on first visit if notifications not yet decided
+  (function() {
+    var modal = document.getElementById("notif-modal");
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "default") return;
+    if (localStorage.getItem("cross-notif-dismissed")) return;
+    modal.style.display = "flex";
+    document.getElementById("notif-modal-enable").addEventListener("click", function() {
+      modal.style.display = "none";
+      Notification.requestPermission().then(updateNotifBtn);
+    });
+    document.getElementById("notif-modal-skip").addEventListener("click", function() {
+      modal.style.display = "none";
+      localStorage.setItem("cross-notif-dismissed", "1");
+    });
+  })();
 
   function showNotification(title, body, tag) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
