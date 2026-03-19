@@ -103,6 +103,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cross dashboard</title>
+<link rel="icon" type="image/svg+xml"
+  href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'
+  viewBox='0 0 24 24'><path d='M12 2v20M2 12h20'
+  stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
 <style>
   :root {
     --bg: #0d1117;
