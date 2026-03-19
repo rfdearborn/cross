@@ -327,6 +327,8 @@ async def api_gate(request: Request) -> JSONResponse:
             tool_use_id=tool_use_id,
             input=tool_input if isinstance(tool_input, dict) else {},
             script_contents=script_contents or None,
+            agent=agent,
+            session_id=session_id,
         )
     )
     await event_bus.publish(
@@ -340,6 +342,8 @@ async def api_gate(request: Request) -> JSONResponse:
             confidence=result.confidence,
             tool_input=tool_input if isinstance(tool_input, dict) else {},
             script_contents=script_contents or None,
+            agent=agent,
+            session_id=session_id,
         )
     )
 

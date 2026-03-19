@@ -240,10 +240,37 @@ class SlackPlugin:
         sentinel reviews (alert/escalate/halt), and errors. Full conversation
         relay is handled by the JSONL logger, not Slack.
         """
+        # Route to the correct thread based on event source
+        event_agent = getattr(event, "agent", "")
+        event_session = getattr(event, "session_id", "")
+
         with self._lock:
-            if self._threads:
-                # Post to the most recently active session's thread
-                # TODO: correlate proxy events to specific sessions
+            if event_session and event_session in self._threads:
+                # Event has a specific session — use its thread
+                session_id = event_session
+                thread_info = self._threads[session_id]
+            elif event_agent and event_agent not in ("", "unknown"):
+                # External agent (e.g. OpenClaw) — daily thread
+                from datetime import date
+
+                today = date.today().isoformat()
+                agent_key = f"ext-{event_agent}-{today}"
+                thread_info = self._threads.get(agent_key)
+                session_id = agent_key
+                if not thread_info:
+                    try:
+                        channel_id = self._ensure_channel(event_agent)
+                        resp = self._web.chat_postMessage(
+                            channel=channel_id,
+                            text=f"🔌 *{event_agent}* — {today}",
+                        )
+                        thread_info = (channel_id, resp["ts"])
+                        self._threads[agent_key] = thread_info
+                    except Exception as e:
+                        logger.warning(f"Failed to create thread for {event_agent}: {e}")
+                        thread_info = None
+            elif self._threads:
+                # Fall back to most recently active session
                 session_id = list(self._threads.keys())[-1]
                 thread_info = self._threads.get(session_id)
             else:

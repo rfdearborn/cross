@@ -28,6 +28,8 @@ class ToolUseEvent:
     tool_use_id: str
     input: dict[str, Any] = field(default_factory=dict)
     script_contents: dict[str, str] | None = None  # resolved script file contents (path -> source)
+    agent: str = ""  # source agent (for routing notifications)
+    session_id: str = ""
 
 
 @dataclass
@@ -75,6 +77,8 @@ class GateDecisionEvent:
     confidence: float = 1.0
     tool_input: dict[str, Any] | None = None  # included so sentinel can see what was blocked
     script_contents: dict[str, str] | None = None  # resolved script file contents (path -> source)
+    agent: str = ""  # source agent (for routing notifications)
+    session_id: str = ""
 
 
 @dataclass
