@@ -306,7 +306,7 @@ def _find_pid_by_port(port: int) -> int | None:
 
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f"tcp:{port}"],
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
         )
