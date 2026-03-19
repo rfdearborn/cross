@@ -449,19 +449,42 @@ def run_setup(
         print_fn("")
 
     # ── Step 5: Slack ──
+    # Preserve existing Slack tokens if already configured
+    existing_bot = None
+    existing_app = None
+    existing_env = cross_dir / ".env"
+    if existing_env.exists():
+        for line in existing_env.read_text().splitlines():
+            if line.startswith("CROSS_SLACK_BOT_TOKEN="):
+                existing_bot = line.split("=", 1)[1].strip()
+            elif line.startswith("CROSS_SLACK_APP_TOKEN="):
+                existing_app = line.split("=", 1)[1].strip()
+
     slack_bot_token = None
     slack_app_token = None
-    slack_answer = input_fn("Would you like to configure Slack notifications? (y/N): ").strip().lower()
-    if slack_answer in ("y", "yes"):
-        slack_bot_token = _strip_ansi(getpass_fn("Enter Slack bot token (xoxb-...): ").strip())
-        slack_app_token = _strip_ansi(getpass_fn("Enter Slack app token (xapp-...): ").strip())
-        if slack_bot_token and slack_app_token:
+
+    if existing_bot and existing_app:
+        keep_answer = input_fn("Slack is already configured. Keep existing config? (Y/n): ").strip().lower()
+        if keep_answer not in ("n", "no"):
+            slack_bot_token = existing_bot
+            slack_app_token = existing_app
             result["slack_configured"] = True
-            print_fn("Slack configured.")
+            print_fn("Keeping existing Slack configuration.")
         else:
-            print_fn("Slack tokens not provided, skipping.")
-            slack_bot_token = None
-            slack_app_token = None
+            existing_bot = None
+
+    if not (existing_bot and existing_app):
+        slack_answer = input_fn("Would you like to configure Slack notifications? (y/N): ").strip().lower()
+        if slack_answer in ("y", "yes"):
+            slack_bot_token = _strip_ansi(getpass_fn("Enter Slack bot token (xoxb-...): ").strip())
+            slack_app_token = _strip_ansi(getpass_fn("Enter Slack app token (xapp-...): ").strip())
+            if slack_bot_token and slack_app_token:
+                result["slack_configured"] = True
+                print_fn("Slack configured.")
+            else:
+                print_fn("Slack tokens not provided, skipping.")
+                slack_bot_token = None
+                slack_app_token = None
     print_fn("")
 
     # ── Step 5: Create config directory ──

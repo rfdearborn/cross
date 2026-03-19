@@ -590,6 +590,58 @@ class TestRunSetupSlack:
 
 
 @patch("cross.setup.sys")
+class TestRunSetupSlackPreservation:
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_existing_slack_preserved_on_rerun(self, mock_agents, mock_sys, tmp_path):
+        """Re-running setup preserves Slack tokens when user says Y."""
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        cross_dir.mkdir(parents=True)
+        (cross_dir / ".env").write_text("CROSS_SLACK_BOT_TOKEN=xoxb-existing\nCROSS_SLACK_APP_TOKEN=xapp-existing\n")
+
+        # "none" gate, "Y" keep slack, "Y" auto-update
+        inputs = iter(["none", "Y", "Y"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result["slack_configured"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_SLACK_BOT_TOKEN=xoxb-existing" in env_content
+        assert "CROSS_SLACK_APP_TOKEN=xapp-existing" in env_content
+
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_existing_slack_replaced_on_rerun(self, mock_agents, mock_sys, tmp_path):
+        """Re-running setup allows replacing Slack tokens."""
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        cross_dir.mkdir(parents=True)
+        (cross_dir / ".env").write_text("CROSS_SLACK_BOT_TOKEN=xoxb-old\nCROSS_SLACK_APP_TOKEN=xapp-old\n")
+
+        # "none" gate, "n" don't keep, "y" configure new, "Y" auto-update
+        inputs = iter(["none", "n", "y", "Y"])
+        secrets = iter(["xoxb-new", "xapp-new"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: next(secrets),
+            print_fn=output.append,
+        )
+
+        assert result["slack_configured"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_SLACK_BOT_TOKEN=xoxb-new" in env_content
+        assert "CROSS_SLACK_APP_TOKEN=xapp-new" in env_content
+
+
+@patch("cross.setup.sys")
 class TestRunSetupShellWrappers:
     @patch("cross.setup._detect_shell_rc")
     @patch("cross.setup._detect_agents", return_value=["claude", "codex"])
