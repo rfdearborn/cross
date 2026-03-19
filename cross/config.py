@@ -54,7 +54,11 @@ class Settings(BaseSettings):
     llm_sentinel_interval_seconds: int = 60  # how often the sentinel reviews recent activity
 
     # Env file load order (earlier files take precedence)
-    model_config = {"env_prefix": "CROSS_", "env_file": ("~/.cross/local.env", "~/.cross/.env", ".env")}
+    model_config = {
+        "env_prefix": "CROSS_",
+        "env_file": ("~/.cross/local.env", "~/.cross/.env"),
+        "extra": "ignore",
+    }
 
 
 settings = Settings()
