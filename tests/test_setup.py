@@ -879,6 +879,144 @@ class TestRunSetupSummaryOutput:
         assert "Dashboard" in full_output or "dashboard" in full_output
 
 
+class TestInstallClaudeCodeHook:
+    """Tests for _install_claude_code_hook and _uninstall_claude_code_hook."""
+
+    def test_installs_hook_in_empty_settings(self, tmp_path):
+        from cross.setup import _install_claude_code_hook
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("{}")
+        output = []
+        with patch("cross.setup._CLAUDE_SETTINGS", settings_file):
+            result = _install_claude_code_hook(output.append)
+
+        assert result is True
+        import json
+
+        settings = json.loads(settings_file.read_text())
+        hooks = settings["hooks"]["PreToolUse"]
+        assert len(hooks) == 1
+        assert "claude_code_hook.py" in hooks[0]["hooks"][0]["command"]
+
+    def test_preserves_existing_settings(self, tmp_path):
+        from cross.setup import _install_claude_code_hook
+
+        settings_file = tmp_path / "settings.json"
+        import json
+
+        settings_file.write_text(json.dumps({"env": {"FOO": "bar"}, "permissions": {"allow": ["Read"]}}))
+        output = []
+        with patch("cross.setup._CLAUDE_SETTINGS", settings_file):
+            _install_claude_code_hook(output.append)
+
+        settings = json.loads(settings_file.read_text())
+        assert settings["env"]["FOO"] == "bar"
+        assert settings["permissions"]["allow"] == ["Read"]
+
+    def test_skips_if_already_installed(self, tmp_path):
+        from cross.setup import _install_claude_code_hook
+
+        settings_file = tmp_path / "settings.json"
+        import json
+
+        existing = {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/claude_code_hook.py"}]}
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(existing))
+        output = []
+        with patch("cross.setup._CLAUDE_SETTINGS", settings_file):
+            result = _install_claude_code_hook(output.append)
+
+        assert result is True
+        assert any("already installed" in s for s in output)
+
+    def test_creates_settings_dir_if_missing(self, tmp_path):
+        from cross.setup import _install_claude_code_hook
+
+        settings_file = tmp_path / "subdir" / "settings.json"
+        output = []
+        with patch("cross.setup._CLAUDE_SETTINGS", settings_file):
+            result = _install_claude_code_hook(output.append)
+
+        assert result is True
+        assert settings_file.exists()
+
+    def test_uninstall_removes_hook(self, tmp_path):
+        from cross.setup import _uninstall_claude_code_hook
+
+        settings_file = tmp_path / "settings.json"
+        import json
+
+        existing = {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/claude_code_hook.py"}]}
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(existing))
+        output = []
+        with patch("cross.setup._CLAUDE_SETTINGS", settings_file):
+            result = _uninstall_claude_code_hook(output.append)
+
+        assert result is True
+        settings = json.loads(settings_file.read_text())
+        assert "hooks" not in settings  # Cleaned up empty hooks
+
+    def test_uninstall_preserves_other_hooks(self, tmp_path):
+        from cross.setup import _uninstall_claude_code_hook
+
+        settings_file = tmp_path / "settings.json"
+        import json
+
+        existing = {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "other_hook.sh"}]},
+                    {"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/claude_code_hook.py"}]},
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(existing))
+        output = []
+        with patch("cross.setup._CLAUDE_SETTINGS", settings_file):
+            _uninstall_claude_code_hook(output.append)
+
+        settings = json.loads(settings_file.read_text())
+        assert len(settings["hooks"]["PreToolUse"]) == 1
+        assert "other_hook" in settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+
+
+class TestClaudeCodeHookSetupStep:
+    """Test the setup wizard step for Claude Desktop hook installation."""
+
+    @patch("cross.setup._install_claude_code_hook", return_value=True)
+    @patch("cross.setup._is_claude_desktop_installed", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=[])
+    @patch("cross.setup.sys")
+    def test_darwin_with_desktop_app_prompts(self, mock_sys, mock_agents, mock_desktop, mock_install, tmp_path):
+        mock_sys.platform = "darwin"
+        cross_dir = tmp_path / ".cross"
+
+        # none LLM, N notifications, N slack, Y hook, N autostart, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "N", "Y"])
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        mock_install.assert_called_once()
+        assert result.get("claude_code_hook_installed") is True
+
+
 class TestCLISetupRouting:
     @patch("cross.setup.run_setup")
     def test_setup_command_calls_run_setup(self, mock_run_setup):

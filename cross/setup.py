@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import re
 import shutil
@@ -266,6 +267,94 @@ def _patch_openclaw_gateway(print_fn) -> bool:
     return True
 
 
+_CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+_HOOK_MARKER = "claude_code_hook.py"
+
+
+def _install_claude_code_hook(print_fn) -> bool:
+    """Install cross PreToolUse hook into Claude Code settings.json.
+
+    The hook gates Desktop/Cowork sessions through cross's /cross/api/gate
+    endpoint. CLI sessions launched via `cross wrap` are skipped automatically
+    (the hook detects ANTHROPIC_BASE_URL pointing to localhost).
+    """
+    hook_path = Path(__file__).parent / "patches" / "claude_code_hook.py"
+    if not hook_path.exists():
+        print_fn(f"  Hook file not found: {hook_path}")
+        return False
+
+    # Read existing settings
+    settings: dict = {}
+    if _CLAUDE_SETTINGS.exists():
+        try:
+            settings = json.loads(_CLAUDE_SETTINGS.read_text())
+        except (json.JSONDecodeError, OSError):
+            print_fn("  Could not parse existing settings.json, skipping.")
+            return False
+
+    # Check if already installed
+    hooks = settings.get("hooks", {})
+    pre_tool_use = hooks.get("PreToolUse", [])
+    for entry in pre_tool_use:
+        for h in entry.get("hooks", []):
+            if _HOOK_MARKER in h.get("command", ""):
+                print_fn("  Claude Code hook already installed.")
+                return True
+
+    # Add the hook
+    hook_entry = {
+        "matcher": "",  # all tools
+        "hooks": [
+            {
+                "type": "command",
+                "command": f"python3 {hook_path}",
+                "timeout": 600,
+            }
+        ],
+    }
+    pre_tool_use.append(hook_entry)
+    hooks["PreToolUse"] = pre_tool_use
+    settings["hooks"] = hooks
+
+    # Write back
+    _CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    _CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2) + "\n")
+    print_fn(f"  Hook installed in {_CLAUDE_SETTINGS}")
+    print_fn("  Desktop and Cowork sessions will be gated through cross.")
+    return True
+
+
+def _uninstall_claude_code_hook(print_fn) -> bool:
+    """Remove cross hook from Claude Code settings.json."""
+    if not _CLAUDE_SETTINGS.exists():
+        return False
+
+    try:
+        settings = json.loads(_CLAUDE_SETTINGS.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    hooks = settings.get("hooks", {})
+    pre_tool_use = hooks.get("PreToolUse", [])
+    filtered = [
+        entry for entry in pre_tool_use if not any(_HOOK_MARKER in h.get("command", "") for h in entry.get("hooks", []))
+    ]
+
+    if len(filtered) == len(pre_tool_use):
+        return False  # wasn't installed
+
+    if filtered:
+        hooks["PreToolUse"] = filtered
+    else:
+        hooks.pop("PreToolUse", None)
+    if not hooks:
+        settings.pop("hooks", None)
+
+    _CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2) + "\n")
+    print_fn("  Claude Code hook removed.")
+    return True
+
+
 def _install_launchd(cross_dir: Path, print_fn) -> bool:
     """Install a macOS LaunchAgent to auto-start the daemon."""
     cross_bin = shutil.which("cross")
@@ -303,6 +392,11 @@ def _install_launchd(cross_dir: Path, print_fn) -> bool:
         print_fn("LaunchAgent installed but could not be loaded. Start manually with: cross daemon")
 
     return True
+
+
+def _is_claude_desktop_installed() -> bool:
+    """Check if Claude Desktop app is installed."""
+    return Path("/Applications/Claude.app").exists()
 
 
 def run_setup(
@@ -535,6 +629,14 @@ def run_setup(
         patch_answer = input_fn("Patch Gateway to enable cross tool gating? (Y/n): ").strip().lower()
         if patch_answer not in ("n", "no"):
             result["openclaw_patched"] = _patch_openclaw_gateway(print_fn)
+        print_fn("")
+
+    # ── Step 7b: Claude Code hook (Desktop/Cowork) ──
+    if sys.platform == "darwin" and _is_claude_desktop_installed():
+        print_fn("Claude Desktop detected.")
+        hook_answer = input_fn("Install hook to gate Desktop/Cowork sessions? (Y/n): ").strip().lower()
+        if hook_answer not in ("n", "no"):
+            result["claude_code_hook_installed"] = _install_claude_code_hook(print_fn)
         print_fn("")
 
     # ── Step 8: Auto-start daemon ──
