@@ -778,7 +778,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
           "escalate-" + ev.tool_use_id
         );
-      } else if ((ev.action === "allow" || ev.action === "block" || ev.action === "halt_session") && pendingMap[ev.tool_use_id]) {
+      } else if (ev.action !== "escalate" && pendingMap[ev.tool_use_id]) {
         delete pendingMap[ev.tool_use_id];
         renderPending();
       }
