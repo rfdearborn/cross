@@ -16,6 +16,22 @@ class Settings(BaseSettings):
     # Native desktop notifications (macOS, via terminal-notifier)
     native_notifications_enabled: bool = False
 
+    # Email
+    email_from: str = ""  # sender address (e.g. cross@example.com)
+    email_to: str = ""  # recipient address for notifications
+    email_smtp_host: str = "localhost"
+    email_smtp_port: int = 587
+    email_smtp_ssl: bool = False  # use SMTP_SSL (port 465)
+    email_smtp_starttls: bool = True  # use STARTTLS (port 587)
+    email_smtp_username: str = ""
+    email_smtp_password: str = ""
+    email_imap_host: str = ""  # IMAP host for inbound replies (empty = outbound only)
+    email_imap_port: int = 993
+    email_imap_ssl: bool = True
+    email_imap_username: str = ""  # falls back to smtp_username
+    email_imap_password: str = ""  # falls back to smtp_password
+    email_imap_poll_interval: int = 30  # seconds between IMAP checks
+
     # Slack
     slack_bot_token: str = ""
     slack_app_token: str = ""
