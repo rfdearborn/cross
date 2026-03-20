@@ -66,9 +66,11 @@ def _detect_hooked_agents() -> set[str]:
 
 
 def _detect_running_agents() -> dict[str, list[int]]:
-    """Detect running agent processes. Returns {agent_name: [pids]}."""
-    import subprocess
+    """Detect running agent processes. Returns {agent_name: [pids]}.
 
+    Claude Desktop Code sessions are reported separately as "claude (desktop)"
+    so they can be distinguished from CLI sessions in the dashboard.
+    """
     # Pattern per agent — more specific than just the name to avoid false positives
     agent_patterns = {
         "claude": ["-x", "claude"],  # exact binary name match
@@ -90,7 +92,38 @@ def _detect_running_agents() -> dict[str, list[int]]:
                     result[agent] = pids
         except (OSError, ValueError):
             continue
+
+    # Distinguish Claude Desktop Code sessions from CLI sessions
+    if "claude" in result:
+        cli_pids = []
+        desktop_pids = []
+        for pid in result["claude"]:
+            if _is_desktop_pid(pid):
+                desktop_pids.append(pid)
+            else:
+                cli_pids.append(pid)
+        result["claude"] = cli_pids
+        if not cli_pids:
+            del result["claude"]
+        if desktop_pids:
+            result["claude (desktop)"] = desktop_pids
+
     return result
+
+
+def _is_desktop_pid(pid: int) -> bool:
+    """Check if a PID is a Claude Desktop app Code session."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "comm="],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            return "/Claude/claude-code/" in proc.stdout
+    except OSError:
+        pass
+    return False
 
 
 def get_agent_status() -> dict[str, Any]:
@@ -129,7 +162,7 @@ def get_agent_status() -> dict[str, Any]:
         # Filter out PIDs we know are monitored
         unmonitored_pids = [p for p in pids if p not in monitored_pids]
         if unmonitored_pids and agent not in monitored_agents:
-            unmonitored.append({"agent": agent, "count": len(unmonitored_pids)})
+            unmonitored.append({"agent": agent, "count": len(unmonitored_pids), "pids": unmonitored_pids})
 
     return {
         "monitored": monitored,

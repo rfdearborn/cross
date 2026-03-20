@@ -10,6 +10,7 @@ from cross.daemon import (
     _detect_hooked_agents,
     _detect_running_agents,
     _gate_agents,
+    _is_desktop_pid,
     _sessions,
     get_agent_status,
 )
@@ -56,13 +57,52 @@ class TestDetectHookedAgents:
         assert result == set()
 
 
+class TestIsDesktopPid:
+    @patch("cross.daemon.subprocess.run")
+    def test_desktop_path_detected(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="/Users/me/Library/Application Support/Claude/claude-code/2.1.78/claude.app/Contents/MacOS/claude\n",
+        )
+        assert _is_desktop_pid(1234) is True
+
+    @patch("cross.daemon.subprocess.run")
+    def test_cli_path_not_desktop(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="/Users/me/.local/bin/claude\n")
+        assert _is_desktop_pid(1234) is False
+
+    @patch("cross.daemon.subprocess.run")
+    def test_ps_failure_returns_false(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        assert _is_desktop_pid(1234) is False
+
+
 class TestDetectRunningAgents:
+    @patch("cross.daemon._is_desktop_pid", return_value=False)
     @patch("subprocess.run")
-    def test_detects_claude(self, mock_run):
+    def test_detects_claude_cli(self, mock_run, mock_desktop):
         mock_run.return_value = MagicMock(returncode=0, stdout="1234\n")
         result = _detect_running_agents()
         assert "claude" in result
         assert 1234 in result["claude"]
+
+    @patch("cross.daemon._is_desktop_pid", return_value=True)
+    @patch("subprocess.run")
+    def test_detects_claude_desktop(self, mock_run, mock_desktop):
+        mock_run.return_value = MagicMock(returncode=0, stdout="1234\n")
+        result = _detect_running_agents()
+        assert "claude" not in result
+        assert "claude (desktop)" in result
+        assert 1234 in result["claude (desktop)"]
+
+    @patch("cross.daemon._is_desktop_pid")
+    @patch("subprocess.run")
+    def test_mixed_cli_and_desktop(self, mock_run, mock_desktop):
+        mock_run.return_value = MagicMock(returncode=0, stdout="1234\n5678\n")
+        mock_desktop.side_effect = lambda pid: pid == 5678
+        result = _detect_running_agents()
+        assert result["claude"] == [1234]
+        assert result["claude (desktop)"] == [5678]
 
     @patch("subprocess.run")
     def test_no_agents_running(self, mock_run):
@@ -70,8 +110,9 @@ class TestDetectRunningAgents:
         result = _detect_running_agents()
         assert result == {}
 
+    @patch("cross.daemon._is_desktop_pid", return_value=False)
     @patch("subprocess.run")
-    def test_filters_own_pid(self, mock_run):
+    def test_filters_own_pid(self, mock_run, mock_desktop):
         import os
 
         own_pid = str(os.getpid())
@@ -134,3 +175,25 @@ class TestGetAgentStatus:
         assert status["monitored_count"] == 1
         assert status["unmonitored_count"] == 1
         assert status["unmonitored"][0]["agent"] == "openclaw"
+
+    @patch(
+        "cross.daemon._detect_running_agents",
+        return_value={"claude": [1234], "claude (desktop)": [5678]},
+    )
+    def test_desktop_session_shows_as_unmonitored(self, mock_detect):
+        """CLI session monitored via wrap, Desktop session shown as unmonitored."""
+        _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
+        status = get_agent_status()
+        assert status["monitored_count"] == 1
+        assert status["unmonitored_count"] == 1
+        assert status["unmonitored"][0]["agent"] == "claude (desktop)"
+
+    @patch(
+        "cross.daemon._detect_running_agents",
+        return_value={"claude (desktop)": [5678]},
+    )
+    def test_desktop_only_shows_as_unmonitored(self, mock_detect):
+        status = get_agent_status()
+        assert status["monitored_count"] == 0
+        assert status["unmonitored_count"] == 1
+        assert status["unmonitored"][0]["agent"] == "claude (desktop)"
