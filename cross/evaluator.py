@@ -20,9 +20,10 @@ class Action(Enum):
     ABSTAIN = 0
     ALLOW = 1
     ALERT = 2
-    ESCALATE = 3
-    BLOCK = 4  # prevent this tool call, proxy retries with error feedback
-    HALT_SESSION = 5  # freeze the session, require human intervention
+    REVIEW = 3  # trigger LLM review — LLM decides the outcome
+    ESCALATE = 4
+    BLOCK = 5  # prevent this tool call, proxy retries with error feedback
+    HALT_SESSION = 6  # freeze the session, require human intervention
 
 
 @dataclass

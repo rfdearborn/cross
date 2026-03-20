@@ -11,7 +11,8 @@
 #   name:        unique identifier (for overrides/disable)
 #   tools:       tool names to match, or ["*"] for all
 #   field:       input field to check ("command", "file_path", or "" for all)
-#   action:      escalate | block | alert | halt_session (default: block)
+#   action:      review | escalate | block | alert | halt_session (default: block)
+#                review = LLM decides; escalate/block/halt = action stands, LLM is advisory
 #   description: human explanation
 #   patterns:    regex patterns (case-insensitive, any match triggers)
 #   contains:    substrings (case-insensitive, any match triggers)
@@ -30,7 +31,7 @@ rules:
   - name: destructive-rm
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Recursive forced deletes (any target — LLM reviews context)
     patterns:
       # rm with both -r and -f in any combination (short flags)
@@ -50,7 +51,7 @@ rules:
   - name: rm-outside-project
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Deleting files in user directories outside typical project scope
     patterns:
       # ~/Downloads/..., ~/Documents/..., etc. (tilde form)
@@ -63,7 +64,7 @@ rules:
   - name: destructive-alt
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Alternative file destruction commands
     patterns:
       - 'find\s+/\s+.*-delete\b'
@@ -75,7 +76,7 @@ rules:
   - name: destructive-disk
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Disk-level destructive operations
     patterns:
       - '\bdd\b.*\bof=/dev/'
@@ -89,7 +90,7 @@ rules:
   - name: fork-bomb
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Fork bombs
     patterns:
       - ':\(\)\s*\{\s*:\|:\s*&\s*\}\s*;'
@@ -97,7 +98,7 @@ rules:
   - name: shell-wrapper-destructive
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Destructive commands hidden inside shell wrappers (bash -c, eval)
     patterns:
       - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\brm\s+-\w*r\w*f'
@@ -110,7 +111,7 @@ rules:
   - name: destructive-git
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Destructive git commands that can lose work or rewrite history
     patterns:
       # Force push (--force, -f, --force-with-lease)
@@ -141,7 +142,7 @@ rules:
   - name: process-kill
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Process termination commands
     patterns:
       - '\b(kill|killall|pkill)\b'
@@ -151,7 +152,7 @@ rules:
   - name: sudo
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Commands run with elevated privileges
     patterns:
       - '\bsudo\b'
@@ -161,7 +162,7 @@ rules:
   - name: mutating-http
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: HTTP requests that modify remote state
     patterns:
       - '\bcurl\b.*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE)|-d\s|--data)'
@@ -172,7 +173,7 @@ rules:
   - name: destructive-docker
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Docker commands that remove or stop containers/images
     patterns:
       - '\bdocker\s+(rm|rmi|stop|kill)\b'
@@ -184,7 +185,7 @@ rules:
   - name: system-config
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Commands that modify system-level configuration
     patterns:
       - '\blaunchctl\b'
@@ -196,7 +197,7 @@ rules:
   - name: destructive-packages
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Package publish, uninstall, or removal
     patterns:
       - '\bnpm\s+publish\b'
@@ -210,7 +211,7 @@ rules:
   - name: shell-config-edit
     tools: [Write, Edit]
     field: file_path
-    action: escalate
+    action: review
     description: Edits to shell configuration files
     patterns:
       - '~/?\.(zshrc|bashrc|zprofile|bash_profile|profile)$'
@@ -271,7 +272,7 @@ rules:
   - name: system-path-write
     tools: [Write, Edit]
     field: file_path
-    action: escalate
+    action: review
     description: Writes to system directories
     contains:
       - "/etc/"
@@ -290,7 +291,7 @@ rules:
   - name: system-path-write-bash
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Bash writes to system directories via redirection/cp/mv/tee/install/ln/sed
     patterns:
       - '>\s*/(etc|usr|System|boot|sbin|bin|Library)/'
@@ -303,7 +304,7 @@ rules:
   - name: dangerous-chmod
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Recursive chmod 777/a+rwx on root, home, or cwd
     patterns:
       - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+[/~\.]'
@@ -316,7 +317,7 @@ rules:
   - name: script-execution
     tools: [Bash, exec]
     field: command
-    action: escalate
+    action: review
     description: Script file execution — LLM gate reviews script contents
     patterns:
       # python/python3 running a .py file (with optional env/exec/sudo prefix)
