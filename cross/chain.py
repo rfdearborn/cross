@@ -42,10 +42,7 @@ class GateChain:
         stage1_result = await self._run_gates(request)
 
         # Stage 2: LLM review for anything at REVIEW or above
-        if (
-            self.review_gate
-            and stage1_result.action.value >= Action.REVIEW.value
-        ):
+        if self.review_gate and stage1_result.action.value >= Action.REVIEW.value:
             review_result = await self._run_review(request, stage1_result)
             if review_result is not None:
                 return review_result
@@ -150,8 +147,7 @@ class GateChain:
         # For higher actions (ESCALATE/BLOCK/HALT_SESSION): LLM analysis is advisory.
         # Original action stands, but LLM reasoning is attached as metadata for humans.
         logger.info(
-            f"Review gate advisory for {stage1_result.action.name} "
-            f"(LLM says {resp.action.name}): {resp.reason[:100]}"
+            f"Review gate advisory for {stage1_result.action.name} (LLM says {resp.action.name}): {resp.reason[:100]}"
         )
         return EvaluationResponse(
             action=stage1_result.action,

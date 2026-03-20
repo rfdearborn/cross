@@ -183,7 +183,6 @@ class TestBuildGateChain:
         assert daemon._gate_chain.review_gate is None
 
 
-
 class TestBuildSentinel:
     """Test sentinel setup logic in on_startup."""
 
