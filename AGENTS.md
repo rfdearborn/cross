@@ -22,6 +22,23 @@ cross catches these before they land. It's not a judgment on your capabilities -
 - **Don't try to work around blocks.** They exist because a pattern matched and was confirmed by review. Find a different approach to accomplish the goal.
 - **Be transparent about what you're doing and why.** cross uses your stated intent as context for evaluating tool calls. Clear intent helps the reviewer make better decisions.
 
+## Before committing
+
+Always run lint and format checks before committing:
+
+```bash
+uv run ruff check --fix
+uv run ruff format
+```
+
+Fix any errors that cannot be auto-fixed before committing.
+
+Run tests to verify your changes:
+
+```bash
+uv run pytest tests/ -x -q -o "addopts="
+```
+
 ## If you're helping a user set up cross
 
 ```bash
