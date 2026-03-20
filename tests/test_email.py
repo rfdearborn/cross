@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -617,7 +617,6 @@ class TestHandleEvent:
         await plugin.handle_event(event)
 
         # Should use sess-2's thread (most recent)
-        msg_text = mock_smtp.sendmail.call_args[0][2]
         # Email was sent — the thread is maintained
         mock_smtp.sendmail.assert_called_once()
 

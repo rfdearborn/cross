@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import email.mime.text
 import email.utils
-import hashlib
 import json
 import logging
 import re
@@ -118,7 +117,7 @@ class EmailPlugin:
             mins = int((ended - started) / 60)
             duration = f" after {mins}m" if mins > 0 else ""
 
-        subject = f"Re: [cross] session update"
+        subject = "Re: [cross] session update"
         body = f"Session ended (exit code {exit_code}){duration}"
         self._send_email(subject, body, in_reply_to=thread_msg_id, thread_session_id=session_id)
 
@@ -149,7 +148,7 @@ class EmailPlugin:
 
         allow_all_label = _extract_allow_all(text) or "Allow all (session)"
 
-        subject = f"Re: [cross] Permission needed"
+        subject = "Re: [cross] Permission needed"
         body = (
             f"⚠️ {prompt_text}\n\n"
             f"Reply with one of:\n"
@@ -296,7 +295,8 @@ class EmailPlugin:
         msg["From"] = settings.email_from
         msg["To"] = settings.email_to
         msg["Subject"] = subject
-        message_id = email.utils.make_msgid(domain=settings.email_from.split("@")[-1] if "@" in settings.email_from else "cross.local")
+        domain = settings.email_from.split("@")[-1] if "@" in settings.email_from else "cross.local"
+        message_id = email.utils.make_msgid(domain=domain)
         msg["Message-ID"] = message_id
 
         if in_reply_to:
