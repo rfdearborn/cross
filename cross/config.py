@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     slack_channel_append_project: bool = False  # append project name to channel
     slack_channel_append_user: bool = True  # append Slack username to channel
 
+    # Custom instructions (included in gate + sentinel prompts)
+    custom_instructions_file: str = "~/.cross/instructions.md"
+
     # Gating (denylist)
     gating_enabled: bool = True
     rules_dir: str = "~/.cross/rules.d"

@@ -476,6 +476,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     cursor: pointer;
   }
   .notif-modal .btn-skip:hover { opacity: 0.85; }
+
+  /* Custom Instructions editor */
+  .instructions-editor {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+  }
+  .instructions-editor textarea {
+    width: 100%;
+    min-height: 120px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 13px;
+    color: var(--text);
+    resize: vertical;
+    outline: none;
+    line-height: 1.5;
+  }
+  .instructions-editor textarea:focus { border-color: var(--accent); }
+  .instructions-editor textarea::placeholder { color: var(--text-dim); }
+  .instructions-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .instructions-actions .btn-save {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .instructions-actions .btn-save:hover { opacity: 0.85; }
+  .instructions-actions .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+  .instructions-actions .save-status {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .instructions-actions .save-status.ok { color: var(--green); }
+  .instructions-actions .save-status.err { color: var(--red); }
+  .instructions-hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
 </style>
 </head>
 <body>
@@ -508,6 +562,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <section id="pending-section">
     <h2>Pending Approvals</h2>
     <div id="pending-list"><p class="empty">No pending approvals</p></div>
+  </section>
+  <section id="instructions-section">
+    <h2>Custom Instructions</h2>
+    <div class="instructions-editor">
+      <p class="instructions-hint">These instructions are included with every gate and sentinel prompt. Changes are applied immediately.</p>
+      <textarea id="instructions-text" placeholder="Add custom instructions for the gate and sentinel reviewers...&#10;&#10;Example: Our project uses a monorepo. The agent is allowed to run `npm test` and `npm build` in any workspace. Treat writes to /opt/app/config/ as expected."></textarea>
+      <div class="instructions-actions">
+        <button class="btn-save" id="instructions-save" onclick="saveInstructions()">Save</button>
+        <span class="save-status" id="instructions-status"></span>
+      </div>
+    </div>
   </section>
   <section>
     <h2>Live Event Feed</h2>
@@ -972,6 +1037,50 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     for (const p of perms) { permissionMap[p.session_id] = p; }
     renderPending();
   }).catch(function() {});
+
+  // --- Custom Instructions ---
+  var instrText = document.getElementById("instructions-text");
+  var instrStatus = document.getElementById("instructions-status");
+  var instrSaveBtn = document.getElementById("instructions-save");
+
+  fetch("/cross/api/instructions").then(function(r) { return r.json(); }).then(function(data) {
+    instrText.value = data.content || "";
+  }).catch(function() {});
+
+  window.saveInstructions = function() {
+    instrSaveBtn.disabled = true;
+    instrStatus.textContent = "Saving...";
+    instrStatus.className = "save-status";
+    fetch("/cross/api/instructions", {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content: instrText.value})
+    }).then(function(r) {
+      if (r.ok) {
+        instrStatus.textContent = "Saved";
+        instrStatus.className = "save-status ok";
+      } else {
+        r.json().then(function(d) {
+          instrStatus.textContent = "Error: " + (d.error || "unknown");
+          instrStatus.className = "save-status err";
+        });
+      }
+    }).catch(function(e) {
+      instrStatus.textContent = "Error: " + e.message;
+      instrStatus.className = "save-status err";
+    }).finally(function() {
+      instrSaveBtn.disabled = false;
+      setTimeout(function() { instrStatus.textContent = ""; }, 4000);
+    });
+  };
+
+  // Save with Ctrl/Cmd+S
+  instrText.addEventListener("keydown", function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      e.preventDefault();
+      saveInstructions();
+    }
+  });
 
   connect();
 })();

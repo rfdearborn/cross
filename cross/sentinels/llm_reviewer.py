@@ -20,6 +20,7 @@ import time
 from collections import deque
 from typing import Any
 
+from cross.custom_instructions import format_instructions_block
 from cross.evaluator import Action, EvaluationResponse, Sentinel, SentinelRequest
 from cross.events import (
     CrossEvent,
@@ -159,11 +160,13 @@ class LLMSentinel(Sentinel):
         event_bus: EventBus,
         interval_seconds: int = 60,
         max_events: int = 100,
+        get_custom_instructions: callable | None = None,
     ):
         super().__init__(name="llm_sentinel")
         self.config = config
         self.event_bus = event_bus
         self.interval_seconds = interval_seconds
+        self._get_custom_instructions = get_custom_instructions
         self._events: deque[dict[str, Any]] = deque(maxlen=max_events)
         self._task: asyncio.Task | None = None
         self._running = False
@@ -252,7 +255,11 @@ class LLMSentinel(Sentinel):
         user_message = _format_review_prompt(events)
         messages = [{"role": "user", "content": user_message}]
 
-        text = await complete(self.config, system=_SYSTEM_PROMPT, messages=messages, timeout_s=60.0)
+        system = _SYSTEM_PROMPT
+        if self._get_custom_instructions:
+            system += format_instructions_block(self._get_custom_instructions())
+
+        text = await complete(self.config, system=system, messages=messages, timeout_s=60.0)
 
         if text is None:
             logger.warning("Sentinel review: LLM returned no response")

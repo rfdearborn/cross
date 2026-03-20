@@ -17,6 +17,7 @@ import json
 import logging
 import re
 
+from cross.custom_instructions import format_instructions_block
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
 from cross.llm import LLMConfig, complete
 
@@ -130,12 +131,19 @@ def _parse_verdict(text: str) -> Action | None:
 class LLMReviewGate(Gate):
     """Synchronous LLM review of denylist-flagged tool calls."""
 
-    def __init__(self, config: LLMConfig, timeout_ms: float = 30000, justification: bool = False):
+    def __init__(
+        self,
+        config: LLMConfig,
+        timeout_ms: float = 30000,
+        justification: bool = False,
+        get_custom_instructions: callable | None = None,
+    ):
         super().__init__(name="llm_review")
         self.config = config
         self.timeout_ms = timeout_ms
         self.justification = justification
         self.on_error = Action.ABSTAIN  # fall back to denylist verdict
+        self._get_custom_instructions = get_custom_instructions
 
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
         """Review a flagged tool call. Returns ALLOW/BLOCK/ESCALATE or ABSTAIN on error."""
@@ -143,6 +151,9 @@ class LLMReviewGate(Gate):
         messages = [{"role": "user", "content": user_message}]
 
         system = _SYSTEM_PROMPT + (_JUSTIFICATION_SUFFIX if self.justification else "")
+        # Append custom instructions if provided
+        if self._get_custom_instructions:
+            system += format_instructions_block(self._get_custom_instructions())
         timeout_s = self.timeout_ms / 1000.0
         text = await complete(self.config, system=system, messages=messages, timeout_s=timeout_s)
 
