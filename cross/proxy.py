@@ -543,7 +543,7 @@ async def _gate_non_streaming_response(
                     GateDecisionEvent(
                         tool_use_id=tool_id,
                         tool_name=tool_name,
-                        action="halt_session",
+                        action="block",
                         reason=reason,
                         evaluator="human",
                         tool_input=tool_input,
