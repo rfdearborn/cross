@@ -21,7 +21,13 @@ from cross.chain import GateChain
 from cross.config import settings
 from cross.evaluator import Action, GateRequest
 from cross.event_store import EventStore
-from cross.events import EventBus, GateDecisionEvent, ToolUseEvent
+from cross.events import (
+    EventBus,
+    GateDecisionEvent,
+    PermissionPromptEvent,
+    PermissionResolvedEvent,
+    ToolUseEvent,
+)
 from cross.plugins.dashboard import DASHBOARD_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
 from cross.plugins.notifier import handle_event as notify_event
@@ -46,6 +52,14 @@ _project_cwds: dict[str, str] = {}
 _pending_injects: dict[str, str] = {}
 # Agents seen via the gate API (not registered via cross wrap)
 _gate_agents: set[str] = set()
+# Permission prompt tracking
+_permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, allow_all_label, ts}
+_permission_debounce: dict[str, float] = {}  # session_id -> last prompt time
+_PERMISSION_DEBOUNCE_SECS = 3.0
+# Tool description tracking per session (for permission prompt context)
+_last_tool_desc: dict[str, str] = {}
+# Event loop reference (for thread-safe callbacks)
+_event_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _detect_hooked_agents() -> set[str]:
@@ -256,8 +270,12 @@ async def api_session_ws(ws: WebSocket):
 
             if msg_type == "pty_output":
                 text = msg.get("text", "")
-                if text and _slack:
-                    _slack.handle_pty_output(session_id, text)
+                if text:
+                    # Forward to Slack for relay
+                    if _slack:
+                        _slack.handle_pty_output(session_id, text)
+                    # Check for permission prompts (dashboard + notifications)
+                    await _check_permission_prompt(session_id, text)
 
     except WebSocketDisconnect:
         logger.info(f"Session WS disconnected: {session_id}")
@@ -282,6 +300,94 @@ async def _delayed_inject(session_id: str, text: str):
     await asyncio.sleep(5)
     logger.info(f"Injecting initial message for session {session_id}: {text[:50]}")
     await _inject_to_session(session_id, text + "\r")
+
+
+async def _check_permission_prompt(session_id: str, text: str):
+    """Check PTY output for Claude Code permission prompts and publish event."""
+    from cross.plugins.slack import _extract_allow_all, _is_permission_prompt
+
+    if not _is_permission_prompt(text):
+        return
+
+    # Debounce
+    now = time.time()
+    last = _permission_debounce.get(session_id, 0)
+    if now - last < _PERMISSION_DEBOUNCE_SECS:
+        return
+    _permission_debounce[session_id] = now
+
+    tool_desc = _last_tool_desc.get(session_id, "")
+    allow_all_label = _extract_allow_all(text) or "Allow all (session)"
+
+    _permission_pending[session_id] = {
+        "session_id": session_id,
+        "tool_desc": tool_desc,
+        "allow_all_label": allow_all_label,
+        "ts": now,
+    }
+
+    await event_bus.publish(
+        PermissionPromptEvent(
+            session_id=session_id,
+            tool_desc=tool_desc,
+            allow_all_label=allow_all_label,
+        )
+    )
+    # Clear stale tool description
+    _last_tool_desc.pop(session_id, None)
+
+
+async def _resolve_permission_async(session_id: str, action: str, resolver: str):
+    """Resolve a pending permission prompt — inject PTY input and publish event."""
+    info = _permission_pending.pop(session_id, None)
+    if not info:
+        return
+
+    # Map action to PTY keypress
+    key = {"approve": "1", "allow_all": "2", "deny": "3"}.get(action, "3")
+    await _inject_to_session(session_id, key)
+
+    await event_bus.publish(
+        PermissionResolvedEvent(
+            session_id=session_id,
+            action=action,
+            resolver=resolver,
+        )
+    )
+    logger.info(f"Permission {action} for session {session_id} (resolver={resolver})")
+
+
+def resolve_permission(session_id: str, action: str, resolver: str):
+    """Thread-safe: resolve a pending permission prompt from any surface."""
+    if session_id not in _permission_pending:
+        return
+    if _event_loop:
+        asyncio.run_coroutine_threadsafe(
+            _resolve_permission_async(session_id, action, resolver),
+            _event_loop,
+        )
+
+
+async def _track_tool_desc(event):
+    """EventBus handler — track tool descriptions per session for permission context."""
+    if not isinstance(event, ToolUseEvent):
+        return
+    session_id = event.session_id
+    if not session_id:
+        # Fall back to most recently active session
+        if _sessions:
+            session_id = list(_sessions.keys())[-1]
+        else:
+            return
+
+    tool_desc = f"`{event.name}`"
+    if event.name == "Bash":
+        cmd = event.input.get("command", "")
+        tool_desc = f"`Bash`: `{cmd[:80]}`"
+    elif event.name in ("Read", "Write", "Edit"):
+        path = event.input.get("file_path", "")
+        tool_desc = f"`{event.name}`: `{path}`"
+    _last_tool_desc[session_id] = tool_desc
 
 
 async def _spawn_session(project: str, initial_message: str):
@@ -491,6 +597,25 @@ async def api_resolve_pending(request: Request) -> JSONResponse:
     return JSONResponse({"status": "error", "message": "dashboard not initialized"}, status_code=500)
 
 
+async def api_pending_permissions(request: Request) -> JSONResponse:
+    """GET /cross/api/pending-permissions — pending permission prompts as JSON."""
+    return JSONResponse(list(_permission_pending.values()))
+
+
+async def api_resolve_permission(request: Request) -> JSONResponse:
+    """POST /cross/api/permission/{session_id}/resolve — approve, deny, or allow-all."""
+    session_id = request.path_params["session_id"]
+    data = await request.json()
+    action = data.get("action", "deny")  # "approve", "allow_all", "deny"
+    username = data.get("username", "dashboard")
+
+    if session_id not in _permission_pending:
+        return JSONResponse({"status": "not_found", "message": "No pending permission for this session"}, status_code=404)
+
+    await _resolve_permission_async(session_id, action, f"dashboard (@{username})")
+    return JSONResponse({"status": "ok", "session_id": session_id, "action": action})
+
+
 async def api_dashboard_ws(ws: WebSocket):
     """WS /cross/api/ws — real-time event stream to dashboard clients."""
     if _dashboard:
@@ -516,7 +641,9 @@ _sentinel = None  # LLMSentinel instance, if configured
 
 
 async def on_startup():
-    global _slack, _gate_chain, _sentinel, _dashboard
+    global _slack, _gate_chain, _sentinel, _dashboard, _event_loop
+
+    _event_loop = asyncio.get_running_loop()
 
     # Register logger plugin
     log_plugin = LoggerPlugin()
@@ -532,6 +659,7 @@ async def on_startup():
 
     _dashboard = DashboardPlugin(event_store=store, resolve_approval_callback=_resolve_gate)
     event_bus.subscribe(_dashboard.handle_event)
+    event_bus.subscribe(_track_tool_desc)
     logger.info("Dashboard active at /cross/dashboard")
 
     # Pre-populate monitored agents from hook configuration
@@ -620,6 +748,7 @@ async def on_startup():
             inject_callback=_inject_to_session,
             spawn_callback=_spawn_session,
             resolve_approval_callback=resolve_gate_approval,
+            resolve_permission_callback=resolve_permission,
             event_loop=asyncio.get_running_loop(),
         )
         try:
@@ -680,6 +809,8 @@ _dashboard_routes = [
     Route("/cross/api/events", api_events, methods=["GET"]),
     Route("/cross/api/pending", api_pending, methods=["GET"]),
     Route("/cross/api/pending/{tool_use_id}/resolve", api_resolve_pending, methods=["POST"]),
+    Route("/cross/api/pending-permissions", api_pending_permissions, methods=["GET"]),
+    Route("/cross/api/permission/{session_id}/resolve", api_resolve_permission, methods=["POST"]),
 ]
 
 # WebSocket routes

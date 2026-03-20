@@ -17,6 +17,7 @@ from cross.events import (
     CrossEvent,
     ErrorEvent,
     GateDecisionEvent,
+    PermissionResolvedEvent,
     SentinelReviewEvent,
     TextEvent,
     ToolUseEvent,
@@ -28,12 +29,13 @@ logger = logging.getLogger("cross.plugins.slack")
 class SlackPlugin:
     """Manages Slack channels/threads and relays agent events."""
 
-    def __init__(self, inject_callback=None, spawn_callback=None, resolve_approval_callback=None, event_loop=None):
+    def __init__(self, inject_callback=None, spawn_callback=None, resolve_approval_callback=None, resolve_permission_callback=None, event_loop=None):
         self._web = WebClient(token=settings.slack_bot_token)
         self._socket: SocketModeClient | None = None
         self._event_loop = event_loop
         self._spawn_callback = spawn_callback
         self._resolve_approval_callback = resolve_approval_callback
+        self._resolve_permission_callback = resolve_permission_callback
         # channel name -> channel ID
         self._channels: dict[str, str] = {}
         # session_id -> (channel_id, thread_ts)
@@ -400,6 +402,28 @@ class SlackPlugin:
                     reply_broadcast=event.action in ("escalate", "halt_session"),
                 )
 
+            case PermissionResolvedEvent() if not event.resolver.startswith("slack"):
+                # Permission resolved from another surface (dashboard, terminal, CLI)
+                # Update the Slack message if we had one pending
+                perm_info = self._permission_pending.pop(event.session_id, None)
+                if perm_info:
+                    perm_channel, perm_ts = perm_info
+                    if event.action == "deny":
+                        result_text = f"❌ *Denied* ({event.resolver})"
+                    elif event.action == "allow_all":
+                        result_text = f"✅ *Approved (allow all)* ({event.resolver})"
+                    else:
+                        result_text = f"✅ *Approved* ({event.resolver})"
+                    try:
+                        self._web.chat_update(
+                            channel=perm_channel,
+                            ts=perm_ts,
+                            text=result_text,
+                            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update permission message: {e}")
+
             case ErrorEvent():
                 self._web.chat_postMessage(
                     channel=channel_id,
@@ -563,22 +587,29 @@ class SlackPlugin:
         # value is session_id for these
         session_id = action.get("value", "")
         if action_id == "permission_approve":
-            # Claude Code's TUI acts on keypress immediately — no Enter needed
-            self._inject(session_id, "1")
+            perm_action = "approve"
             logger.info(f"Permission approved by {user_name} for session {session_id}")
             result_text = f"✅ *Approved* by @{user_name}"
         elif action_id == "permission_allow_all":
-            self._inject(session_id, "2")
+            perm_action = "allow_all"
             logger.info(f"Permission allow-all by {user_name} for session {session_id}")
             result_text = f"✅ *Approved (allow all)* by @{user_name}"
         elif action_id == "permission_deny":
-            self._inject(session_id, "3")
+            perm_action = "deny"
             logger.info(f"Permission denied by {user_name} for session {session_id}")
             result_text = f"❌ *Denied* by @{user_name}"
         else:
             return
 
         self._permission_pending.pop(session_id, None)
+
+        # Resolve via daemon callback (handles PTY injection + event publishing)
+        if self._resolve_permission_callback:
+            self._resolve_permission_callback(session_id, perm_action, f"slack (@{user_name})")
+        else:
+            # Fallback: inject directly if no callback
+            key = {"approve": "1", "allow_all": "2", "deny": "3"}.get(perm_action, "3")
+            self._inject(session_id, key)
 
         # Update the message to replace buttons with the result
         if channel_id and message_ts:

@@ -14,7 +14,7 @@ import subprocess
 from typing import Callable
 
 from cross.config import settings
-from cross.events import CrossEvent, GateDecisionEvent, SentinelReviewEvent
+from cross.events import CrossEvent, GateDecisionEvent, PermissionPromptEvent, SentinelReviewEvent
 
 logger = logging.getLogger("cross.plugins.notifier")
 
@@ -77,6 +77,10 @@ async def handle_event(event: CrossEvent):
         reason = event.reason or ""
         body = f"{tool}: {reason}" if reason else tool
         _notify("cross — approval needed", body)
+
+    elif isinstance(event, PermissionPromptEvent):
+        body = event.tool_desc or "Claude Code needs approval"
+        _notify("cross — permission needed", body)
 
     elif isinstance(event, SentinelReviewEvent) and event.action and event.action != "allow":
         body = event.summary or event.concerns or ""

@@ -16,6 +16,8 @@ from cross.event_store import EventStore, event_to_dict
 from cross.events import (
     CrossEvent,
     GateDecisionEvent,
+    PermissionPromptEvent,
+    PermissionResolvedEvent,
 )
 
 logger = logging.getLogger("cross.plugins.dashboard")
@@ -28,13 +30,15 @@ class DashboardPlugin:
         self._store = event_store
         # Pending escalations: tool_use_id -> event dict
         self._pending: dict[str, dict[str, Any]] = {}
+        # Pending permission prompts: session_id -> event dict
+        self._permission_pending: dict[str, dict[str, Any]] = {}
         # Connected WebSocket clients
         self._ws_clients: set[WebSocket] = set()
         # Callback to resolve gate approvals in the proxy
         self._resolve_approval_callback = resolve_approval_callback
 
     async def handle_event(self, event: CrossEvent):
-        """EventBus handler — track escalations and broadcast to WS clients."""
+        """EventBus handler — track escalations/permissions and broadcast to WS clients."""
         event_dict = event_to_dict(event)
 
         # Track pending escalations
@@ -44,6 +48,13 @@ class DashboardPlugin:
             elif event.action in ("allow", "block", "halt_session") and event.tool_use_id in self._pending:
                 # Escalation resolved (by Slack, dashboard, or timeout)
                 del self._pending[event.tool_use_id]
+
+        # Track pending permission prompts
+        elif isinstance(event, PermissionPromptEvent):
+            self._permission_pending[event.session_id] = event_dict
+
+        elif isinstance(event, PermissionResolvedEvent):
+            self._permission_pending.pop(event.session_id, None)
 
         # Broadcast to connected WebSocket clients
         await self._broadcast(event_dict)
@@ -68,6 +79,10 @@ class DashboardPlugin:
     def get_pending(self) -> list[dict[str, Any]]:
         """Return pending escalations as a list."""
         return list(self._pending.values())
+
+    def get_pending_permissions(self) -> list[dict[str, Any]]:
+        """Return pending permission prompts as a list."""
+        return list(self._permission_pending.values())
 
     def resolve(self, tool_use_id: str, approved: bool, username: str = "dashboard"):
         """Resolve a pending escalation (approve or deny)."""
@@ -236,7 +251,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .btn:hover { opacity: 0.85; }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-approve { background: var(--green); color: #fff; }
+  .btn-allow-all { background: var(--accent); color: #fff; }
   .btn-deny { background: var(--red); color: #fff; }
+
+  /* Permission prompt cards */
+  .permission-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--yellow);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .permission-card .tool-name {
+    font-weight: 600;
+    color: var(--yellow);
+    font-size: 15px;
+  }
+  .permission-card .session-id {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .permission-card .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
 
   /* Agent status bar */
   .agent-status {
@@ -495,6 +536,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   const MAX_FEED = 200;
   let pendingMap = {};
+  let permissionMap = {};
   let ws = null;
 
   function formatTime(ts) {
@@ -509,13 +551,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function renderPending() {
-    const keys = Object.keys(pendingMap);
-    if (keys.length === 0) {
+    const gateKeys = Object.keys(pendingMap);
+    const permKeys = Object.keys(permissionMap);
+    if (gateKeys.length === 0 && permKeys.length === 0) {
       pendingList.innerHTML = '<p class="empty">No pending approvals</p>';
       return;
     }
     let html = "";
-    for (const id of keys) {
+    // Permission prompts first (more urgent — blocking terminal)
+    for (const sid of permKeys) {
+      const p = permissionMap[sid];
+      const safeSid = escHtml(sid);
+      const toolDesc = p.tool_desc || "unknown tool";
+      const allowLabel = escHtml(p.allow_all_label || "Allow all (session)");
+      html += '<div class="permission-card" data-sid="' + safeSid + '">'
+        + '<div class="tool-name">Permission needed' + (toolDesc ? ' for ' + escHtml(toolDesc) : '') + '</div>'
+        + '<div class="session-id">Session: ' + safeSid + '</div>'
+        + '<div class="actions">'
+        + '<button class="btn btn-approve" onclick="resolvePermission(&apos;' + safeSid + '&apos;, &apos;approve&apos;)">Approve</button>'
+        + '<button class="btn btn-allow-all" onclick="resolvePermission(&apos;' + safeSid + '&apos;, &apos;allow_all&apos;)">' + allowLabel + '</button>'
+        + '<button class="btn btn-deny" onclick="resolvePermission(&apos;' + safeSid + '&apos;, &apos;deny&apos;)">Deny</button>'
+        + '</div></div>';
+    }
+    // Gate escalations
+    for (const id of gateKeys) {
       const ev = pendingMap[id];
       const inputStr = ev.tool_input ? JSON.stringify(ev.tool_input, null, 2) : "";
       const safeId = escHtml(id);
@@ -767,6 +826,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function handleEvent(ev) {
+    // Handle permission prompt events (don't add to feed — they're shown as cards)
+    if (ev.event_type === "PermissionPromptEvent") {
+      permissionMap[ev.session_id] = ev;
+      renderPending();
+      showNotification(
+        "cross — permission needed",
+        ev.tool_desc || "Claude Code needs approval",
+        "permission-" + ev.session_id
+      );
+      return;
+    }
+    if (ev.event_type === "PermissionResolvedEvent") {
+      delete permissionMap[ev.session_id];
+      renderPending();
+      return;
+    }
+
     if (shouldHide(ev)) return;
     addEventRow(ev);
     if (ev.event_type === "GateDecisionEvent") {
@@ -809,6 +885,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }).catch(function(e) {
       console.error("Failed to resolve:", e);
+      if (card) card.querySelectorAll("button").forEach(function(b) { b.disabled = false; });
+    });
+  };
+
+  window.resolvePermission = function(sessionId, action) {
+    // Disable buttons immediately
+    const card = document.querySelector('.permission-card[data-sid="' + sessionId + '"]');
+    if (card) {
+      card.querySelectorAll("button").forEach(function(b) { b.disabled = true; });
+    }
+    fetch("/cross/api/permission/" + sessionId + "/resolve", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: action, username: "dashboard"})
+    }).then(function(r) {
+      if (r.ok) {
+        delete permissionMap[sessionId];
+        renderPending();
+      }
+    }).catch(function(e) {
+      console.error("Failed to resolve permission:", e);
       if (card) card.querySelectorAll("button").forEach(function(b) { b.disabled = false; });
     });
   };
@@ -865,6 +962,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   fetch("/cross/api/pending").then(function(r) { return r.json(); }).then(function(pending) {
     for (const ev of pending) { pendingMap[ev.tool_use_id] = ev; }
+    renderPending();
+  }).catch(function() {});
+
+  fetch("/cross/api/pending-permissions").then(function(r) { return r.json(); }).then(function(perms) {
+    for (const p of perms) { permissionMap[p.session_id] = p; }
     renderPending();
   }).catch(function() {});
 
