@@ -227,7 +227,8 @@ class TestBuildShellWrappers:
 # unless specifically testing auto-start.
 
 # Input sequence for freeform model flow:
-#   gate_model → [api_key] → sentinel_model → interval → slack y/n → [slack tokens] → shell_wrappers y/n
+#   gate_model → [api_key] → sentinel_model → interval → email y/n → [email fields]
+#   → slack y/n → [slack tokens] → shell_wrappers y/n → auto_update
 
 
 @patch("cross.setup.sys")
@@ -243,8 +244,8 @@ class TestRunSetupDefaultModel:
         shell_rc.write_text("# existing content\n")
         mock_shell_rc.return_value = shell_rc
 
-        # "" gate (default cli/claude, no key), "" sentinel, "" interval, N slack, Y wrappers
-        inputs = iter(["", "", "", "N", "Y", "Y"])
+        # "" gate (default cli/claude, no key), "" sentinel, "" interval, N email, N slack, Y wrappers
+        inputs = iter(["", "", "", "N", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -281,8 +282,8 @@ class TestRunSetupAnthropicModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # anthropic model, "" sentinel (same), "" interval, N slack
-        inputs = iter(["anthropic/claude-haiku-4-5", "", "", "N", "Y"])
+        # anthropic model, "" sentinel (same), "" interval, N email, N slack
+        inputs = iter(["anthropic/claude-haiku-4-5", "", "", "N", "N", "Y"])
         secrets = iter(["sk-ant-test-key"])
 
         output = []
@@ -308,7 +309,7 @@ class TestRunSetupOpenAIModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["openai/gpt-5-mini", "", "", "N", "Y"])
+        inputs = iter(["openai/gpt-5-mini", "", "", "N", "N", "Y"])
         secrets = iter(["sk-openai-test"])
 
         output = []
@@ -333,8 +334,8 @@ class TestRunSetupOllamaModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # ollama gate, "" sentinel (same), "" interval, N slack
-        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "Y"])
+        # ollama gate, "" sentinel (same), "" interval, N email, N slack
+        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -355,7 +356,7 @@ class TestRunSetupOllamaModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "Y"])
+        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -380,8 +381,8 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # cli/claude gate, google sentinel (different provider, asks for key), 120s, N slack
-        inputs = iter(["", "google/gemini-2.5-flash", "120", "N", "Y"])
+        # cli/claude gate, google sentinel (different provider, asks for key), 120s, N email, N slack
+        inputs = iter(["", "google/gemini-2.5-flash", "120", "N", "N", "Y"])
         secrets = iter(["google-key"])
 
         output = []
@@ -406,8 +407,8 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # cli/claude gate, anthropic sentinel (different provider, asks for key), "" interval, N slack
-        inputs = iter(["", "anthropic/claude-haiku-4-5", "", "N", "Y"])
+        # cli/claude gate, anthropic sentinel (different provider, asks for key), "" interval, N email, N slack
+        inputs = iter(["", "anthropic/claude-haiku-4-5", "", "N", "N", "Y"])
         secrets = iter(["ant-key"])
 
         output = []
@@ -431,8 +432,8 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # default gate (cli/claude, no key prompt), "" sentinel (same), 300s interval, N slack
-        inputs = iter(["", "", "300", "N", "Y"])
+        # default gate (cli/claude, no key prompt), "" sentinel (same), 300s interval, N email, N slack
+        inputs = iter(["", "", "300", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -451,8 +452,8 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # default gate (cli/claude, no key prompt), "" sentinel (same), "abc" interval, N slack
-        inputs = iter(["", "", "abc", "N", "Y"])
+        # default gate (cli/claude, no key prompt), "" sentinel (same), "abc" interval, N email, N slack
+        inputs = iter(["", "", "abc", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -475,7 +476,7 @@ class TestRunSetupNoneLLM:
         cross_dir = tmp_path / ".cross"
 
         # "none" skips sentinel + interval prompts entirely
-        inputs = iter(["none", "N", "Y"])
+        inputs = iter(["none", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -503,7 +504,7 @@ class TestRunSetupEmptyApiKey:
         cross_dir = tmp_path / ".cross"
 
         # Explicit google model, empty key, no env → disables LLM → skips sentinel
-        inputs = iter(["google/gemini-3-flash-preview", "N", "Y"])
+        inputs = iter(["google/gemini-3-flash-preview", "N", "N", "Y"])
         secrets = iter([""])  # empty key
 
         output = []
@@ -525,8 +526,8 @@ class TestRunSetupEmptyApiKey:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # Explicit google model, empty key (env fallback), "" sentinel, "" interval, N slack
-        inputs = iter(["google/gemini-3-flash-preview", "", "", "N", "Y"])
+        # Explicit google model, empty key (env fallback), "" sentinel, "" interval, N email, N slack
+        inputs = iter(["google/gemini-3-flash-preview", "", "", "N", "N", "Y"])
         secrets = iter([""])  # empty key
 
         output = []
@@ -552,7 +553,7 @@ class TestRunSetupSlack:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "y", "Y"])
+        inputs = iter(["none", "N", "y", "Y"])
         secrets = iter(["xoxb-bot-token", "xapp-app-token"])
 
         output = []
@@ -573,7 +574,7 @@ class TestRunSetupSlack:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "y", "Y"])
+        inputs = iter(["none", "N", "y", "Y"])
         secrets = iter(["", ""])
 
         output = []
@@ -599,8 +600,8 @@ class TestRunSetupSlackPreservation:
         cross_dir.mkdir(parents=True)
         (cross_dir / ".env").write_text("CROSS_SLACK_BOT_TOKEN=xoxb-existing\nCROSS_SLACK_APP_TOKEN=xapp-existing\n")
 
-        # "none" gate, "Y" keep slack, "Y" auto-update
-        inputs = iter(["none", "Y", "Y"])
+        # "none" gate, N email, "Y" keep slack, "Y" auto-update
+        inputs = iter(["none", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -623,8 +624,8 @@ class TestRunSetupSlackPreservation:
         cross_dir.mkdir(parents=True)
         (cross_dir / ".env").write_text("CROSS_SLACK_BOT_TOKEN=xoxb-old\nCROSS_SLACK_APP_TOKEN=xapp-old\n")
 
-        # "none" gate, "n" don't keep, "y" configure new, "Y" auto-update
-        inputs = iter(["none", "n", "y", "Y"])
+        # "none" gate, N email, "n" don't keep, "y" configure new, "Y" auto-update
+        inputs = iter(["none", "N", "n", "y", "Y"])
         secrets = iter(["xoxb-new", "xapp-new"])
 
         output = []
@@ -652,7 +653,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -676,7 +677,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text(f'# existing\n{SHELL_WRAPPER_HEADER}\nclaude() {{ cross wrap -- claude "$@"; }}\n')
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -699,7 +700,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "n", "Y"])
+        inputs = iter(["none", "N", "N", "n", "Y"])
 
         output = []
         result = run_setup(
@@ -718,7 +719,7 @@ class TestRunSetupShellWrappers:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -741,7 +742,7 @@ class TestRunSetupDefaultRules:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "Y"])
+        inputs = iter(["none", "N", "N", "Y"])
 
         output = []
         run_setup(
@@ -764,7 +765,7 @@ class TestRunSetupDefaultRules:
         stale = rules_dir / "default.yaml"
         stale.write_text("# old defaults\n")
 
-        inputs = iter(["none", "N", "Y"])
+        inputs = iter(["none", "N", "N", "Y"])
 
         output = []
         run_setup(
@@ -788,7 +789,7 @@ class TestRunSetupCustomModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["google/gemini-2.5-flash", "", "", "N", "Y"])
+        inputs = iter(["google/gemini-2.5-flash", "", "", "N", "N", "Y"])
         secrets = iter(["my-key"])
 
         output = []
@@ -814,8 +815,8 @@ class TestRunSetupClaudeModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "claude" gate model → cli/claude, no key prompt, "" sentinel (same), "" interval, N slack
-        inputs = iter(["claude", "", "", "N", "Y"])
+        # "claude" gate model → cli/claude, no key prompt, "" sentinel (same), "" interval, N email, N slack
+        inputs = iter(["claude", "", "", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -838,8 +839,8 @@ class TestRunSetupClaudeModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "cli/claude" gate model, no key prompt, "" sentinel (same), "" interval, N slack
-        inputs = iter(["cli/claude", "", "", "N", "Y"])
+        # "cli/claude" gate model, no key prompt, "" sentinel (same), "" interval, N email, N slack
+        inputs = iter(["cli/claude", "", "", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -863,7 +864,7 @@ class TestRunSetupSummaryOutput:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "n", "Y"])
+        inputs = iter(["none", "N", "N", "n", "Y"])
 
         output = []
         run_setup(
@@ -1003,8 +1004,8 @@ class TestClaudeCodeHookSetupStep:
         mock_sys.platform = "darwin"
         cross_dir = tmp_path / ".cross"
 
-        # none LLM, N notifications, N slack, Y hook, N autostart, Y auto-update
-        inputs = iter(["none", "N", "N", "Y", "N", "Y"])
+        # none LLM, N notifications, N email, N slack, Y hook, N autostart, Y auto-update
+        inputs = iter(["none", "N", "N", "N", "Y", "N", "Y"])
         output = []
         result = run_setup(
             cross_dir=cross_dir,
@@ -1015,6 +1016,211 @@ class TestClaudeCodeHookSetupStep:
 
         mock_install.assert_called_once()
         assert result.get("claude_code_hook_installed") is True
+
+
+@patch("cross.setup.sys")
+class TestRunSetupEmail:
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_email_configured(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        # none LLM, y email, from, to, smtp host, port, username, password, n imap, N slack, Y auto-update
+        inputs = iter([
+            "none",
+            "y", "cross@example.com", "admin@example.com", "smtp.gmail.com", "587", "N",
+            "N", "Y",
+        ])
+        secrets = iter(["cross@example.com", "secret123"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: next(secrets),
+            print_fn=output.append,
+        )
+
+        assert result["email_configured"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_EMAIL_FROM=cross@example.com" in env_content
+        assert "CROSS_EMAIL_TO=admin@example.com" in env_content
+        assert "CROSS_EMAIL_SMTP_HOST=smtp.gmail.com" in env_content
+        assert "CROSS_EMAIL_SMTP_PORT=587" in env_content
+        assert "CROSS_EMAIL_SMTP_USERNAME=cross@example.com" in env_content
+        assert "CROSS_EMAIL_SMTP_PASSWORD=secret123" in env_content
+
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_email_with_imap(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        inputs = iter([
+            "none",
+            "y", "cross@example.com", "admin@example.com", "smtp.gmail.com", "", "y", "imap.gmail.com",
+            "N", "Y",
+        ])
+        secrets = iter(["cross@example.com", "secret123"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: next(secrets),
+            print_fn=output.append,
+        )
+
+        assert result["email_configured"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_EMAIL_IMAP_HOST=imap.gmail.com" in env_content
+
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_email_declined(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        inputs = iter(["none", "N", "N", "Y"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result["email_configured"] is False
+        env_content = (cross_dir / ".env").read_text()
+        assert "EMAIL" not in env_content
+
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_email_empty_addresses_skipped(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        inputs = iter(["none", "y", "", "", "N", "Y"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result["email_configured"] is False
+        env_content = (cross_dir / ".env").read_text()
+        assert "EMAIL" not in env_content
+
+
+@patch("cross.setup.sys")
+class TestRunSetupEmailPreservation:
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_existing_email_preserved_on_rerun(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        cross_dir.mkdir(parents=True)
+        (cross_dir / ".env").write_text(
+            "CROSS_EMAIL_FROM=cross@example.com\nCROSS_EMAIL_TO=admin@example.com\n"
+        )
+
+        # none LLM, Y keep email, N slack, Y auto-update
+        inputs = iter(["none", "Y", "N", "Y"])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result["email_configured"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_EMAIL_FROM=cross@example.com" in env_content
+        assert "CROSS_EMAIL_TO=admin@example.com" in env_content
+
+    @patch("cross.setup._detect_agents", return_value=[])
+    def test_existing_email_replaced_on_rerun(self, mock_agents, mock_sys, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        cross_dir.mkdir(parents=True)
+        (cross_dir / ".env").write_text(
+            "CROSS_EMAIL_FROM=old@example.com\nCROSS_EMAIL_TO=old-admin@example.com\n"
+        )
+
+        # none LLM, n don't keep email, y configure new, addresses, smtp, no imap, N slack, Y auto-update
+        inputs = iter([
+            "none",
+            "n", "y", "new@example.com", "new-admin@example.com", "", "", "N",
+            "N", "Y",
+        ])
+
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result["email_configured"] is True
+        env_content = (cross_dir / ".env").read_text()
+        assert "CROSS_EMAIL_FROM=new@example.com" in env_content
+        assert "CROSS_EMAIL_TO=new-admin@example.com" in env_content
+
+
+class TestBuildEnvLinesEmail:
+    def test_email_config_included(self):
+        lines = _build_env_lines(
+            gate_model=None,
+            gate_api_key=None,
+            llm_enabled=False,
+            slack_bot_token=None,
+            slack_app_token=None,
+            email_from="cross@example.com",
+            email_to="admin@example.com",
+            email_smtp_host="smtp.gmail.com",
+            email_smtp_port=587,
+            email_smtp_username="cross@example.com",
+            email_smtp_password="secret",
+            email_imap_host="imap.gmail.com",
+        )
+        text = "\n".join(lines)
+        assert "CROSS_EMAIL_FROM=cross@example.com" in text
+        assert "CROSS_EMAIL_TO=admin@example.com" in text
+        assert "CROSS_EMAIL_SMTP_HOST=smtp.gmail.com" in text
+        assert "CROSS_EMAIL_SMTP_PORT=587" in text
+        assert "CROSS_EMAIL_SMTP_USERNAME=cross@example.com" in text
+        assert "CROSS_EMAIL_SMTP_PASSWORD=secret" in text
+        assert "CROSS_EMAIL_IMAP_HOST=imap.gmail.com" in text
+
+    def test_email_not_included_when_empty(self):
+        lines = _build_env_lines(
+            gate_model=None,
+            gate_api_key=None,
+            llm_enabled=False,
+            slack_bot_token=None,
+            slack_app_token=None,
+        )
+        text = "\n".join(lines)
+        assert "EMAIL" not in text
+
+    def test_email_minimal(self):
+        lines = _build_env_lines(
+            gate_model=None,
+            gate_api_key=None,
+            llm_enabled=False,
+            slack_bot_token=None,
+            slack_app_token=None,
+            email_from="cross@example.com",
+            email_to="admin@example.com",
+        )
+        text = "\n".join(lines)
+        assert "CROSS_EMAIL_FROM=cross@example.com" in text
+        assert "CROSS_EMAIL_TO=admin@example.com" in text
+        assert "SMTP_HOST" not in text
+        assert "IMAP" not in text
 
 
 class TestCLISetupRouting:
