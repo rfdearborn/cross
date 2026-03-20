@@ -1559,6 +1559,85 @@ class TestHandleInteractive:
         assert "carol" in update_text
         loop.close()
 
+    def test_gate_approve_preserves_context(self, slack_env):
+        """Approving a gate escalation should keep the original command/analysis blocks."""
+        factory, _, _ = slack_env
+        loop = asyncio.new_event_loop()
+        resolve_cb = MagicMock()
+        plugin, mock_web = factory(event_loop=loop)
+        plugin._resolve_approval_callback = resolve_cb
+
+        original_context_block = {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "⚠️ *Gate ESCALATE*: `Bash`\n>Dangerous command\n```\n{\"command\": \"rm -rf /\"}\n```"},
+        }
+        original_actions_block = {
+            "type": "actions",
+            "elements": [
+                {"type": "button", "action_id": "gate_approve", "value": "tu1"},
+                {"type": "button", "action_id": "gate_deny", "value": "tu1"},
+            ],
+        }
+
+        payload = {
+            "type": "block_actions",
+            "actions": [{"action_id": "gate_approve", "value": "tu1"}],
+            "user": {"username": "alice"},
+            "channel": {"id": "C_CHAN"},
+            "message": {
+                "ts": "msg_ts",
+                "blocks": [original_context_block, original_actions_block],
+            },
+        }
+
+        plugin._handle_interactive(payload)
+
+        blocks = mock_web.chat_update.call_args.kwargs["blocks"]
+        # Original context block should be preserved
+        assert blocks[0] == original_context_block
+        # Actions block should be replaced with the approval result
+        assert blocks[1]["type"] == "section"
+        assert "Approved" in blocks[1]["text"]["text"]
+        assert "alice" in blocks[1]["text"]["text"]
+        # No actions block should remain
+        assert not any(b.get("type") == "actions" for b in blocks)
+        loop.close()
+
+    def test_gate_deny_preserves_context(self, slack_env):
+        """Denying a gate escalation should keep the original command/analysis blocks."""
+        factory, _, _ = slack_env
+        loop = asyncio.new_event_loop()
+        resolve_cb = MagicMock()
+        plugin, mock_web = factory(event_loop=loop)
+        plugin._resolve_approval_callback = resolve_cb
+
+        original_context_block = {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "⚠️ *Gate ESCALATE*: `Bash`\n>Risky operation"},
+        }
+
+        payload = {
+            "type": "block_actions",
+            "actions": [{"action_id": "gate_deny", "value": "tu2"}],
+            "user": {"username": "bob"},
+            "channel": {"id": "C_CHAN"},
+            "message": {
+                "ts": "msg_ts",
+                "blocks": [
+                    original_context_block,
+                    {"type": "actions", "elements": []},
+                ],
+            },
+        }
+
+        plugin._handle_interactive(payload)
+
+        blocks = mock_web.chat_update.call_args.kwargs["blocks"]
+        assert blocks[0] == original_context_block
+        assert "Denied" in blocks[1]["text"]["text"]
+        assert "bob" in blocks[1]["text"]["text"]
+        loop.close()
+
     def test_unknown_action_ignored(self, slack_env):
         factory, _, _ = slack_env
         inject_cb = AsyncMock()

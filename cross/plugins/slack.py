@@ -513,14 +513,18 @@ class SlackPlugin:
             if self._resolve_approval_callback and self._event_loop:
                 self._event_loop.call_soon_threadsafe(self._resolve_approval_callback, tool_use_id, approved, user_name)
 
-            # Update message to replace buttons with result
+            # Update message: keep original context, replace buttons with result
             if channel_id and message_ts:
                 try:
+                    original_blocks = payload.get("message", {}).get("blocks", [])
+                    # Keep all non-actions blocks (the command/analysis context)
+                    updated_blocks = [b for b in original_blocks if b.get("type") != "actions"]
+                    updated_blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": result_text}})
                     self._web.chat_update(
                         channel=channel_id,
                         ts=message_ts,
                         text=result_text,
-                        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                        blocks=updated_blocks,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to update gate approval message: {e}")
