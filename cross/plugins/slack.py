@@ -58,6 +58,8 @@ class SlackPlugin:
         self._permission_pending: dict[str, tuple[str, str]] = {}
         # Slack-initiated sessions: project -> (channel_id, message_ts) for threading
         self._pending_thread_ts: dict[str, tuple[str, str]] = {}
+        # Pending gate escalations: tool_use_id -> (channel_id, message_ts)
+        self._gate_pending: dict[str, tuple[str, str]] = {}
 
     def start(self):
         """Connect to Slack via Socket Mode."""
@@ -315,50 +317,74 @@ class SlackPlugin:
                     except Exception as e:
                         logger.warning(f"Failed to update permission message: {e}")
 
-            case GateDecisionEvent() if event.action in ("block", "escalate", "alert"):
-                icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔"}.get(event.action, "❓")
-                text = f"{icon} *Gate {event.action.upper()}*: `{event.tool_name}`"
-                if event.reason:
-                    text += f"\n>{event.reason[:300]}"
-                if event.tool_input:
-                    input_str = json.dumps(event.tool_input, indent=2)
-                    if len(input_str) > 500:
-                        input_str = input_str[:500] + "\n..."
-                    text += f"\n```\n{input_str}\n```"
+            case GateDecisionEvent() if event.action in ("block", "escalate", "alert", "allow", "halt_session"):
+                # Check if this resolves a pending escalation (from dashboard, CLI, or timeout)
+                pending = self._gate_pending.pop(event.tool_use_id, None)
+                if pending and event.action != "escalate":
+                    pend_channel, pend_ts = pending
+                    # Extract username from reason like "Approved by human reviewer (@alice)"
+                    m = re.search(r"@(\w+)", event.reason or "")
+                    username = m.group(1) if m else "unknown"
+                    if event.action == "allow":
+                        result_text = f"✅ *Approved* by @{username}"
+                    else:
+                        result_text = f"❌ *Denied* by @{username}"
+                    try:
+                        self._web.chat_update(
+                            channel=pend_channel,
+                            ts=pend_ts,
+                            text=result_text,
+                            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update gate escalation message: {e}")
+                elif event.action in ("block", "escalate", "alert"):
+                    # New gate decision (not resolving a pending escalation) — post to channel
+                    icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔"}.get(event.action, "❓")
+                    text = f"{icon} *Gate {event.action.upper()}*: `{event.tool_name}`"
+                    if event.reason:
+                        text += f"\n>{event.reason[:300]}"
+                    if event.tool_input:
+                        input_str = json.dumps(event.tool_input, indent=2)
+                        if len(input_str) > 500:
+                            input_str = input_str[:500] + "\n..."
+                        text += f"\n```\n{input_str}\n```"
 
-                msg_kwargs: dict = {
-                    "channel": channel_id,
-                    "thread_ts": thread_ts,
-                    "text": text,
-                    "reply_broadcast": event.action in ("block", "escalate"),
-                }
+                    msg_kwargs: dict = {
+                        "channel": channel_id,
+                        "thread_ts": thread_ts,
+                        "text": text,
+                        "reply_broadcast": event.action in ("block", "escalate"),
+                    }
 
-                # Add Allow/Deny buttons for escalations
-                if event.action == "escalate":
-                    msg_kwargs["blocks"] = [
-                        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
-                        {
-                            "type": "actions",
-                            "elements": [
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "Allow"},
-                                    "action_id": "gate_approve",
-                                    "value": event.tool_use_id,
-                                    "style": "primary",
-                                },
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "Deny"},
-                                    "action_id": "gate_deny",
-                                    "value": event.tool_use_id,
-                                    "style": "danger",
-                                },
-                            ],
-                        },
-                    ]
+                    # Add Allow/Deny buttons for escalations
+                    if event.action == "escalate":
+                        msg_kwargs["blocks"] = [
+                            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+                            {
+                                "type": "actions",
+                                "elements": [
+                                    {
+                                        "type": "button",
+                                        "text": {"type": "plain_text", "text": "Allow"},
+                                        "action_id": "gate_approve",
+                                        "value": event.tool_use_id,
+                                        "style": "primary",
+                                    },
+                                    {
+                                        "type": "button",
+                                        "text": {"type": "plain_text", "text": "Deny"},
+                                        "action_id": "gate_deny",
+                                        "value": event.tool_use_id,
+                                        "style": "danger",
+                                    },
+                                ],
+                            },
+                        ]
 
-                self._web.chat_postMessage(**msg_kwargs)
+                    resp = self._web.chat_postMessage(**msg_kwargs)
+                    if event.action == "escalate" and resp.get("ok"):
+                        self._gate_pending[event.tool_use_id] = (channel_id, resp["ts"])
 
             case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
                 icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
@@ -508,6 +534,9 @@ class SlackPlugin:
             approved = action_id == "gate_approve"
             result_text = f"✅ *Approved* by @{user_name}" if approved else f"❌ *Denied* by @{user_name}"
             logger.info(f"Gate {'approved' if approved else 'denied'} by {user_name} ({tool_use_id})")
+
+            # Remove from pending so the EventBus handler doesn't double-update
+            self._gate_pending.pop(tool_use_id, None)
 
             # Signal the proxy's waiting approval event (thread-safe)
             if self._resolve_approval_callback and self._event_loop:
