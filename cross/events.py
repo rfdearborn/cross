@@ -103,6 +103,24 @@ class SentinelReviewEvent:
     evaluator: str = ""
 
 
+@dataclass
+class PermissionPromptEvent:
+    """Fired when Claude Code shows a native permission prompt in a PTY session."""
+
+    session_id: str
+    tool_desc: str = ""
+    allow_all_label: str = "Allow all (session)"
+
+
+@dataclass
+class PermissionResolvedEvent:
+    """Fired when a permission prompt is resolved from any surface."""
+
+    session_id: str
+    action: str = ""  # "approve", "allow_all", "deny"
+    resolver: str = ""  # "slack", "dashboard", "terminal", "cli"
+
+
 CrossEvent = (
     RequestEvent
     | ToolUseEvent
@@ -113,6 +131,8 @@ CrossEvent = (
     | GateDecisionEvent
     | GateRetryEvent
     | SentinelReviewEvent
+    | PermissionPromptEvent
+    | PermissionResolvedEvent
 )
 
 EventHandler = Callable[[CrossEvent], Awaitable[None]]
