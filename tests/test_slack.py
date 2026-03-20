@@ -1065,6 +1065,69 @@ class TestHandleEvent:
         assert "tu3" not in plugin._gate_pending
 
     @pytest.mark.anyio
+    async def test_gate_escalation_timeout_updates_slack(self, slack_env):
+        """When an escalation times out, Slack message should update with denied."""
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        mock_web.chat_postMessage.return_value = {"ok": True, "ts": "9999.0003"}
+        await plugin.handle_event(
+            GateDecisionEvent(tool_use_id="tu_to", tool_name="Bash", action="escalate", reason="Review")
+        )
+        mock_web.reset_mock()
+
+        # Timeout produces halt_session with no @username in reason
+        await plugin.handle_event(
+            GateDecisionEvent(
+                tool_use_id="tu_to",
+                tool_name="Bash",
+                action="halt_session",
+                reason="Timed out waiting for human approval",
+                evaluator="human",
+            )
+        )
+
+        mock_web.chat_update.assert_called_once()
+        kwargs = mock_web.chat_update.call_args.kwargs
+        assert "Denied" in kwargs["text"]
+        assert "tu_to" not in plugin._gate_pending
+
+    @pytest.mark.anyio
+    async def test_gate_escalation_streaming_block_updates_slack(self, slack_env):
+        """Streaming denial (action=block) should update escalation, not post new message."""
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        mock_web.chat_postMessage.return_value = {"ok": True, "ts": "9999.0004"}
+        await plugin.handle_event(
+            GateDecisionEvent(tool_use_id="tu_sb", tool_name="Write", action="escalate", reason="Review")
+        )
+        mock_web.reset_mock()
+
+        # Streaming path publishes action="block" on denial
+        await plugin.handle_event(
+            GateDecisionEvent(
+                tool_use_id="tu_sb",
+                tool_name="Write",
+                action="block",
+                reason="Denied by human reviewer (@dave)",
+                evaluator="human",
+            )
+        )
+
+        # Should update the existing message, not post a new one
+        mock_web.chat_update.assert_called_once()
+        mock_web.chat_postMessage.assert_not_called()
+        kwargs = mock_web.chat_update.call_args.kwargs
+        assert "Denied" in kwargs["text"]
+        assert "@dave" in kwargs["text"]
+        assert "tu_sb" not in plugin._gate_pending
+
+    @pytest.mark.anyio
     async def test_gate_decision_abstain_ignored(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()

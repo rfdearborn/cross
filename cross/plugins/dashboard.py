@@ -41,7 +41,7 @@ class DashboardPlugin:
         if isinstance(event, GateDecisionEvent):
             if event.action == "escalate":
                 self._pending[event.tool_use_id] = event_dict
-            elif event.action in ("allow", "block") and event.tool_use_id in self._pending:
+            elif event.action in ("allow", "block", "halt_session") and event.tool_use_id in self._pending:
                 # Escalation resolved (by Slack, dashboard, or timeout)
                 del self._pending[event.tool_use_id]
 
@@ -778,7 +778,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
           "escalate-" + ev.tool_use_id
         );
-      } else if ((ev.action === "allow" || ev.action === "block") && pendingMap[ev.tool_use_id]) {
+      } else if ((ev.action === "allow" || ev.action === "block" || ev.action === "halt_session") && pendingMap[ev.tool_use_id]) {
         delete pendingMap[ev.tool_use_id];
         renderPending();
       }

@@ -137,6 +137,22 @@ class TestDashboardPluginEventHandling:
         assert len(plugin.get_pending()) == 0
 
     @pytest.mark.anyio
+    async def test_halt_session_removes_from_pending(self, store):
+        """halt_session (non-streaming denial/timeout) should clear pending."""
+        plugin = DashboardPlugin(event_store=store)
+        await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_halt", tool_name="Bash", action="escalate"))
+        assert len(plugin.get_pending()) == 1
+        await plugin.handle_event(
+            GateDecisionEvent(
+                tool_use_id="tu_halt",
+                tool_name="Bash",
+                action="halt_session",
+                reason="Timed out waiting for human approval",
+            )
+        )
+        assert len(plugin.get_pending()) == 0
+
+    @pytest.mark.anyio
     async def test_non_escalate_gate_not_pending(self, store):
         plugin = DashboardPlugin(event_store=store)
         await plugin.handle_event(GateDecisionEvent(tool_use_id="tu_ok", tool_name="Read", action="allow"))
