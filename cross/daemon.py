@@ -610,7 +610,10 @@ async def api_resolve_permission(request: Request) -> JSONResponse:
     username = data.get("username", "dashboard")
 
     if session_id not in _permission_pending:
-        return JSONResponse({"status": "not_found", "message": "No pending permission for this session"}, status_code=404)
+        return JSONResponse(
+            {"status": "not_found", "message": "No pending permission for this session"},
+            status_code=404,
+        )
 
     await _resolve_permission_async(session_id, action, f"dashboard (@{username})")
     return JSONResponse({"status": "ok", "session_id": session_id, "action": action})

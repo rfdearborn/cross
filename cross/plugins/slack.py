@@ -29,7 +29,14 @@ logger = logging.getLogger("cross.plugins.slack")
 class SlackPlugin:
     """Manages Slack channels/threads and relays agent events."""
 
-    def __init__(self, inject_callback=None, spawn_callback=None, resolve_approval_callback=None, resolve_permission_callback=None, event_loop=None):
+    def __init__(
+        self,
+        inject_callback=None,
+        spawn_callback=None,
+        resolve_approval_callback=None,
+        resolve_permission_callback=None,
+        event_loop=None,
+    ):
         self._web = WebClient(token=settings.slack_bot_token)
         self._socket: SocketModeClient | None = None
         self._event_loop = event_loop

@@ -568,9 +568,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         + '<div class="tool-name">Permission needed' + (toolDesc ? ' for ' + escHtml(toolDesc) : '') + '</div>'
         + '<div class="session-id">Session: ' + safeSid + '</div>'
         + '<div class="actions">'
-        + '<button class="btn btn-approve" onclick="resolvePermission(&apos;' + safeSid + '&apos;, &apos;approve&apos;)">Approve</button>'
-        + '<button class="btn btn-allow-all" onclick="resolvePermission(&apos;' + safeSid + '&apos;, &apos;allow_all&apos;)">' + allowLabel + '</button>'
-        + '<button class="btn btn-deny" onclick="resolvePermission(&apos;' + safeSid + '&apos;, &apos;deny&apos;)">Deny</button>'
+        + '<button class="btn btn-approve" onclick="resolvePerm(&apos;'
+        + safeSid + '&apos;, &apos;approve&apos;)">Approve</button>'
+        + '<button class="btn btn-allow-all" onclick="resolvePerm(&apos;'
+        + safeSid + '&apos;, &apos;allow_all&apos;)">' + allowLabel + '</button>'
+        + '<button class="btn btn-deny" onclick="resolvePerm(&apos;'
+        + safeSid + '&apos;, &apos;deny&apos;)">Deny</button>'
         + '</div></div>';
     }
     // Gate escalations
@@ -889,7 +892,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
   };
 
-  window.resolvePermission = function(sessionId, action) {
+  window.resolvePerm = function(sessionId, action) {
     // Disable buttons immediately
     const card = document.querySelector('.permission-card[data-sid="' + sessionId + '"]');
     if (card) {
