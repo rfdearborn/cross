@@ -1567,9 +1567,12 @@ class TestHandleInteractive:
         plugin, mock_web = factory(event_loop=loop)
         plugin._resolve_approval_callback = resolve_cb
 
+        escalate_text = (
+            '⚠️ *Gate ESCALATE*: `Bash`\n>Dangerous command\n```\n{"command": "rm -rf /"}\n```'
+        )
         original_context_block = {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": "⚠️ *Gate ESCALATE*: `Bash`\n>Dangerous command\n```\n{\"command\": \"rm -rf /\"}\n```"},
+            "text": {"type": "mrkdwn", "text": escalate_text},
         }
         original_actions_block = {
             "type": "actions",
