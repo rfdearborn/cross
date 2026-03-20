@@ -58,6 +58,8 @@ class SlackPlugin:
         self._permission_pending: dict[str, tuple[str, str]] = {}
         # Slack-initiated sessions: project -> (channel_id, message_ts) for threading
         self._pending_thread_ts: dict[str, tuple[str, str]] = {}
+        # Pending gate escalations: tool_use_id -> (channel_id, message_ts)
+        self._gate_pending: dict[str, tuple[str, str]] = {}
 
     def start(self):
         """Connect to Slack via Socket Mode."""
@@ -358,7 +360,31 @@ class SlackPlugin:
                         },
                     ]
 
-                self._web.chat_postMessage(**msg_kwargs)
+                resp = self._web.chat_postMessage(**msg_kwargs)
+                if event.action == "escalate" and resp.get("ok"):
+                    self._gate_pending[event.tool_use_id] = (channel_id, resp["ts"])
+
+            case GateDecisionEvent() if event.action in ("allow", "block", "halt_session"):
+                # Escalation resolved externally (dashboard, CLI, or timeout) — update Slack message
+                pending = self._gate_pending.pop(event.tool_use_id, None)
+                if pending:
+                    pend_channel, pend_ts = pending
+                    # Extract username from reason like "Approved by human reviewer (@alice)"
+                    m = re.search(r"@(\w+)", event.reason or "")
+                    username = m.group(1) if m else "unknown"
+                    if event.action == "allow":
+                        result_text = f"✅ *Approved* by @{username}"
+                    else:
+                        result_text = f"❌ *Denied* by @{username}"
+                    try:
+                        self._web.chat_update(
+                            channel=pend_channel,
+                            ts=pend_ts,
+                            text=result_text,
+                            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update gate escalation message: {e}")
 
             case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
                 icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
@@ -508,6 +534,9 @@ class SlackPlugin:
             approved = action_id == "gate_approve"
             result_text = f"✅ *Approved* by @{user_name}" if approved else f"❌ *Denied* by @{user_name}"
             logger.info(f"Gate {'approved' if approved else 'denied'} by {user_name} ({tool_use_id})")
+
+            # Remove from pending so the EventBus handler doesn't double-update
+            self._gate_pending.pop(tool_use_id, None)
 
             # Signal the proxy's waiting approval event (thread-safe)
             if self._resolve_approval_callback and self._event_loop:
