@@ -566,8 +566,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <section id="instructions-section">
     <h2>Custom Instructions</h2>
     <div class="instructions-editor">
-      <p class="instructions-hint">These instructions are included with every gate and sentinel prompt. Changes are applied immediately.</p>
-      <textarea id="instructions-text" placeholder="Add custom instructions for the gate and sentinel reviewers...&#10;&#10;Example: Our project uses a monorepo. The agent is allowed to run `npm test` and `npm build` in any workspace. Treat writes to /opt/app/config/ as expected."></textarea>
+      <p class="instructions-hint">Included with every gate and sentinel prompt. Changes apply immediately.</p>
+      <textarea id="instructions-text"
+        placeholder="Add custom instructions for gate and sentinel reviewers..."></textarea>
       <div class="instructions-actions">
         <button class="btn-save" id="instructions-save" onclick="saveInstructions()">Save</button>
         <span class="save-status" id="instructions-status"></span>

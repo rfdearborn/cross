@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 import time
 
-import pytest
-
 from cross.custom_instructions import CustomInstructions, format_instructions_block
 
 
