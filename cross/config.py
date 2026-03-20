@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     llm_gate_max_tokens: int = 256
     llm_gate_reasoning: str = ""  # off by default for speed
     llm_gate_timeout_ms: float = 30000  # max wait for LLM response before falling back
-    llm_gate_threshold: str = "escalate"  # min denylist action to trigger LLM review
     llm_gate_context_tools: int = 3  # number of recent tool calls to include in LLM review
     llm_gate_justification: bool = False  # include explanation after verdict (costs tokens)
     llm_gate_shadow: bool = False  # LLM decides but human makes the final call

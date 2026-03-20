@@ -496,7 +496,7 @@ async def _gate_non_streaming_response(
             )
         )
 
-        if result.action == Action.ESCALATE and not any_halted:
+        if result.action in (Action.REVIEW, Action.ESCALATE) and not any_halted:
             # Hold and wait for human approval via Slack
             approval_event = asyncio.Event()
             _pending_approvals[tool_id] = approval_event
@@ -762,7 +762,7 @@ async def _proxy_streaming(
                                 )
                             )
 
-                            if result.action == Action.ESCALATE and not any_halted:
+                            if result.action in (Action.REVIEW, Action.ESCALATE) and not any_halted:
                                 # Hold stream and wait for human approval
                                 approval_event = asyncio.Event()
                                 _pending_approvals[tool_event.tool_use_id] = approval_event

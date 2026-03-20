@@ -238,7 +238,6 @@ def _mock_settings(**overrides):
         "llm_gate_max_tokens": 256,
         "llm_gate_reasoning": "",
         "llm_gate_timeout_ms": 30000,
-        "llm_gate_threshold": "block",
         "llm_sentinel_enabled": False,
         "llm_sentinel_model": "anthropic/claude-sonnet-4-6",
         "llm_sentinel_api_key": "",

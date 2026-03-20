@@ -13,7 +13,7 @@ def _req(tool_name: str, tool_input: dict) -> GateRequest:
 
 
 class TestScriptExecutionRule:
-    """Test that script execution triggers ESCALATE (for LLM gate review)."""
+    """Test that script execution triggers REVIEW (for LLM gate review)."""
 
     def setup_method(self):
         self.gate = DenylistGate()
@@ -21,98 +21,98 @@ class TestScriptExecutionRule:
     @pytest.mark.anyio
     async def test_python_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "python script.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
         assert r.rule_id == "script-execution"
 
     @pytest.mark.anyio
     async def test_python3_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "python3 bad_script.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_python_with_path(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "python ./scripts/deploy.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_python_with_flags(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "python3 -u script.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_node_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "node server.js"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_node_ts_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "node app.ts"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_ruby_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "ruby deploy.rb"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_perl_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "perl process.pl"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_bash_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "bash setup.sh"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_sh_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "sh install.sh"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_php_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "php index.php"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_rscript(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "Rscript analysis.R"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_lua_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "lua script.lua"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_dotslash_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "./deploy.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_chained_script_execution(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "cd /tmp && python exploit.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_env_python_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "env python script.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_exec_python_script(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "exec python3 script.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_stdin_redirect(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "python < script.py"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_cat_pipe_to_python(self):
         r = await self.gate.evaluate(_req("Bash", {"command": "cat script.py | python"}))
-        assert r.action == Action.ESCALATE
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_safe_python_module_allowed(self):

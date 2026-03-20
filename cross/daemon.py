@@ -381,7 +381,7 @@ async def api_gate(request: Request) -> JSONResponse:
     )
 
     # Handle escalation — wait for human approval
-    if result.action == Action.ESCALATE:
+    if result.action in (Action.REVIEW, Action.ESCALATE):
         from cross.proxy import _approval_results, _pending_approvals
 
         approval_event = asyncio.Event()
@@ -557,7 +557,6 @@ async def on_startup():
 
         # LLM review gate (stage 2) — reviews denylist-flagged calls
         review_gate = None
-        review_threshold = Action.BLOCK
         if settings.llm_gate_enabled:
             from cross.gates.llm_review import LLMReviewGate
             from cross.llm import LLMConfig, resolve_api_key
@@ -576,16 +575,12 @@ async def on_startup():
                     timeout_ms=settings.llm_gate_timeout_ms,
                     justification=settings.llm_gate_justification,
                 )
-                try:
-                    review_threshold = Action[settings.llm_gate_threshold.upper()]
-                except KeyError:
-                    logger.warning(f"Invalid llm_gate_threshold '{settings.llm_gate_threshold}', using BLOCK")
                 model_name = settings.llm_gate_model
-                logger.info(f"LLM review gate active (model={model_name}, threshold={review_threshold.name})")
+                logger.info(f"LLM review gate active (model={model_name})")
             else:
                 logger.info("LLM gate enabled but no API key available — denylist operates standalone")
 
-        _gate_chain = GateChain(gates=[gate], review_gate=review_gate, review_threshold=review_threshold)
+        _gate_chain = GateChain(gates=[gate], review_gate=review_gate)
         logger.info(f"Gating enabled with {len(gate.rules)} denylist rules")
 
     # Set up LLM sentinel (async periodic reviewer)

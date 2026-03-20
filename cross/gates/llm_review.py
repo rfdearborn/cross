@@ -1,10 +1,12 @@
 """LLM review gate — synchronous LLM review of denylist-flagged tool calls.
 
-Only invoked when the denylist flags a call (action >= threshold).
-Reviews the tool call with context and can override the denylist verdict:
+Invoked for any denylist action at REVIEW or above.
+For REVIEW actions, the LLM decides the outcome (can override the denylist):
   - ALLOW: false positive, wave it through
   - BLOCK: confirmed dangerous, block with feedback
   - ESCALATE: uncertain, needs human review
+For higher actions (ESCALATE/BLOCK/HALT_SESSION), LLM analysis is advisory —
+the original action stands but LLM reasoning is attached as metadata.
 
 On parse failure or error, returns ABSTAIN (falls back to denylist verdict).
 """
