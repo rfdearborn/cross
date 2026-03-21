@@ -17,7 +17,7 @@ cross is a minimal-friction harness of deterministic and LLM checking layers to 
 ## Quick Start
 
 ```bash
-pip install cross-ai               # or: pip install cross-ai[slack] for Slack integration
+pip install cross-ai               # or: pip install cross-ai[slack] for Slack integration, cross-ai[email] for email
 cross setup                        # interactive setup wizard (starts daemon automatically on macOS)
 ```
 
@@ -99,6 +99,7 @@ cross ships with a built-in web dashboard at `http://localhost:2767`. No depende
 
 The dashboard shows:
 - **Agents** -- monitoring coverage with status chips: green for monitored agents, grey for detected but unmonitored
+- **Permission prompts** -- Claude Code permission prompts detected in the terminal, surfaced with Approve/Allow All/Deny actions. Also relayed to Slack and email
 - **Pending approvals** -- escalated tool calls waiting for human review, with Approve/Deny buttons
 - **Live event feed** -- real-time stream of user messages, agent responses, tool calls (with details), LLM gate decisions (with reasoning), and sentinel reviews. Persists across daemon restarts. Filterable by event type, agent, and text search.
 
@@ -117,6 +118,7 @@ cross delivers notifications through two layers:
 - **Native desktop notifications** (macOS) -- via `terminal-notifier`. Clicking a notification opens the dashboard. Enabled during `cross setup` or by setting `CROSS_NATIVE_NOTIFICATIONS_ENABLED=true`. When the dashboard tab is open, browser notifications take priority to avoid opening duplicate tabs.
 - **Browser notifications** -- fired from the dashboard tab when it's open. Click to focus the tab. Enable via the button in the dashboard header.
 - **Slack** (optional) -- gate decisions, sentinel reviews, and interactive approval buttons. Configure with `CROSS_SLACK_BOT_TOKEN` and `CROSS_SLACK_APP_TOKEN`. Install the `slack` extra: `pip install cross-ai[slack]`.
+- **Email** (optional) -- mirrors agent sessions to email threads with approval workflows. Supports SMTP (outbound) and IMAP (inbound replies). Configure via `cross setup` or `CROSS_EMAIL_*` environment variables.
 
 ## Configuration
 
@@ -149,6 +151,12 @@ CROSS_LLM_GATE_API_KEY=...          # or set GOOGLE_API_KEY
 ```
 
 Or use `cross setup` for guided interactive configuration.
+
+### Custom Instructions
+
+You can provide custom instructions that are automatically included in gate and sentinel LLM prompts. Store them in `~/.cross/instructions.md` -- they hot-reload on every access, no daemon restart needed.
+
+Edit instructions from the dashboard (Ctrl/Cmd+S to save) or directly in the file. Use this to tailor gate/sentinel behavior to your project, e.g. "allow database migrations" or "flag any network calls in test files".
 
 ### Denylist Rules
 
