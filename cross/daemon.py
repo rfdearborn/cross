@@ -41,6 +41,7 @@ logger = logging.getLogger("cross.daemon")
 event_bus = EventBus()
 _gate_chain: GateChain | None = None
 _slack = None  # SlackPlugin instance, if configured
+_email = None  # EmailPlugin instance, if configured
 _dashboard: DashboardPlugin | None = None  # always active
 _custom_instructions: CustomInstructions | None = None
 
@@ -227,6 +228,13 @@ async def api_register_session(request: Request) -> JSONResponse:
         except Exception as e:
             logger.warning(f"Slack session_started failed: {e}")
 
+    # Notify Email
+    if _email:
+        try:
+            _email.session_started_from_data(data)
+        except Exception as e:
+            logger.warning(f"Email session_started failed: {e}")
+
     return JSONResponse({"status": "ok", "session_id": session_id})
 
 
@@ -245,6 +253,13 @@ async def api_end_session(request: Request) -> JSONResponse:
             _slack.session_ended_from_data(session)
         except Exception as e:
             logger.warning(f"Slack session_ended failed: {e}")
+
+    # Notify Email
+    if _email:
+        try:
+            _email.session_ended_from_data(session)
+        except Exception as e:
+            logger.warning(f"Email session_ended failed: {e}")
 
     # Clean up
     _sessions.pop(session_id, None)
@@ -276,6 +291,9 @@ async def api_session_ws(ws: WebSocket):
                     # Forward to Slack for relay
                     if _slack:
                         _slack.handle_pty_output(session_id, text)
+                    # Forward to Email for relay
+                    if _email:
+                        _email.handle_pty_output(session_id, text)
                     # Check for permission prompts (dashboard + notifications)
                     await _check_permission_prompt(session_id, text)
 
@@ -667,7 +685,7 @@ _sentinel = None  # LLMSentinel instance, if configured
 
 
 async def on_startup():
-    global _slack, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions
+    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions
 
     _event_loop = asyncio.get_running_loop()
 
@@ -772,6 +790,25 @@ async def on_startup():
         else:
             logger.info("LLM sentinel enabled but no API key available — sentinel inactive")
 
+    # Register Email plugin
+    if settings.email_from and settings.email_to:
+        from cross.plugins.email import EmailPlugin
+        from cross.proxy import resolve_gate_approval as _resolve_gate_email
+
+        _email = EmailPlugin(
+            inject_callback=_inject_to_session,
+            resolve_approval_callback=_resolve_gate_email,
+            resolve_permission_callback=resolve_permission,
+            event_loop=asyncio.get_running_loop(),
+        )
+        try:
+            _email.start()
+            event_bus.subscribe(_email.handle_event)
+            logger.info("Email relay active")
+        except Exception as e:
+            logger.warning(f"Email failed to start: {e}")
+            _email = None
+
     # Register Slack plugin
     if settings.slack_bot_token and settings.slack_app_token:
         from cross.plugins.slack import SlackPlugin
@@ -807,6 +844,8 @@ async def on_shutdown():
         _sentinel.stop()
     if _slack:
         _slack.stop()
+    if _email:
+        _email.stop()
     # Clean up LLM httpx client
     from cross.llm import close_client
 

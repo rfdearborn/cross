@@ -28,6 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["mitmproxy>=12.0.0", "pytest>=8.0", "pytest-cov>=6.0", "anyio[trio]>=4.0", "pytest-anyio>=0.0.0"]
+email = []  # email plugin uses stdlib only (smtplib, imaplib); extra for documentation
 slack = ["slack-sdk>=3.0.0", "aiohttp>=3.9.0"]
 
 [project.urls]
