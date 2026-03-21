@@ -318,7 +318,7 @@ rules:
     tools: [Bash, exec]
     field: command
     action: review
-    description: Script file execution — LLM gate reviews script contents
+    description: Script execution (file or inline) — LLM gate reviews contents
     patterns:
       # python/python3 running a .py file (with optional env/exec/sudo prefix)
       - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*python[23w]?(?:\.\d+)?\s+(?:-\S+\s+)*\S+\.py\b'
@@ -342,6 +342,13 @@ rules:
       - '(?:(?:sudo|env|exec)\s+)*(?:python[23w]?(?:\.\d+)?|node|ruby|perl|php|(?:ba|z|fi|c|da|a|tc|k)?sh)\s+.*<\s*\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\b'
       # Piped script execution (cat script.py | python)
       - '\bcat\s+\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\s*\|\s*(?:(?:sudo|env|exec)\s+)*(?:python[23w]?(?:\.\d+)?|node|ruby|perl|php|(?:ba|z|fi|c|da|a|tc|k)?sh)\b'
+      # Inline script execution via -c / -e flag
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*python[23w]?(?:\.\d+)?\s+(?:-\S+\s+)*-c\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*node\s+(?:-\S+\s+)*-e\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*ruby\s+(?:-\S+\s+)*-e\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*perl\s+(?:-\S+\s+)*-e\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*php\s+(?:-\S+\s+)*-r\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*lua\s+(?:-\S+\s+)*-e\s'
 
   # ── Sensitive file reads (alert, not block) ──
 

@@ -121,10 +121,10 @@ class TestScriptExecutionRule:
         assert r.action == Action.ALLOW
 
     @pytest.mark.anyio
-    async def test_safe_python_inline_allowed(self):
-        """python -c 'code' should NOT trigger the script-execution rule."""
+    async def test_python_inline_reviewed(self):
+        """python -c 'code' should trigger review via the script-execution rule."""
         r = await self.gate.evaluate(_req("Bash", {"command": "python -c 'print(1)'"}))
-        assert r.action == Action.ALLOW
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_git_status_still_allowed(self):
