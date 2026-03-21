@@ -19,6 +19,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from cross.chain import GateChain
 from cross.config import settings
+from cross.custom_instructions import CustomInstructions
 from cross.evaluator import Action, GateRequest
 from cross.event_store import EventStore
 from cross.events import (
@@ -42,6 +43,7 @@ _gate_chain: GateChain | None = None
 _slack = None  # SlackPlugin instance, if configured
 _email = None  # EmailPlugin instance, if configured
 _dashboard: DashboardPlugin | None = None  # always active
+_custom_instructions: CustomInstructions | None = None
 
 # Session tracking: session_id -> session metadata
 _sessions: dict[str, dict[str, Any]] = {}
@@ -637,6 +639,27 @@ async def api_resolve_permission(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "session_id": session_id, "action": action})
 
 
+async def api_get_instructions(request: Request) -> JSONResponse:
+    """GET /cross/api/instructions — return current custom instructions."""
+    content = _custom_instructions.content if _custom_instructions else ""
+    return JSONResponse({"content": content})
+
+
+async def api_put_instructions(request: Request) -> JSONResponse:
+    """PUT /cross/api/instructions — update custom instructions."""
+    if not _custom_instructions:
+        return JSONResponse({"error": "Custom instructions not initialized"}, status_code=500)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    content = data.get("content", "")
+    if not isinstance(content, str):
+        return JSONResponse({"error": "content must be a string"}, status_code=400)
+    _custom_instructions.save(content)
+    return JSONResponse({"status": "ok", "length": len(content)})
+
+
 async def api_dashboard_ws(ws: WebSocket):
     """WS /cross/api/ws — real-time event stream to dashboard clients."""
     if _dashboard:
@@ -662,9 +685,14 @@ _sentinel = None  # LLMSentinel instance, if configured
 
 
 async def on_startup():
-    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop
+    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions
 
     _event_loop = asyncio.get_running_loop()
+
+    # Initialize custom instructions (hot-reloads on each access)
+    _custom_instructions = CustomInstructions(path=settings.custom_instructions_file)
+    if _custom_instructions.content:
+        logger.info(f"Custom instructions loaded ({len(_custom_instructions.content)} chars)")
 
     # Register logger plugin
     log_plugin = LoggerPlugin()
@@ -723,6 +751,7 @@ async def on_startup():
                     config=llm_config,
                     timeout_ms=settings.llm_gate_timeout_ms,
                     justification=settings.llm_gate_justification,
+                    get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
                 )
                 model_name = settings.llm_gate_model
                 logger.info(f"LLM review gate active (model={model_name})")
@@ -750,6 +779,7 @@ async def on_startup():
                 config=sentinel_config,
                 event_bus=event_bus,
                 interval_seconds=settings.llm_sentinel_interval_seconds,
+                get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
             )
             event_bus.subscribe(_sentinel.observe)
             _sentinel.start()
@@ -853,6 +883,8 @@ _dashboard_routes = [
     Route("/cross/api/pending/{tool_use_id}/resolve", api_resolve_pending, methods=["POST"]),
     Route("/cross/api/pending-permissions", api_pending_permissions, methods=["GET"]),
     Route("/cross/api/permission/{session_id}/resolve", api_resolve_permission, methods=["POST"]),
+    Route("/cross/api/instructions", api_get_instructions, methods=["GET"]),
+    Route("/cross/api/instructions", api_put_instructions, methods=["PUT"]),
 ]
 
 # WebSocket routes
