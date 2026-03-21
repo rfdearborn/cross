@@ -1026,11 +1026,19 @@ class TestRunSetupEmail:
         cross_dir = tmp_path / ".cross"
 
         # none LLM, y email, from, to, smtp host, port, username, password, n imap, N slack, Y auto-update
-        inputs = iter([
-            "none",
-            "y", "cross@example.com", "admin@example.com", "smtp.gmail.com", "587", "N",
-            "N", "Y",
-        ])
+        inputs = iter(
+            [
+                "none",
+                "y",
+                "cross@example.com",
+                "admin@example.com",
+                "smtp.gmail.com",
+                "587",
+                "N",
+                "N",
+                "Y",
+            ]
+        )
         secrets = iter(["cross@example.com", "secret123"])
 
         output = []
@@ -1055,11 +1063,20 @@ class TestRunSetupEmail:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter([
-            "none",
-            "y", "cross@example.com", "admin@example.com", "smtp.gmail.com", "", "y", "imap.gmail.com",
-            "N", "Y",
-        ])
+        inputs = iter(
+            [
+                "none",
+                "y",
+                "cross@example.com",
+                "admin@example.com",
+                "smtp.gmail.com",
+                "",
+                "y",
+                "imap.gmail.com",
+                "N",
+                "Y",
+            ]
+        )
         secrets = iter(["cross@example.com", "secret123"])
 
         output = []
@@ -1120,9 +1137,7 @@ class TestRunSetupEmailPreservation:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
         cross_dir.mkdir(parents=True)
-        (cross_dir / ".env").write_text(
-            "CROSS_EMAIL_FROM=cross@example.com\nCROSS_EMAIL_TO=admin@example.com\n"
-        )
+        (cross_dir / ".env").write_text("CROSS_EMAIL_FROM=cross@example.com\nCROSS_EMAIL_TO=admin@example.com\n")
 
         # none LLM, Y keep email, N slack, Y auto-update
         inputs = iter(["none", "Y", "N", "Y"])
@@ -1145,16 +1160,23 @@ class TestRunSetupEmailPreservation:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
         cross_dir.mkdir(parents=True)
-        (cross_dir / ".env").write_text(
-            "CROSS_EMAIL_FROM=old@example.com\nCROSS_EMAIL_TO=old-admin@example.com\n"
-        )
+        (cross_dir / ".env").write_text("CROSS_EMAIL_FROM=old@example.com\nCROSS_EMAIL_TO=old-admin@example.com\n")
 
         # none LLM, n don't keep email, y configure new, addresses, smtp, no imap, N slack, Y auto-update
-        inputs = iter([
-            "none",
-            "n", "y", "new@example.com", "new-admin@example.com", "", "", "N",
-            "N", "Y",
-        ])
+        inputs = iter(
+            [
+                "none",
+                "n",
+                "y",
+                "new@example.com",
+                "new-admin@example.com",
+                "",
+                "",
+                "N",
+                "N",
+                "Y",
+            ]
+        )
 
         output = []
         result = run_setup(

@@ -258,12 +258,14 @@ class TestSessionEndedFromData:
         mock_smtp.reset_mock()
 
         now = time.time()
-        plugin.session_ended_from_data({
-            "session_id": "sess-1",
-            "exit_code": 0,
-            "started_at": now - 300,
-            "ended_at": now,
-        })
+        plugin.session_ended_from_data(
+            {
+                "session_id": "sess-1",
+                "exit_code": 0,
+                "started_at": now - 300,
+                "ended_at": now,
+            }
+        )
         msg_text = mock_smtp.sendmail.call_args[0][2]
         assert "5m" in msg_text
 
@@ -454,9 +456,7 @@ class TestHandleEvent:
         mock_smtp.reset_mock()
 
         # Post escalation
-        event = GateDecisionEvent(
-            tool_use_id="tu1", tool_name="Bash", action="escalate", reason="Review"
-        )
+        event = GateDecisionEvent(tool_use_id="tu1", tool_name="Bash", action="escalate", reason="Review")
         await plugin.handle_event(event)
         assert "tu1" in plugin._gate_pending
         mock_smtp.reset_mock()
@@ -483,9 +483,7 @@ class TestHandleEvent:
         _register_session(plugin)
         mock_smtp.reset_mock()
 
-        event = GateDecisionEvent(
-            tool_use_id="tu1", tool_name="Write", action="alert", reason="Suspicious write"
-        )
+        event = GateDecisionEvent(tool_use_id="tu1", tool_name="Write", action="alert", reason="Suspicious write")
         await plugin.handle_event(event)
 
         msg_text = mock_smtp.sendmail.call_args[0][2]
@@ -509,9 +507,7 @@ class TestHandleEvent:
         _register_session(plugin)
         mock_smtp.reset_mock()
 
-        event = SentinelReviewEvent(
-            action="alert", summary="All looks good", concerns="None", event_count=5
-        )
+        event = SentinelReviewEvent(action="alert", summary="All looks good", concerns="None", event_count=5)
         await plugin.handle_event(event)
 
         body = _get_email_body(mock_smtp)

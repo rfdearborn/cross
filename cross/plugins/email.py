@@ -357,12 +357,14 @@ class EmailPlugin:
             else:
                 imap = IMAP4(settings.email_imap_host, settings.email_imap_port)
 
-            imap.login(settings.email_imap_username or settings.email_smtp_username,
-                       settings.email_imap_password or settings.email_smtp_password)
+            imap.login(
+                settings.email_imap_username or settings.email_smtp_username,
+                settings.email_imap_password or settings.email_smtp_password,
+            )
             imap.select("INBOX")
 
             # Search for unread replies to cross emails
-            _, data = imap.search(None, "(UNSEEN SUBJECT \"[cross]\")")
+            _, data = imap.search(None, '(UNSEEN SUBJECT "[cross]")')
             if not data[0]:
                 imap.logout()
                 return
