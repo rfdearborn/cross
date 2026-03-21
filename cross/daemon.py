@@ -29,7 +29,7 @@ from cross.events import (
     PermissionResolvedEvent,
     ToolUseEvent,
 )
-from cross.plugins.dashboard import DASHBOARD_HTML, DashboardPlugin
+from cross.plugins.dashboard import DASHBOARD_HTML, SETTINGS_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
 from cross.plugins.notifier import handle_event as notify_event
 from cross.plugins.notifier import is_available as native_notifications_available
@@ -590,6 +590,11 @@ async def dashboard_page(request: Request) -> Response:
     return Response(content=DASHBOARD_HTML, media_type="text/html")
 
 
+async def settings_page(request: Request) -> Response:
+    """GET /cross/settings — serves the settings page HTML."""
+    return Response(content=SETTINGS_HTML, media_type="text/html")
+
+
 async def api_events(request: Request) -> JSONResponse:
     """GET /cross/api/events — recent events as JSON."""
     if _dashboard:
@@ -877,6 +882,7 @@ _dashboard_routes = [
     Route("/", root_redirect, methods=["GET"]),
     Route("/favicon.ico", favicon, methods=["GET"]),
     Route("/cross/dashboard", dashboard_page, methods=["GET"]),
+    Route("/cross/settings", settings_page, methods=["GET"]),
     Route("/cross/api/status", api_status, methods=["GET"]),
     Route("/cross/api/events", api_events, methods=["GET"]),
     Route("/cross/api/pending", api_pending, methods=["GET"]),

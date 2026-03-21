@@ -154,8 +154,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     font-weight: 600;
     letter-spacing: -0.5px;
   }
-  header .notif-btn {
+  header .header-right {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header .notif-btn {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -168,20 +173,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   header .notif-btn:hover { opacity: 0.85; }
   header .notif-btn.granted { color: var(--green); border-color: var(--green); }
   header .notif-btn.denied { color: var(--red); border-color: var(--red); cursor: not-allowed; }
-  header .status {
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-  header .status .dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-right: 4px;
-    vertical-align: middle;
-  }
-  header .status .dot.connected { background: var(--green); }
-  header .status .dot.disconnected { background: var(--red); }
   main {
     max-width: 960px;
     margin: 0 auto;
@@ -477,59 +468,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   .notif-modal .btn-skip:hover { opacity: 0.85; }
 
-  /* Custom Instructions editor */
-  .instructions-editor {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 16px;
-  }
-  .instructions-editor textarea {
-    width: 100%;
-    min-height: 120px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 10px 12px;
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 13px;
-    color: var(--text);
-    resize: vertical;
-    outline: none;
-    line-height: 1.5;
-  }
-  .instructions-editor textarea:focus { border-color: var(--accent); }
-  .instructions-editor textarea::placeholder { color: var(--text-dim); }
-  .instructions-actions {
+  header .settings-link {
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.15s;
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-top: 10px;
   }
-  .instructions-actions .btn-save {
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 18px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.15s;
-  }
-  .instructions-actions .btn-save:hover { opacity: 0.85; }
-  .instructions-actions .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
-  .instructions-actions .save-status {
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-  .instructions-actions .save-status.ok { color: var(--green); }
-  .instructions-actions .save-status.err { color: var(--red); }
-  .instructions-hint {
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-bottom: 8px;
-  }
+  header .settings-link:hover { color: var(--text); }
 </style>
 </head>
 <body>
@@ -547,12 +493,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none"
     style="display:block"><path d="M12 2v20M2 12h20"
     stroke="white" stroke-width="3" stroke-linecap="round"/></svg></h1>
-  <button class="notif-btn" id="notif-btn" style="display:none"
-    onclick="requestNotifPermission()">Enable notifications</button>
-  <span class="status">
-    <span class="dot disconnected" id="ws-dot"></span>
-    <span id="ws-status">connecting...</span>
-  </span>
+  <div class="header-right">
+    <button class="notif-btn" id="notif-btn" style="display:none"
+      onclick="requestNotifPermission()">Enable notifications</button>
+    <a class="settings-link" href="/cross/settings" title="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
+  </div>
 </header>
 <main>
   <section id="status-section">
@@ -562,18 +507,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <section id="pending-section">
     <h2>Pending Approvals</h2>
     <div id="pending-list"><p class="empty">No pending approvals</p></div>
-  </section>
-  <section id="instructions-section">
-    <h2>Custom Instructions</h2>
-    <div class="instructions-editor">
-      <p class="instructions-hint">Included with every gate and sentinel prompt. Changes apply immediately.</p>
-      <textarea id="instructions-text"
-        placeholder="Add custom instructions for gate and sentinel reviewers..."></textarea>
-      <div class="instructions-actions">
-        <button class="btn-save" id="instructions-save" onclick="saveInstructions()">Save</button>
-        <span class="save-status" id="instructions-status"></span>
-      </div>
-    </div>
   </section>
   <section>
     <h2>Live Event Feed</h2>
@@ -596,8 +529,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 (function() {
   const pendingList = document.getElementById("pending-list");
   const eventFeed = document.getElementById("event-feed");
-  const wsDot = document.getElementById("ws-dot");
-  const wsStatus = document.getElementById("ws-status");
   const feedEmpty = document.getElementById("feed-empty");
 
   const MAX_FEED = 200;
@@ -982,13 +913,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function connect() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(proto + "//" + location.host + "/cross/api/ws");
-    ws.onopen = function() {
-      wsDot.className = "dot connected";
-      wsStatus.textContent = "connected";
-    };
+    ws.onopen = function() {};
     ws.onclose = function() {
-      wsDot.className = "dot disconnected";
-      wsStatus.textContent = "disconnected — reconnecting...";
       setTimeout(connect, 2000);
     };
     ws.onerror = function() { ws.close(); };
@@ -1039,52 +965,376 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     renderPending();
   }).catch(function() {});
 
-  // --- Custom Instructions ---
+  connect();
+})();
+</script>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# Settings HTML (separate page)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Shared fragments for header across pages
+# ---------------------------------------------------------------------------
+
+_GEAR_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
+
+_SHARED_HEADER_CSS = """
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.5px; }
+  header .header-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header .notif-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  header .notif-btn:hover { opacity: 0.85; }
+  header .notif-btn.granted { color: var(--green); border-color: var(--green); }
+  header .notif-btn.denied { color: var(--red); border-color: var(--red); cursor: not-allowed; }
+  header .settings-link {
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.15s;
+    display: flex;
+    align-items: center;
+  }
+  header .settings-link:hover { color: var(--text); }
+"""
+
+_NOTIF_MODAL_CSS = """
+  .notif-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .notif-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    max-width: 400px;
+    text-align: center;
+  }
+  .notif-modal h3 { font-size: 18px; margin-bottom: 12px; }
+  .notif-modal p {
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 20px;
+  }
+  .notif-modal .btn-row { display: flex; gap: 12px; justify-content: center; }
+  .notif-modal .btn-enable {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .notif-modal .btn-enable:hover { opacity: 0.85; }
+  .notif-modal .btn-skip {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 24px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .notif-modal .btn-skip:hover { opacity: 0.85; }
+"""
+
+_NOTIF_MODAL_HTML = """
+<div class="notif-modal-overlay" id="notif-modal" style="display:none">
+  <div class="notif-modal">
+    <h3>Enable notifications</h3>
+    <p>Get notified when an agent needs approval or the sentinel flags something.</p>
+    <div class="btn-row">
+      <button class="btn-enable" id="notif-modal-enable">Enable</button>
+      <button class="btn-skip" id="notif-modal-skip">Not now</button>
+    </div>
+  </div>
+</div>
+"""
+
+_HEADER_HTML = f"""
+<header>
+  <h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+    style="display:block"><path d="M12 2v20M2 12h20"
+    stroke="white" stroke-width="3" stroke-linecap="round"/></svg></h1>
+  <div class="header-right">
+    <button class="notif-btn" id="notif-btn" style="display:none"
+      onclick="requestNotifPermission()">Enable notifications</button>
+    <a class="settings-link" href="/cross/settings" title="Settings">{_GEAR_SVG}</a>
+  </div>
+</header>
+"""
+
+_NOTIF_JS = """
+  // --- Browser Notifications ---
+  const notifBtn = document.getElementById("notif-btn");
+  let notifMuted = localStorage.getItem("cross-notif-muted") === "1";
+
+  function updateNotifBtn() {
+    if (!("Notification" in window)) { notifBtn.style.display = "none"; return; }
+    notifBtn.style.display = "";
+    var perm = Notification.permission;
+    if (perm === "granted" && !notifMuted) {
+      notifBtn.textContent = "Notifications on";
+      notifBtn.className = "notif-btn granted";
+    } else if (perm === "granted" && notifMuted) {
+      notifBtn.textContent = "Notifications off";
+      notifBtn.className = "notif-btn";
+    } else if (perm === "denied") {
+      notifBtn.textContent = "Notifications blocked";
+      notifBtn.className = "notif-btn denied";
+    } else {
+      notifBtn.textContent = "Enable notifications";
+      notifBtn.className = "notif-btn";
+    }
+  }
+  window.requestNotifPermission = function() {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "denied") return;
+    if (Notification.permission === "granted") {
+      notifMuted = !notifMuted;
+      localStorage.setItem("cross-notif-muted", notifMuted ? "1" : "0");
+      updateNotifBtn();
+      return;
+    }
+    Notification.requestPermission().then(updateNotifBtn);
+  };
+  updateNotifBtn();
+
+  // Show modal on first visit if notifications not yet decided
+  (function() {
+    var modal = document.getElementById("notif-modal");
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "default") return;
+    if (localStorage.getItem("cross-notif-dismissed")) return;
+    modal.style.display = "flex";
+    document.getElementById("notif-modal-enable").addEventListener("click", function() {
+      modal.style.display = "none";
+      notifMuted = false;
+      localStorage.setItem("cross-notif-muted", "0");
+      Notification.requestPermission().then(updateNotifBtn);
+    });
+    document.getElementById("notif-modal-skip").addEventListener("click", function() {
+      modal.style.display = "none";
+      localStorage.setItem("cross-notif-dismissed", "1");
+    });
+  })();
+"""
+
+# ---------------------------------------------------------------------------
+# Settings HTML (separate page)
+# ---------------------------------------------------------------------------
+
+SETTINGS_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cross settings</title>
+<link rel="icon" type="image/svg+xml"
+  href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'
+  viewBox='0 0 24 24'><path d='M12 2v20M2 12h20'
+  stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
+<style>
+  :root {{
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+  }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }}
+  {_SHARED_HEADER_CSS}
+  {_NOTIF_MODAL_CSS}
+  main {{
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px;
+  }}
+  .breadcrumb {{
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }}
+  .breadcrumb a {{
+    color: var(--accent);
+    text-decoration: none;
+  }}
+  .breadcrumb a:hover {{ text-decoration: underline; }}
+  .page-title {{
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 24px;
+  }}
+  section {{ margin-bottom: 32px; }}
+  section h2 {{
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }}
+  .instructions-editor {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+  }}
+  .instructions-editor textarea {{
+    width: 100%;
+    min-height: 200px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 13px;
+    color: var(--text);
+    resize: vertical;
+    outline: none;
+    line-height: 1.5;
+  }}
+  .instructions-editor textarea:focus {{ border-color: var(--accent); }}
+  .instructions-editor textarea::placeholder {{ color: var(--text-dim); }}
+  .instructions-actions {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+  }}
+  .instructions-actions .btn-save {{
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }}
+  .instructions-actions .btn-save:hover {{ opacity: 0.85; }}
+  .instructions-actions .btn-save:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+  .instructions-actions .save-status {{
+    font-size: 12px;
+    color: var(--text-dim);
+  }}
+  .instructions-actions .save-status.ok {{ color: var(--green); }}
+  .instructions-actions .save-status.err {{ color: var(--red); }}
+  .instructions-hint {{
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }}
+</style>
+</head>
+<body>
+{_NOTIF_MODAL_HTML}
+{_HEADER_HTML}
+<main>
+  <div class="breadcrumb"><a href="/cross/dashboard">&larr; Dashboard</a></div>
+  <h1 class="page-title">Settings</h1>
+  <section>
+    <h2>Custom Instructions</h2>
+    <div class="instructions-editor">
+      <p class="instructions-hint">Included with every gate and sentinel prompt. Changes apply immediately.</p>
+      <textarea id="instructions-text"
+        placeholder="Add custom instructions for gate and sentinel reviewers..."></textarea>
+      <div class="instructions-actions">
+        <button class="btn-save" id="instructions-save">Save</button>
+        <span class="save-status" id="instructions-status"></span>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+(function() {{
+  {_NOTIF_JS}
+
   var instrText = document.getElementById("instructions-text");
   var instrStatus = document.getElementById("instructions-status");
   var instrSaveBtn = document.getElementById("instructions-save");
 
-  fetch("/cross/api/instructions").then(function(r) { return r.json(); }).then(function(data) {
+  fetch("/cross/api/instructions").then(function(r) {{ return r.json(); }}).then(function(data) {{
     instrText.value = data.content || "";
-  }).catch(function() {});
+  }}).catch(function() {{}});
 
-  window.saveInstructions = function() {
+  function saveInstructions() {{
     instrSaveBtn.disabled = true;
     instrStatus.textContent = "Saving...";
     instrStatus.className = "save-status";
-    fetch("/cross/api/instructions", {
+    fetch("/cross/api/instructions", {{
       method: "PUT",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({content: instrText.value})
-    }).then(function(r) {
-      if (r.ok) {
+      headers: {{"Content-Type": "application/json"}},
+      body: JSON.stringify({{content: instrText.value}})
+    }}).then(function(r) {{
+      if (r.ok) {{
         instrStatus.textContent = "Saved";
         instrStatus.className = "save-status ok";
-      } else {
-        r.json().then(function(d) {
+      }} else {{
+        r.json().then(function(d) {{
           instrStatus.textContent = "Error: " + (d.error || "unknown");
           instrStatus.className = "save-status err";
-        });
-      }
-    }).catch(function(e) {
+        }});
+      }}
+    }}).catch(function(e) {{
       instrStatus.textContent = "Error: " + e.message;
       instrStatus.className = "save-status err";
-    }).finally(function() {
+    }}).finally(function() {{
       instrSaveBtn.disabled = false;
-      setTimeout(function() { instrStatus.textContent = ""; }, 4000);
-    });
-  };
+      setTimeout(function() {{ instrStatus.textContent = ""; }}, 4000);
+    }});
+  }}
 
-  // Save with Ctrl/Cmd+S
-  instrText.addEventListener("keydown", function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+  instrSaveBtn.addEventListener("click", saveInstructions);
+
+  instrText.addEventListener("keydown", function(e) {{
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {{
       e.preventDefault();
       saveInstructions();
-    }
-  });
-
-  connect();
-})();
+    }}
+  }});
+}})();
 </script>
 </body>
 </html>"""
