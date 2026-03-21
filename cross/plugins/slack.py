@@ -660,23 +660,42 @@ class SlackPlugin:
             self._ensure_users_invited(channel_id)
             return channel_id
 
-        try:
-            resp = self._web.conversations_create(
-                name=name,
-                is_private=True,
-            )
-            channel_id = resp["channel"]["id"]
-            self._channels[name] = channel_id
-            logger.info(f"Created channel #{name} ({channel_id})")
-            self._ensure_users_invited(channel_id)
-            return channel_id
-        except Exception as e:
-            logger.warning(f"Failed to create private channel #{name}: {e}, trying public")
-            resp = self._web.conversations_create(name=name)
-            channel_id = resp["channel"]["id"]
+        # Channel not found — try to create it
+        channel_id = self._try_create_channel(name)
+        if channel_id:
             self._channels[name] = channel_id
             self._ensure_users_invited(channel_id)
             return channel_id
+
+        raise RuntimeError(f"Could not find or create channel #{name}")
+
+    def _try_create_channel(self, name: str) -> str | None:
+        """Try to create a channel, handling name_taken by looking it up."""
+        for is_private in (True, False):
+            try:
+                resp = self._web.conversations_create(
+                    name=name,
+                    is_private=is_private,
+                )
+                channel_id = resp["channel"]["id"]
+                logger.info(f"Created {'private' if is_private else 'public'} channel #{name} ({channel_id})")
+                return channel_id
+            except Exception as e:
+                error_str = str(e)
+                if "name_taken" in error_str:
+                    # Channel exists but _find_channel missed it (ratelimit, pagination, etc.)
+                    # Look it up directly via conversations_list with name search
+                    channel_id = self._find_channel(name)
+                    if channel_id:
+                        return channel_id
+                    # If still not found, log and return None
+                    logger.warning(f"Channel #{name} exists but could not be found via API")
+                    return None
+                if is_private:
+                    logger.warning(f"Failed to create private channel #{name}: {e}, trying public")
+                    continue
+                logger.warning(f"Failed to create channel #{name}: {e}")
+        return None
 
     def _ensure_users_invited(self, channel_id: str):
         """Ensure non-bot workspace users are members of the channel."""

@@ -377,9 +377,9 @@ class TestEnsureChannel:
         result = plugin._ensure_channel("myproj")
         assert result == "C_PUBLIC"
         assert mock_web.conversations_create.call_count == 2
-        # Second call should NOT have is_private
+        # Second call should be public (is_private=False)
         second_call = mock_web.conversations_create.call_args_list[1]
-        assert "is_private" not in second_call.kwargs
+        assert second_call.kwargs.get("is_private") is False
 
 
 # ---------------------------------------------------------------------------
