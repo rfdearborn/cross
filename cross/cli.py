@@ -82,13 +82,18 @@ def main():
     elif args.command in ("daemon", "start"):
         if args.foreground:
             _run_daemon()
+        elif _launchd_is_managed():
+            print("Daemon is managed by launchd. Already running.")
         else:
             _run_daemon_background()
     elif args.command == "stop":
         sys.exit(_run_stop())
     elif args.command == "restart":
-        _run_stop(quiet=True)
-        _run_daemon_background()
+        if _launchd_is_managed():
+            _run_restart_launchd()
+        else:
+            _run_stop(quiet=True)
+            _run_daemon_background()
     elif args.command == "proxy":
         _run_proxy()
     elif args.command == "wrap":
@@ -274,6 +279,24 @@ def _run_pending(args) -> int:
 
 
 _PID_FILE = os.path.join(os.path.expanduser(settings.config_dir), "daemon.pid")
+_LAUNCHD_LABEL = "ai.cross.daemon"
+
+
+def _launchd_is_managed() -> bool:
+    """Check if the daemon is managed by launchd (macOS LaunchAgent)."""
+    import subprocess
+
+    if sys.platform != "darwin":
+        return False
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"gui/{os.getuid()}/{_LAUNCHD_LABEL}"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
 
 
 def _write_pid():
@@ -318,8 +341,22 @@ def _find_pid_by_port(port: int) -> int | None:
 
 
 def _run_stop(quiet: bool = False) -> int:
-    """Stop the running daemon by sending SIGTERM."""
+    """Stop the running daemon by sending SIGTERM, waiting for it to die."""
     import signal
+    import time
+
+    # If managed by launchd, use launchctl to stop (it won't respawn due to
+    # bootout, but the caller should use _run_restart_launchd for restart).
+    if _launchd_is_managed():
+        import subprocess
+
+        subprocess.run(
+            ["launchctl", "kill", "SIGTERM", f"gui/{os.getuid()}/{_LAUNCHD_LABEL}"],
+            capture_output=True,
+        )
+        if not quiet:
+            print("Stopped daemon (via launchd). Note: launchd will respawn it due to KeepAlive.")
+        return 0
 
     pid = _read_pid()
     if pid is None:
@@ -338,10 +375,147 @@ def _run_stop(quiet: bool = False) -> int:
         _remove_pid()
         return 1
 
+    # Wait for process to exit (up to 5s), then SIGKILL
+    for i in range(50):
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)  # Check if still alive
+        except ProcessLookupError:
+            break
+    else:
+        # Still alive after 5s — force kill
+        if not quiet:
+            print(f"Daemon (pid {pid}) did not exit after SIGTERM, sending SIGKILL...")
+        try:
+            os.kill(pid, signal.SIGKILL)
+            time.sleep(0.2)
+        except ProcessLookupError:
+            pass
+
     if not quiet:
         print(f"Stopped daemon (pid {pid}).")
     _remove_pid()
     return 0
+
+
+def _launchd_plist_path():
+    """Return the path to the LaunchAgent plist file."""
+    return os.path.expanduser(f"~/Library/LaunchAgents/{_LAUNCHD_LABEL}.plist")
+
+
+def _fix_launchd_plist():
+    """Ensure the LaunchAgent plist has --foreground and correct log paths.
+
+    Returns True if the plist was modified and the service needs reload.
+    """
+    plist_path = _launchd_plist_path()
+    if not os.path.exists(plist_path):
+        return False
+
+    try:
+        content = open(plist_path).read()
+    except OSError:
+        return False
+
+    modified = False
+
+    # Ensure --foreground is present (launchd IS the supervisor)
+    if "--foreground" not in content:
+        content = content.replace(
+            "<string>daemon</string>\n    </array>",
+            "<string>daemon</string>\n        <string>--foreground</string>\n    </array>",
+        )
+        modified = True
+
+    # Fix log paths pointing to pytest temp dirs
+    config_dir = os.path.expanduser(settings.config_dir)
+    log_dir = os.path.join(config_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    import re
+
+    for key in ("StandardOutPath", "StandardErrorPath"):
+        log_name = "daemon.out.log" if "Out" in key else "daemon.err.log"
+        correct_path = os.path.join(log_dir, log_name)
+        pattern = rf"(<key>{key}</key>\s*<string>)(.*?)(</string>)"
+        match = re.search(pattern, content)
+        if match and match.group(2) != correct_path:
+            content = re.sub(pattern, rf"\g<1>{correct_path}\3", content)
+            modified = True
+
+    if modified:
+        with open(plist_path, "w") as f:
+            f.write(content)
+
+    return modified
+
+
+def _run_restart_launchd():
+    """Restart the daemon via launchd bootout/bootstrap.
+
+    Also kills any non-launchd daemon holding the port, since the running
+    process may have been started manually (e.g., by a previous `cross restart`
+    before launchd support was added).
+    """
+    import signal
+    import subprocess
+    import time
+
+    domain = f"gui/{os.getuid()}"
+    service = f"{domain}/{_LAUNCHD_LABEL}"
+    plist_path = _launchd_plist_path()
+    old_pid = _find_pid_by_port(settings.listen_port)
+
+    # Fix plist if needed (missing --foreground, wrong log paths)
+    if _fix_launchd_plist():
+        print("Fixed LaunchAgent plist.")
+
+    # Kill the old daemon on the port (whether launchd-managed or not)
+    if old_pid:
+        try:
+            os.kill(old_pid, signal.SIGTERM)
+            for _ in range(50):
+                time.sleep(0.1)
+                try:
+                    os.kill(old_pid, 0)
+                except ProcessLookupError:
+                    break
+            else:
+                os.kill(old_pid, signal.SIGKILL)
+                time.sleep(0.2)
+        except ProcessLookupError:
+            pass
+
+    # Bootout and re-bootstrap for a clean start
+    subprocess.run(
+        ["launchctl", "bootout", service],
+        capture_output=True,
+    )
+    result = subprocess.run(
+        ["launchctl", "bootstrap", domain, plist_path],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"launchctl bootstrap failed: {result.stderr.strip()}", file=sys.stderr)
+        # Fall back to manual start
+        print("Falling back to manual daemon start...")
+        _run_daemon_background()
+        return
+
+    # Wait for new daemon to come up on the port
+    for i in range(50):
+        time.sleep(0.1)
+        new_pid = _find_pid_by_port(settings.listen_port)
+        if new_pid and new_pid != old_pid:
+            print(f"Daemon restarted (pid {new_pid}) on port {settings.listen_port}.")
+            return
+
+    # Launchd started but daemon didn't bind — fall back to manual
+    print("launchd started daemon but it didn't bind the port.", file=sys.stderr)
+    print("Falling back to manual daemon start...")
+    subprocess.run(["launchctl", "bootout", service], capture_output=True)
+    _run_daemon_background()
 
 
 def _run_daemon():
@@ -365,17 +539,39 @@ def _run_daemon_background():
     import subprocess
     import time
 
+    # Verify port is free before starting
+    existing_pid = _find_pid_by_port(settings.listen_port)
+    if existing_pid:
+        print(
+            f"Port {settings.listen_port} is still in use by pid {existing_pid}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    log_dir = os.path.expanduser("~/.cross/logs")
+    os.makedirs(log_dir, exist_ok=True)
+    stdout_log = open(os.path.join(log_dir, "daemon.out.log"), "a")
+    stderr_log = open(os.path.join(log_dir, "daemon.err.log"), "a")
+
     proc = subprocess.Popen(
         [sys.executable, "-m", "cross", "daemon", "--foreground"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout_log,
+        stderr=stderr_log,
         start_new_session=True,
     )
-    # Brief wait to check it didn't crash immediately
-    time.sleep(0.5)
-    if proc.poll() is not None:
-        print("Daemon failed to start.", file=sys.stderr)
+
+    # Wait up to 5s for the daemon to bind the port
+    for i in range(50):
+        time.sleep(0.1)
+        if proc.poll() is not None:
+            print("Daemon failed to start. Check ~/.cross/logs/daemon.err.log", file=sys.stderr)
+            sys.exit(1)
+        if _find_pid_by_port(settings.listen_port):
+            break
+    else:
+        print("Daemon started but did not bind port in time. Check ~/.cross/logs/daemon.err.log", file=sys.stderr)
         sys.exit(1)
+
     print(f"Daemon started (pid {proc.pid}) on port {settings.listen_port}.")
 
 

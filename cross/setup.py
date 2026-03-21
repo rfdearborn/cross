@@ -41,6 +41,7 @@ _LAUNCHD_PLIST = """\
     <array>
         <string>{cross_bin}</string>
         <string>daemon</string>
+        <string>--foreground</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

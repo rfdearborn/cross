@@ -65,8 +65,9 @@ class TestOnPtyOutput:
 
 
 class TestMainCommandRouting:
+    @patch("cross.cli._launchd_is_managed", return_value=False)
     @patch("cross.cli._run_daemon_background")
-    def test_daemon_command(self, mock_run_daemon_bg):
+    def test_daemon_command(self, mock_run_daemon_bg, mock_launchd):
         with patch("sys.argv", ["cross", "daemon"]):
             main()
         mock_run_daemon_bg.assert_called_once()
@@ -103,9 +104,10 @@ class TestMainCommandRouting:
 
 
 class TestMainLoggingSetup:
-    @patch("cross.cli._run_daemon")
+    @patch("cross.cli._launchd_is_managed", return_value=False)
+    @patch("cross.cli._run_daemon_background")
     @patch("logging.basicConfig")
-    def test_logging_configured(self, mock_basic_config, mock_run_daemon):
+    def test_logging_configured(self, mock_basic_config, mock_run_daemon_bg, mock_launchd):
         with patch("sys.argv", ["cross", "daemon"]):
             main()
         mock_basic_config.assert_called_once()
