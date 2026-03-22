@@ -6,8 +6,10 @@ to WebSocket clients. Event storage is handled by EventStore.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -18,6 +20,7 @@ from cross.events import (
     GateDecisionEvent,
     PermissionPromptEvent,
     PermissionResolvedEvent,
+    SentinelReviewEvent,
 )
 
 logger = logging.getLogger("cross.plugins.dashboard")
@@ -36,6 +39,12 @@ class DashboardPlugin:
         self._ws_clients: set[WebSocket] = set()
         # Callback to resolve gate approvals in the proxy
         self._resolve_approval_callback = resolve_approval_callback
+        # Conversation store (set after init via set_conversation_store)
+        self._conversation_store = None
+
+    def set_conversation_store(self, store) -> None:
+        """Attach the conversation store (called from daemon after both are initialized)."""
+        self._conversation_store = store
 
     async def handle_event(self, event: CrossEvent):
         """EventBus handler — track escalations/permissions and broadcast to WS clients."""
@@ -48,6 +57,43 @@ class DashboardPlugin:
             elif event.action in ("allow", "block", "halt_session") and event.tool_use_id in self._pending:
                 # Escalation resolved (by Slack, dashboard, or timeout)
                 del self._pending[event.tool_use_id]
+
+            # Register conversation context for non-trivial gate decisions
+            if self._conversation_store and event.action in ("block", "alert", "escalate", "halt_session"):
+                self._conversation_store.register_gate_context(
+                    tool_use_id=event.tool_use_id,
+                    tool_name=event.tool_name,
+                    tool_input=event.tool_input,
+                    action=event.action,
+                    reason=event.reason,
+                    rule_id=event.rule_id,
+                    evaluator=event.evaluator,
+                    script_contents=event.script_contents,
+                )
+            elif self._conversation_store and event.evaluator != "denylist" and event.action == "allow":
+                # LLM-reviewed allows are also interesting to discuss
+                self._conversation_store.register_gate_context(
+                    tool_use_id=event.tool_use_id,
+                    tool_name=event.tool_name,
+                    tool_input=event.tool_input,
+                    action=event.action,
+                    reason=event.reason,
+                    rule_id=event.rule_id,
+                    evaluator=event.evaluator,
+                    script_contents=event.script_contents,
+                )
+
+        # Register sentinel review conversation context
+        elif isinstance(event, SentinelReviewEvent):
+            if self._conversation_store and event.review_id:
+                self._conversation_store.register_sentinel_context(
+                    review_id=event.review_id,
+                    action=event.action,
+                    summary=event.summary,
+                    concerns=event.concerns,
+                    event_count=event.event_count,
+                    event_window_text=event.event_window_text,
+                )
 
         # Track pending permission prompts
         elif isinstance(event, PermissionPromptEvent):
@@ -97,8 +143,13 @@ class DashboardPlugin:
         logger.info(f"Dashboard WS connected ({len(self._ws_clients)} clients)")
         try:
             while True:
-                # Keep connection alive; client may send pings
-                await ws.receive_text()
+                raw = await ws.receive_text()
+                try:
+                    msg = json.loads(raw)
+                    if msg.get("type") == "conversation_message":
+                        asyncio.create_task(self._handle_conv_message(ws, msg))
+                except (json.JSONDecodeError, ValueError):
+                    pass  # keepalive ping or malformed
         except WebSocketDisconnect:
             pass
         except Exception:
@@ -106,6 +157,67 @@ class DashboardPlugin:
         finally:
             self._ws_clients.discard(ws)
             logger.info(f"Dashboard WS disconnected ({len(self._ws_clients)} clients)")
+
+    async def _handle_conv_message(self, ws: WebSocket, msg: dict):
+        """Handle a conversation message from a dashboard WS client."""
+        conv_id = msg.get("conversation_id", "")
+        message = msg.get("message", "").strip()
+        if not conv_id or not message or not self._conversation_store:
+            return
+
+        # Lazily register context if missing (e.g., after daemon restart).
+        # The dashboard sends the original event data so we can reconstruct.
+        if not self._conversation_store.has_context(conv_id):
+            ev = msg.get("event_data")
+            if ev and conv_id.startswith("gate:"):
+                self._conversation_store.register_gate_context(
+                    tool_use_id=ev.get("tool_use_id", conv_id.split(":", 1)[1]),
+                    tool_name=ev.get("tool_name", "unknown"),
+                    tool_input=ev.get("tool_input"),
+                    action=ev.get("action", ""),
+                    reason=ev.get("reason", ""),
+                    rule_id=ev.get("rule_id", ""),
+                    evaluator=ev.get("evaluator", ""),
+                    script_contents=ev.get("script_contents"),
+                )
+            elif ev and conv_id.startswith("sentinel:"):
+                self._conversation_store.register_sentinel_context(
+                    review_id=ev.get("review_id", conv_id.split(":", 1)[1]),
+                    action=ev.get("action", ""),
+                    summary=ev.get("summary", ""),
+                    concerns=ev.get("concerns", ""),
+                    event_count=ev.get("event_count", 0),
+                    event_window_text=ev.get("event_window_text", ""),
+                )
+
+        # Send typing indicator
+        try:
+            await ws.send_text(
+                json.dumps(
+                    {
+                        "type": "conversation_typing",
+                        "conversation_id": conv_id,
+                    }
+                )
+            )
+        except Exception:
+            return
+
+        reply = await self._conversation_store.send_message(conv_id, message)
+
+        try:
+            await ws.send_text(
+                json.dumps(
+                    {
+                        "type": "conversation_reply",
+                        "conversation_id": conv_id,
+                        "reply": reply or "Sorry, I couldn't generate a response.",
+                        "ts": time.time(),
+                    }
+                )
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +478,75 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     word-break: break-word;
   }
   .event-row.hidden { display: none; }
+  .event-row.conversable { cursor: pointer; }
+  .event-row.expanded { flex-wrap: wrap; }
+
+  /* Conversation chat */
+  .conv-chat {
+    width: 100%;
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .conv-messages {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .conv-msg {
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    max-width: 85%;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .conv-msg.user {
+    background: #1f3d5c;
+    align-self: flex-end;
+  }
+  .conv-msg.assistant {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    align-self: flex-start;
+  }
+  .conv-input-row {
+    display: flex;
+    gap: 8px;
+  }
+  .conv-input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    color: var(--text);
+    font-family: inherit;
+  }
+  .conv-input:focus { border-color: var(--accent); outline: none; }
+  .conv-send {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .conv-send:disabled { opacity: 0.5; cursor: default; }
+  .conv-send:hover:not(:disabled) { opacity: 0.9; }
+  .conv-typing {
+    color: var(--text-dim);
+    font-size: 12px;
+    font-style: italic;
+    padding: 4px 0;
+  }
 
   /* Filter bar */
   .filter-bar {
@@ -661,7 +842,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       + '<span class="agent">' + escHtml(agent) + '</span>'
       + '<span class="badge ' + badgeClass(ev) + '">' + badgeLabel(ev) + '</span>'
       + '<span class="detail">' + escHtml(truncate(full, 120)) + '</span>';
-    if (full.length > 120) {
+
+    // Determine if this is a conversable gate/sentinel event
+    var isConversable = false;
+    var convId = "";
+    if (ev.event_type === "GateDecisionEvent" && ev.evaluator !== "denylist") {
+      isConversable = true;
+      convId = "gate:" + ev.tool_use_id;
+    } else if (ev.event_type === "GateDecisionEvent" && ev.action && ev.action !== "allow") {
+      isConversable = true;
+      convId = "gate:" + ev.tool_use_id;
+    } else if (ev.event_type === "SentinelReviewEvent" && ev.review_id) {
+      isConversable = true;
+      convId = "sentinel:" + ev.review_id;
+    }
+
+    if (isConversable) {
+      row.classList.add("conversable");
+      row.addEventListener("click", function(e) {
+        // Don't toggle if clicking inside the chat area
+        if (e.target.closest(".conv-chat")) return;
+        var detail = row.querySelector(".detail");
+        var isExpanded = row.classList.toggle("expanded");
+        detail.textContent = isExpanded ? full : truncate(full, 120);
+        var chat = row.querySelector(".conv-chat");
+        if (isExpanded && !chat) {
+          openConversation(convId, row, ev);
+        }
+        if (chat) chat.style.display = isExpanded ? "" : "none";
+      });
+    } else if (full.length > 120) {
       row.addEventListener("click", function() {
         const detail = row.querySelector(".detail");
         const isExpanded = row.classList.toggle("expanded");
@@ -910,6 +1120,127 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
   };
 
+  // --- Conversations ---
+  function openConversation(convId, row, evData) {
+    var chat = document.createElement("div");
+    chat.className = "conv-chat";
+    chat.dataset.convId = convId;
+    // Prevent clicks inside chat from toggling row expand
+    chat.addEventListener("click", function(e) { e.stopPropagation(); });
+
+    var msgsDiv = document.createElement("div");
+    msgsDiv.className = "conv-messages";
+
+    var inputRow = document.createElement("div");
+    inputRow.className = "conv-input-row";
+
+    var input = document.createElement("input");
+    input.className = "conv-input";
+    input.type = "text";
+    input.placeholder = "Ask about this evaluation...";
+
+    var sendBtn = document.createElement("button");
+    sendBtn.className = "conv-send";
+    sendBtn.textContent = "Send";
+
+    var sentEventData = false;
+
+    function doSend() {
+      var text = input.value.trim();
+      if (!text || sendBtn.disabled) return;
+      input.value = "";
+      // Render user message
+      var userMsg = document.createElement("div");
+      userMsg.className = "conv-msg user";
+      userMsg.textContent = text;
+      msgsDiv.appendChild(userMsg);
+      msgsDiv.scrollTop = msgsDiv.scrollHeight;
+      // Show typing indicator
+      var typing = document.createElement("div");
+      typing.className = "conv-typing";
+      typing.textContent = "Thinking...";
+      typing.dataset.convId = convId;
+      msgsDiv.appendChild(typing);
+      msgsDiv.scrollTop = msgsDiv.scrollHeight;
+      sendBtn.disabled = true;
+      // Send via WebSocket — include event data on first message for lazy context registration
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        var payload = {
+          type: "conversation_message",
+          conversation_id: convId,
+          message: text
+        };
+        if (!sentEventData && evData) {
+          payload.event_data = evData;
+          sentEventData = true;
+        }
+        ws.send(JSON.stringify(payload));
+      }
+    }
+
+    sendBtn.addEventListener("click", doSend);
+    input.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") { e.preventDefault(); doSend(); }
+    });
+
+    inputRow.appendChild(input);
+    inputRow.appendChild(sendBtn);
+    chat.appendChild(msgsDiv);
+    chat.appendChild(inputRow);
+    row.appendChild(chat);
+
+    // Load existing messages
+    fetch("/cross/api/conversations/" + encodeURIComponent(convId))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.messages && data.messages.length > 0) {
+          data.messages.forEach(function(m) {
+            var msgEl = document.createElement("div");
+            msgEl.className = "conv-msg " + m.role;
+            msgEl.textContent = m.content;
+            msgsDiv.appendChild(msgEl);
+          });
+          msgsDiv.scrollTop = msgsDiv.scrollHeight;
+        }
+      })
+      .catch(function() {});
+
+    // Focus the input
+    setTimeout(function() { input.focus(); }, 50);
+  }
+
+  function renderConvReply(convId, text) {
+    var chat = document.querySelector('.conv-chat[data-conv-id="' + convId + '"]');
+    if (!chat) return;
+    var msgsDiv = chat.querySelector(".conv-messages");
+    // Remove typing indicator
+    var typing = msgsDiv.querySelector(".conv-typing");
+    if (typing) typing.remove();
+    // Add assistant message
+    var msgEl = document.createElement("div");
+    msgEl.className = "conv-msg assistant";
+    msgEl.textContent = text;
+    msgsDiv.appendChild(msgEl);
+    msgsDiv.scrollTop = msgsDiv.scrollHeight;
+    // Re-enable send button
+    var sendBtn = chat.querySelector(".conv-send");
+    if (sendBtn) sendBtn.disabled = false;
+  }
+
+  function showConvTyping(convId) {
+    var chat = document.querySelector('.conv-chat[data-conv-id="' + convId + '"]');
+    if (!chat) return;
+    var msgsDiv = chat.querySelector(".conv-messages");
+    // Only add if not already showing
+    if (!msgsDiv.querySelector(".conv-typing")) {
+      var typing = document.createElement("div");
+      typing.className = "conv-typing";
+      typing.textContent = "Thinking...";
+      msgsDiv.appendChild(typing);
+      msgsDiv.scrollTop = msgsDiv.scrollHeight;
+    }
+  }
+
   function connect() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(proto + "//" + location.host + "/cross/api/ws");
@@ -919,7 +1250,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     };
     ws.onerror = function() { ws.close(); };
     ws.onmessage = function(msg) {
-      try { handleEvent(JSON.parse(msg.data)); } catch(e) {}
+      try {
+        var data = JSON.parse(msg.data);
+        if (data.type === "conversation_reply") {
+          renderConvReply(data.conversation_id, data.reply);
+          return;
+        }
+        if (data.type === "conversation_typing") {
+          showConvTyping(data.conversation_id);
+          return;
+        }
+        handleEvent(data);
+      } catch(e) {}
     };
   }
 

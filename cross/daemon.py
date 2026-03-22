@@ -44,6 +44,7 @@ _slack = None  # SlackPlugin instance, if configured
 _email = None  # EmailPlugin instance, if configured
 _dashboard: DashboardPlugin | None = None  # always active
 _custom_instructions: CustomInstructions | None = None
+_conversation_store = None  # ConversationStore instance
 
 # Session tracking: session_id -> session metadata
 _sessions: dict[str, dict[str, Any]] = {}
@@ -665,6 +666,60 @@ async def api_put_instructions(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "length": len(content)})
 
 
+async def api_conversation_message(request: Request) -> JSONResponse:
+    """POST /cross/api/conversations/{conversation_id}/message — send a message, get LLM reply."""
+    conv_id = request.path_params["conversation_id"]
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    message = data.get("message", "").strip()
+    if not message:
+        return JSONResponse({"error": "message is required"}, status_code=400)
+    if not _conversation_store:
+        return JSONResponse({"error": "Conversations not initialized"}, status_code=500)
+
+    # Lazily register context from event_data if missing (e.g., after restart)
+    if not _conversation_store.has_context(conv_id):
+        ev = data.get("event_data")
+        if ev and conv_id.startswith("gate:"):
+            _conversation_store.register_gate_context(
+                tool_use_id=ev.get("tool_use_id", conv_id.split(":", 1)[1]),
+                tool_name=ev.get("tool_name", "unknown"),
+                tool_input=ev.get("tool_input"),
+                action=ev.get("action", ""),
+                reason=ev.get("reason", ""),
+                rule_id=ev.get("rule_id", ""),
+                evaluator=ev.get("evaluator", ""),
+                script_contents=ev.get("script_contents"),
+            )
+        elif ev and conv_id.startswith("sentinel:"):
+            _conversation_store.register_sentinel_context(
+                review_id=ev.get("review_id", conv_id.split(":", 1)[1]),
+                action=ev.get("action", ""),
+                summary=ev.get("summary", ""),
+                concerns=ev.get("concerns", ""),
+                event_count=ev.get("event_count", 0),
+                event_window_text=ev.get("event_window_text", ""),
+            )
+        else:
+            return JSONResponse({"error": "Unknown conversation"}, status_code=404)
+
+    reply = await _conversation_store.send_message(conv_id, message)
+    if reply is None:
+        return JSONResponse({"error": "LLM failed to respond"}, status_code=502)
+    return JSONResponse({"conversation_id": conv_id, "reply": reply})
+
+
+async def api_conversation_history(request: Request) -> JSONResponse:
+    """GET /cross/api/conversations/{conversation_id} — return message history."""
+    conv_id = request.path_params["conversation_id"]
+    if not _conversation_store:
+        return JSONResponse({"error": "Conversations not initialized"}, status_code=500)
+    messages = _conversation_store.get_messages(conv_id)
+    return JSONResponse({"conversation_id": conv_id, "messages": messages})
+
+
 async def api_dashboard_ws(ws: WebSocket):
     """WS /cross/api/ws — real-time event stream to dashboard clients."""
     if _dashboard:
@@ -690,7 +745,7 @@ _sentinel = None  # LLMSentinel instance, if configured
 
 
 async def on_startup():
-    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions
+    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions, _conversation_store
 
     _event_loop = asyncio.get_running_loop()
 
@@ -795,6 +850,40 @@ async def on_startup():
         else:
             logger.info("LLM sentinel enabled but no API key available — sentinel inactive")
 
+    # Set up conversation store (for inline follow-up conversations with reviewers)
+    from cross.conversations import ConversationStore
+
+    gate_llm_cfg = None
+    sentinel_llm_cfg = None
+    if settings.llm_gate_enabled:
+        from cross.llm import LLMConfig as _LLMConfig
+
+        gate_llm_cfg = _LLMConfig(
+            model=settings.llm_gate_model,
+            api_key=settings.llm_gate_api_key,
+            base_url=settings.llm_gate_base_url,
+            temperature=settings.llm_gate_temperature,
+            max_tokens=settings.llm_gate_max_tokens,
+            reasoning=settings.llm_gate_reasoning,
+        )
+    if settings.llm_sentinel_enabled:
+        from cross.llm import LLMConfig as _LLMConfig
+
+        sentinel_llm_cfg = _LLMConfig(
+            model=settings.llm_sentinel_model,
+            api_key=settings.llm_sentinel_api_key,
+            base_url=settings.llm_sentinel_base_url,
+            temperature=settings.llm_sentinel_temperature,
+            max_tokens=settings.llm_sentinel_max_tokens,
+            reasoning=settings.llm_sentinel_reasoning,
+        )
+    _conversation_store = ConversationStore(
+        gate_llm_config=gate_llm_cfg,
+        sentinel_llm_config=sentinel_llm_cfg,
+        get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
+    )
+    _dashboard.set_conversation_store(_conversation_store)
+
     # Register Email plugin
     if settings.email_from and settings.email_to:
         from cross.plugins.email import EmailPlugin
@@ -805,6 +894,7 @@ async def on_startup():
             resolve_approval_callback=_resolve_gate_email,
             resolve_permission_callback=resolve_permission,
             event_loop=asyncio.get_running_loop(),
+            conversation_store=_conversation_store,
         )
         try:
             _email.start()
@@ -825,6 +915,7 @@ async def on_startup():
             resolve_approval_callback=resolve_gate_approval,
             resolve_permission_callback=resolve_permission,
             event_loop=asyncio.get_running_loop(),
+            conversation_store=_conversation_store,
         )
         try:
             _slack.start()
@@ -891,6 +982,8 @@ _dashboard_routes = [
     Route("/cross/api/permission/{session_id}/resolve", api_resolve_permission, methods=["POST"]),
     Route("/cross/api/instructions", api_get_instructions, methods=["GET"]),
     Route("/cross/api/instructions", api_put_instructions, methods=["PUT"]),
+    Route("/cross/api/conversations/{conversation_id:path}/message", api_conversation_message, methods=["POST"]),
+    Route("/cross/api/conversations/{conversation_id:path}", api_conversation_history, methods=["GET"]),
 ]
 
 # WebSocket routes

@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections import deque
 from typing import Any
 
@@ -271,6 +272,8 @@ class LLMSentinel(Sentinel):
             logger.warning(f"Sentinel review: could not parse response: {text[:200]}")
             return None
 
+        review_id = uuid.uuid4().hex[:12]
+
         # Build evaluation response
         response = EvaluationResponse(
             action=action,
@@ -288,6 +291,8 @@ class LLMSentinel(Sentinel):
                 concerns=concerns,
                 event_count=len(events),
                 evaluator=self.name,
+                review_id=review_id,
+                event_window_text=user_message,
             )
         )
 

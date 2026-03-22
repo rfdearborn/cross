@@ -101,6 +101,8 @@ class SentinelReviewEvent:
     concerns: str = ""
     event_count: int = 0
     evaluator: str = ""
+    review_id: str = ""  # unique ID for conversation threading
+    event_window_text: str = ""  # formatted event window for conversation context
 
 
 @dataclass

@@ -36,6 +36,7 @@ class SlackPlugin:
         resolve_approval_callback=None,
         resolve_permission_callback=None,
         event_loop=None,
+        conversation_store=None,
     ):
         self._web = WebClient(token=settings.slack_bot_token)
         self._socket: SocketModeClient | None = None
@@ -43,6 +44,7 @@ class SlackPlugin:
         self._spawn_callback = spawn_callback
         self._resolve_approval_callback = resolve_approval_callback
         self._resolve_permission_callback = resolve_permission_callback
+        self._conversation_store = conversation_store
         # channel name -> channel ID
         self._channels: dict[str, str] = {}
         # session_id -> (channel_id, thread_ts)
@@ -69,6 +71,8 @@ class SlackPlugin:
         self._pending_thread_ts: dict[str, tuple[str, str]] = {}
         # Pending gate escalations: tool_use_id -> (channel_id, message_ts)
         self._gate_pending: dict[str, tuple[str, str]] = {}
+        # Conversation threads: message_ts -> conversation_id (for gate/sentinel follow-ups)
+        self._conv_threads: dict[str, str] = {}
 
     def start(self):
         """Connect to Slack via Socket Mode."""
@@ -392,8 +396,13 @@ class SlackPlugin:
                         ]
 
                     resp = self._web.chat_postMessage(**msg_kwargs)
-                    if event.action == "escalate" and resp.get("ok"):
-                        self._gate_pending[event.tool_use_id] = (channel_id, resp["ts"])
+                    if resp.get("ok"):
+                        msg_ts = resp["ts"]
+                        if event.action == "escalate":
+                            self._gate_pending[event.tool_use_id] = (channel_id, msg_ts)
+                        # Track for conversation follow-ups
+                        with self._lock:
+                            self._conv_threads[msg_ts] = f"gate:{event.tool_use_id}"
 
             case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
                 icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
@@ -402,12 +411,16 @@ class SlackPlugin:
                     text += f"\n*Summary:* {event.summary[:300]}"
                 if event.concerns and event.concerns.lower() != "none":
                     text += f"\n*Concerns:* {event.concerns[:500]}"
-                self._web.chat_postMessage(
+                resp = self._web.chat_postMessage(
                     channel=channel_id,
                     thread_ts=thread_ts,
                     text=text,
                     reply_broadcast=event.action in ("escalate", "halt_session"),
                 )
+                # Track for conversation follow-ups
+                if resp.get("ok") and event.review_id:
+                    with self._lock:
+                        self._conv_threads[resp["ts"]] = f"sentinel:{event.review_id}"
 
             case PermissionResolvedEvent() if not event.resolver.startswith("slack"):
                 # Permission resolved from another surface (dashboard, terminal, CLI)
@@ -499,6 +512,25 @@ class SlackPlugin:
                     self._spawn_callback(project, text),
                     self._event_loop,
                 )
+            return
+
+        # Check if this thread is a conversation thread (gate/sentinel follow-up)
+        with self._lock:
+            conv_id = self._conv_threads.get(thread_ts)
+        if conv_id and self._conversation_store:
+            import asyncio
+
+            async def _do_conv():
+                reply = await self._conversation_store.send_message(conv_id, text)
+                if reply:
+                    self._web.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=reply,
+                    )
+
+            if self._event_loop:
+                asyncio.run_coroutine_threadsafe(_do_conv(), self._event_loop)
             return
 
         # Find which session this thread belongs to

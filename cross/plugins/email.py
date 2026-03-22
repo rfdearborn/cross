@@ -38,11 +38,13 @@ class EmailPlugin:
         resolve_approval_callback=None,
         resolve_permission_callback=None,
         event_loop=None,
+        conversation_store=None,
     ):
         self._event_loop = event_loop
         self._inject_callback = inject_callback
         self._resolve_approval_callback = resolve_approval_callback
         self._resolve_permission_callback = resolve_permission_callback
+        self._conversation_store = conversation_store
 
         # Thread tracking: session_id -> message_id (for In-Reply-To threading)
         self._threads: dict[str, str] = {}
@@ -59,6 +61,8 @@ class EmailPlugin:
         self._permission_pending: dict[str, str] = {}
         # Pending gate escalations: tool_use_id -> message_id
         self._gate_pending: dict[str, str] = {}
+        # Conversation threads: message_id -> conversation_id
+        self._conv_threads: dict[str, str] = {}
 
         # IMAP polling state
         self._imap_thread: threading.Thread | None = None
@@ -240,8 +244,12 @@ class EmailPlugin:
                         in_reply_to=reply_to,
                         thread_session_id=session_id,
                     )
-                    if event.action == "escalate" and msg_id:
-                        self._gate_pending[event.tool_use_id] = msg_id
+                    if msg_id:
+                        if event.action == "escalate":
+                            self._gate_pending[event.tool_use_id] = msg_id
+                        # Track for conversation follow-ups
+                        with self._lock:
+                            self._conv_threads[msg_id] = f"gate:{event.tool_use_id}"
 
             case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
                 icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
@@ -250,12 +258,16 @@ class EmailPlugin:
                     body += f"\nSummary: {event.summary[:300]}"
                 if event.concerns and event.concerns.lower() != "none":
                     body += f"\nConcerns: {event.concerns[:500]}"
-                self._send_email(
+                msg_id = self._send_email(
                     f"Re: [cross] Sentinel {event.action.upper()}",
                     body,
                     in_reply_to=thread_msg_id,
                     thread_session_id=session_id,
                 )
+                # Track for conversation follow-ups
+                if msg_id and event.review_id:
+                    with self._lock:
+                        self._conv_threads[msg_id] = f"sentinel:{event.review_id}"
 
             case PermissionResolvedEvent() if not event.resolver.startswith("email"):
                 perm_msg_id = self._permission_pending.pop(event.session_id, None)
@@ -411,6 +423,23 @@ class EmailPlugin:
 
         in_reply_to = msg.get("In-Reply-To", "")
         from_addr = email.utils.parseaddr(msg.get("From", ""))[1]
+
+        # Check if this is a reply to a conversation thread (gate/sentinel follow-up)
+        with self._lock:
+            conv_id = self._conv_threads.get(in_reply_to)
+        if conv_id and self._conversation_store and self._event_loop:
+
+            async def _do_conv():
+                reply = await self._conversation_store.send_message(conv_id, reply_text)
+                if reply:
+                    self._send_email(
+                        "Re: [cross] Follow-up",
+                        reply,
+                        in_reply_to=in_reply_to,
+                    )
+
+            asyncio.run_coroutine_threadsafe(_do_conv(), self._event_loop)
+            return
 
         # Determine action from reply text
         reply_upper = reply_text.upper().strip()
