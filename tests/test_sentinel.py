@@ -116,6 +116,12 @@ class TestFormatEventForReview:
         assert "[user]" in result
         assert "delete all logs" in result
 
+    def test_agent_text_event(self):
+        event = {"type": "agent_text", "text": "I'll delete those files now."}
+        result = _format_event_for_review(event)
+        assert "[agent]" in result
+        assert "delete those files" in result
+
     def test_unknown_event_type(self):
         event = {"type": "custom", "data": "test"}
         result = _format_event_for_review(event)
@@ -230,12 +236,31 @@ class TestSentinelObserve:
         assert len(sentinel._events) == 0
 
     @pytest.mark.anyio
-    async def test_ignores_other_events(self, sentinel):
+    async def test_observes_text_events(self, sentinel):
         from cross.events import TextEvent
 
-        event = TextEvent(text="Hello world")
+        event = TextEvent(text="Hello world, I'll help you with that.")
         await sentinel.observe(event)
+        assert len(sentinel._events) == 1
+        assert sentinel._events[0]["type"] == "agent_text"
+        assert sentinel._events[0]["text"] == "Hello world, I'll help you with that."
+
+    @pytest.mark.anyio
+    async def test_skips_empty_text_events(self, sentinel):
+        from cross.events import TextEvent
+
+        await sentinel.observe(TextEvent(text=""))
+        await sentinel.observe(TextEvent(text="   "))
         assert len(sentinel._events) == 0
+
+    @pytest.mark.anyio
+    async def test_truncates_long_text_events(self, sentinel):
+        from cross.events import TextEvent
+
+        long_text = "x" * 500
+        await sentinel.observe(TextEvent(text=long_text))
+        assert len(sentinel._events) == 1
+        assert len(sentinel._events[0]["text"]) == 300
 
 
 # --- LLMSentinel._do_review ---

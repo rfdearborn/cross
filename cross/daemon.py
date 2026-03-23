@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections import deque
 from typing import Any
 
 from starlette.applications import Starlette
@@ -27,6 +28,8 @@ from cross.events import (
     GateDecisionEvent,
     PermissionPromptEvent,
     PermissionResolvedEvent,
+    RequestEvent,
+    TextEvent,
     ToolUseEvent,
 )
 from cross.plugins.dashboard import DASHBOARD_HTML, SETTINGS_HTML, DashboardPlugin
@@ -56,6 +59,8 @@ _project_cwds: dict[str, str] = {}
 _pending_injects: dict[str, str] = {}
 # Agents seen via the gate API (not registered via cross wrap)
 _gate_agents: set[str] = set()
+# Per-session recent tool calls for external agents (keyed by session_id)
+_gate_recent_tools: dict[str, deque] = {}
 # Permission prompt tracking
 _permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, allow_all_label, ts}
 _permission_debounce: dict[str, float] = {}  # session_id -> last prompt time
@@ -451,6 +456,7 @@ async def api_gate(request: Request) -> JSONResponse:
     session_id = data.get("session_id", "")
     user_intent = data.get("user_intent", "")
     cwd = data.get("cwd", "")
+    conversation_context = data.get("conversation_context", [])
 
     # Track this agent as monitored via gate API
     if agent and agent != "unknown":
@@ -466,6 +472,12 @@ async def api_gate(request: Request) -> JSONResponse:
 
     script_contents = _resolve_scripts_for_tool(tool_name, tool_input, cwd=cwd)
 
+    # Per-session recent_tools tracking for external agents
+    max_tools = max(settings.llm_gate_context_tools, 1)
+    if session_id and session_id not in _gate_recent_tools:
+        _gate_recent_tools[session_id] = deque(maxlen=max_tools)
+    recent_tools = list(_gate_recent_tools[session_id]) if session_id else []
+
     gate_request = GateRequest(
         tool_use_id=tool_use_id,
         tool_name=tool_name,
@@ -476,9 +488,40 @@ async def api_gate(request: Request) -> JSONResponse:
         user_intent=user_intent,
         cwd=cwd,
         script_contents=script_contents,
+        conversation_context=conversation_context,
+        recent_tools=recent_tools,
     )
 
     result = await _gate_chain.evaluate(gate_request)
+
+    # Record for future context
+    if session_id:
+        _gate_recent_tools[session_id].append({"name": tool_name, "input": tool_input})
+
+    # Emit conversation context events for sentinel visibility
+    if conversation_context:
+        # Find last user and last assistant turns
+        last_user = None
+        last_assistant = None
+        for turn in reversed(conversation_context):
+            if turn.get("role") == "user" and last_user is None:
+                last_user = turn.get("text", "")
+            elif turn.get("role") == "assistant" and last_assistant is None:
+                last_assistant = turn.get("text", "")
+            if last_user is not None and last_assistant is not None:
+                break
+        if last_user:
+            await event_bus.publish(
+                RequestEvent(
+                    method="POST",
+                    path="/cross/api/gate",
+                    last_message_role="user",
+                    last_message_preview=last_user[:200],
+                    agent=agent,
+                )
+            )
+        if last_assistant:
+            await event_bus.publish(TextEvent(text=last_assistant[:300]))
 
     # Publish tool call and gate decision events
     await event_bus.publish(

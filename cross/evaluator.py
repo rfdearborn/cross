@@ -41,6 +41,7 @@ class GateRequest:
     # Context
     recent_tools: list[dict[str, Any]] = field(default_factory=list)
     user_intent: str = ""
+    conversation_context: list[dict[str, str]] = field(default_factory=list)
     tool_index_in_message: int = 0
     tool_count_in_message: int = 0
     # Script contents resolved from bash commands (path -> source)

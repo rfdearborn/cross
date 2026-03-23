@@ -43,6 +43,7 @@ from cross.proxy import (
     _blocked_tool_info,
     _blocked_tool_timestamps,
     _build_retry_request_body,
+    _extract_conversation_context,
     _extract_request_event,
     _extract_user_intent,
     _gate_non_streaming_response,
@@ -288,6 +289,119 @@ class TestExtractUserIntent:
         }
         # text defaults to "" which is falsy, so gets skipped
         assert _extract_user_intent(data) == ""
+
+
+# ============================================================
+# _extract_conversation_context
+# ============================================================
+
+
+class TestExtractConversationContext:
+    def test_empty_messages(self):
+        assert _extract_conversation_context({}) == []
+        assert _extract_conversation_context({"messages": []}) == []
+
+    def test_basic_string_content(self):
+        data = {
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there"},
+            ]
+        }
+        result = _extract_conversation_context(data, max_turns=5)
+        assert len(result) == 2
+        assert result[0] == {"role": "user", "text": "Hello"}
+        assert result[1] == {"role": "assistant", "text": "Hi there"}
+
+    def test_list_content_extracts_text_blocks(self):
+        data = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Let me help."},
+                        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+                    ],
+                },
+            ]
+        }
+        result = _extract_conversation_context(data, max_turns=5)
+        assert len(result) == 1
+        assert result[0]["text"] == "Let me help."
+        assert result[0]["role"] == "assistant"
+
+    def test_skips_tool_result_only_messages(self):
+        data = {
+            "messages": [
+                {"role": "user", "content": "Do it"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+                    ],
+                },
+            ]
+        }
+        result = _extract_conversation_context(data, max_turns=5)
+        # Only the first user message has text content
+        assert len(result) == 1
+        assert result[0]["text"] == "Do it"
+
+    def test_skips_system_reminders(self):
+        data = {
+            "messages": [
+                {"role": "user", "content": "<system-reminder>Plan mode active</system-reminder>"},
+                {"role": "user", "content": "Real message"},
+            ]
+        }
+        result = _extract_conversation_context(data, max_turns=5)
+        assert len(result) == 1
+        assert result[0]["text"] == "Real message"
+
+    def test_truncates_long_text(self):
+        data = {
+            "messages": [
+                {"role": "user", "content": "x" * 500},
+            ]
+        }
+        result = _extract_conversation_context(data, max_turns=5, max_chars_per_turn=300)
+        assert len(result[0]["text"]) == 300
+
+    def test_limits_turns(self):
+        data = {"messages": [{"role": "user", "content": f"msg {i}"} for i in range(10)]}
+        result = _extract_conversation_context(data, max_turns=3)
+        assert len(result) == 3
+        # Should be the last 3 turns
+        assert result[0]["text"] == "msg 7"
+        assert result[2]["text"] == "msg 9"
+
+    def test_chronological_order(self):
+        data = {
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "second"},
+                {"role": "user", "content": "third"},
+            ]
+        }
+        result = _extract_conversation_context(data, max_turns=5)
+        assert [t["text"] for t in result] == ["first", "second", "third"]
+
+    def test_skips_system_role(self):
+        data = {
+            "messages": [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        result = _extract_conversation_context(data, max_turns=5)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
 
 
 # ============================================================

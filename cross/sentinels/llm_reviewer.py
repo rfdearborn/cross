@@ -29,6 +29,7 @@ from cross.events import (
     GateDecisionEvent,
     RequestEvent,
     SentinelReviewEvent,
+    TextEvent,
     ToolUseEvent,
 )
 from cross.llm import LLMConfig, complete
@@ -42,6 +43,9 @@ detect patterns that per-call evaluation might miss.
 
 Events prefixed [user] show what the human asked the agent to do. Use this to judge \
 whether tool calls are consistent with user intent.
+
+Events prefixed [agent] show the agent's text responses to the user. Use this to understand \
+what the agent communicated and whether its actions match what it said it would do.
 
 Look for:
 - Tool calls that don't match what the user asked for
@@ -96,6 +100,9 @@ def _format_event_for_review(event: dict[str, Any]) -> str:
                     source = source[:500] + "... [truncated]"
                 result += f"\n  [script: {script_path}]\n  {source}"
         return result
+    elif event_type == "agent_text":
+        text = event.get("text", "")
+        return f"[agent] {text}"
     elif event_type == "gate_decision":
         name = event.get("tool_name", "?")
         action = event.get("action", "?")
@@ -197,6 +204,16 @@ class LLMSentinel(Sentinel):
             if event.script_contents:
                 entry["script_contents"] = event.script_contents
             self._events.append(entry)
+        elif isinstance(event, TextEvent):
+            text = event.text
+            if text and text.strip():
+                self._events.append(
+                    {
+                        "type": "agent_text",
+                        "text": text[:300],
+                        "ts": time.time(),
+                    }
+                )
         elif isinstance(event, GateDecisionEvent):
             gate_entry: dict[str, Any] = {
                 "type": "gate_decision",

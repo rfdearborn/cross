@@ -114,6 +114,25 @@ class TestFormatReviewPrompt:
         prompt = _format_review_prompt(req)
         assert "..." in prompt
 
+    def test_conversation_context_included(self):
+        req = GateRequest(
+            tool_name="Bash",
+            tool_input={"command": "rm -rf /tmp/old"},
+            conversation_context=[
+                {"role": "user", "text": "Clean up the temp files please"},
+                {"role": "assistant", "text": "I'll delete the old temp files now."},
+            ],
+        )
+        prompt = _format_review_prompt(req)
+        assert "Recent conversation:" in prompt
+        assert "[User] Clean up the temp files" in prompt
+        assert "[Agent] I'll delete the old temp files" in prompt
+
+    def test_no_conversation_context_omits_section(self):
+        req = GateRequest(tool_name="Bash", tool_input={"command": "ls"})
+        prompt = _format_review_prompt(req)
+        assert "Recent conversation:" not in prompt
+
 
 # --- LLMReviewGate ---
 

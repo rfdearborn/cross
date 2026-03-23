@@ -18,6 +18,11 @@ const CROSS_PORT = process.env.CROSS_LISTEN_PORT || '2767';
 const SESSION_ID = process.env.CROSS_SESSION_ID || '';
 const TIMEOUT_MS = 300000; // 5 minutes — allows for human escalation review
 
+const MAX_CONV_TURNS = 5;
+const MAX_CHARS_PER_TURN = 300;
+const MAX_INTENT_CHARS = 500;
+const SKIP_PREFIXES = ['<system-reminder>', '[Request interrupted by user]', 'Conversation info'];
+
 let patched = false;
 
 /**
@@ -115,6 +120,82 @@ function installCrossHook(AgentProto) {
   console.error('[cross] OpenClaw tool hook installed');
 }
 
+/**
+ * Extract text content from a message's content field.
+ * Handles both string and array-of-blocks formats.
+ */
+function extractTextFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts = [];
+  for (const block of content) {
+    if (block.type === 'text' && block.text) {
+      parts.push(block.text);
+    }
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Check if text starts with any skip prefix.
+ */
+function shouldSkip(text) {
+  for (const prefix of SKIP_PREFIXES) {
+    if (text.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/**
+ * Extract recent conversation turns from BeforeToolCallContext.
+ * Uses context.context.messages (AgentMessage[]) from pi-agent-core.
+ */
+function extractConversation(context) {
+  try {
+    const messages = context.context && context.context.messages;
+    if (!Array.isArray(messages)) return [];
+
+    const turns = [];
+    for (let i = messages.length - 1; i >= 0 && turns.length < MAX_CONV_TURNS; i--) {
+      const msg = messages[i];
+      const role = msg.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+
+      const text = extractTextFromContent(msg.content);
+      if (!text || shouldSkip(text)) continue;
+
+      turns.unshift({
+        role: role,
+        text: text.slice(0, MAX_CHARS_PER_TURN),
+      });
+    }
+    return turns;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Extract user intent (last user message text) from BeforeToolCallContext.
+ */
+function extractUserIntent(context) {
+  try {
+    const messages = context.context && context.context.messages;
+    if (!Array.isArray(messages)) return '';
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role !== 'user') continue;
+
+      const text = extractTextFromContent(msg.content);
+      if (text && !shouldSkip(text)) return text.slice(0, MAX_INTENT_CHARS);
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 function createCrossHook() {
   return async function crossBeforeToolCall(context, _signal) {
     const toolName =
@@ -122,8 +203,12 @@ function createCrossHook() {
       'unknown';
     const toolInput = context.args || {};
 
+    // Extract conversation context and user intent from agent state
+    const conversationContext = extractConversation(context);
+    const userIntent = extractUserIntent(context);
+
     try {
-      const result = await gateTool(toolName, toolInput);
+      const result = await gateTool(toolName, toolInput, conversationContext, userIntent);
       if (result.action === 'BLOCK' || result.action === 'HALT_SESSION') {
         return {
           block: true,
@@ -145,13 +230,15 @@ function createCrossHook() {
   };
 }
 
-function gateTool(toolName, toolInput) {
+function gateTool(toolName, toolInput, conversationContext, userIntent) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({
       tool_name: toolName,
       tool_input: toolInput,
       agent: 'openclaw',
       session_id: SESSION_ID,
+      conversation_context: conversationContext || [],
+      user_intent: userIntent || '',
     });
 
     const req = http.request(

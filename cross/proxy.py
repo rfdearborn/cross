@@ -130,6 +130,46 @@ def _extract_user_intent(req_data: dict) -> str:
     return ""
 
 
+def _extract_conversation_context(
+    req_data: dict,
+    max_turns: int | None = None,
+    max_chars_per_turn: int = 300,
+) -> list[dict[str, str]]:
+    """Extract recent user/assistant text exchanges from the messages array.
+
+    Returns a chronological list of {"role": "user"|"assistant", "text": "..."} dicts,
+    capped at max_turns, each text truncated to max_chars_per_turn.
+    """
+    if max_turns is None:
+        max_turns = settings.llm_gate_context_turns
+    msgs = req_data.get("messages", [])
+    turns: list[dict[str, str]] = []
+
+    for msg in reversed(msgs):
+        if len(turns) >= max_turns:
+            break
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        content = msg.get("content", "")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            # Extract text blocks only (skip tool_use, tool_result, images, etc.)
+            text_parts = []
+            for b in content:
+                if b.get("type") == "text":
+                    text_parts.append(b.get("text", ""))
+            text = " ".join(text_parts)
+        if not text or text.startswith(_SKIP_PREFIXES):
+            continue
+        turns.append({"role": role, "text": text[:max_chars_per_turn]})
+
+    turns.reverse()  # chronological order
+    return turns
+
+
 def _extract_request_event(method: str, path: str, body: bytes | None) -> RequestEvent:
     from cross.daemon import get_active_agent_label
 
@@ -442,10 +482,12 @@ async def _gate_non_streaming_response(
     blocks = data.get("content", [])
     user_intent = ""
     model = ""
+    conversation_context: list[dict[str, str]] = []
     try:
         req_data = json.loads(request_body)
         model = req_data.get("model", "")
         user_intent = _extract_user_intent(req_data)
+        conversation_context = _extract_conversation_context(req_data)
     except (json.JSONDecodeError, KeyError):
         pass
 
@@ -475,6 +517,7 @@ async def _gate_non_streaming_response(
             recent_tools=list(_recent_tools),
             script_contents=script_contents,
             cwd=proxy_cwd,
+            conversation_context=conversation_context,
         )
         result = await gate_chain.evaluate(gate_request)
 
@@ -619,10 +662,12 @@ async def _proxy_streaming(
     # Extract gate context from the request body
     user_intent = ""
     model = ""
+    conversation_context: list[dict[str, str]] = []
     try:
         req_data = json.loads(body)
         model = req_data.get("model", "")
         user_intent = _extract_user_intent(req_data)
+        conversation_context = _extract_conversation_context(req_data)
     except (json.JSONDecodeError, KeyError):
         pass
 
@@ -740,6 +785,7 @@ async def _proxy_streaming(
                                 recent_tools=list(_recent_tools),
                                 script_contents=script_contents,
                                 cwd=proxy_cwd,
+                                conversation_context=conversation_context,
                             )
                             tool_index += 1
                             result = await gate_chain.evaluate(gate_request)
