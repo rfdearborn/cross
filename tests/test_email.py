@@ -110,27 +110,27 @@ def _get_email_body(mock_smtp) -> str:
 
 class TestIsPermissionPrompt:
     def test_do_you_want_to(self, email_env):
-        from cross.plugins.email import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
-        assert _is_permission_prompt("Do you want to allow this?") is True
+        assert is_permission_prompt("Do you want to allow this?") is True
 
     def test_not_a_prompt(self, email_env):
-        from cross.plugins.email import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
-        assert _is_permission_prompt("Compiling project...") is False
+        assert is_permission_prompt("Compiling project...") is False
 
 
 class TestExtractAllowAll:
     def test_clean_text(self, email_env):
-        from cross.plugins.email import _extract_allow_all
+        from cross.pty_helpers import extract_allow_all
 
-        result = _extract_allow_all("2. allow all edits in Downloads/")
+        result = extract_allow_all("2. allow all edits in Downloads/")
         assert result == "Allow all edits in Downloads/"
 
     def test_no_match(self, email_env):
-        from cross.plugins.email import _extract_allow_all
+        from cross.pty_helpers import extract_allow_all
 
-        assert _extract_allow_all("some random text") is None
+        assert extract_allow_all("some random text") is None
 
 
 class TestTextToHtml:

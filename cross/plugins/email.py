@@ -135,7 +135,7 @@ class EmailPlugin:
         if not thread_msg_id:
             return
 
-        if not _is_permission_prompt(text):
+        if not is_permission_prompt(text):
             return
 
         # Debounce
@@ -150,7 +150,7 @@ class EmailPlugin:
         if tool_desc:
             prompt_text += f" for {tool_desc}"
 
-        allow_all_label = _extract_allow_all(text) or "Allow all (session)"
+        allow_all_label = extract_allow_all(text) or "Allow all (session)"
 
         subject = "Re: [cross] Permission needed"
         body = (
@@ -529,26 +529,7 @@ class EmailPlugin:
             logger.warning("No event loop available for injection")
 
 
-def _is_permission_prompt(text: str) -> bool:
-    """Detect actual Claude Code permission prompts vs TUI redraws."""
-    if re.search(r"Do\s*you\s*want\s*t", text, re.IGNORECASE):
-        return True
-    if re.search(r"1\.\s*Yes", text) and re.search(r"3\.\s*No", text):
-        return True
-    return False
-
-
-def _extract_allow_all(text: str) -> str | None:
-    """Extract the 'allow all...' option text from PTY output."""
-    m = re.search(r"allow all (\w+) in (\S+/)", text, re.IGNORECASE)
-    if m:
-        return f"Allow all {m.group(1)} in {m.group(2)}"
-    m = re.search(r"allowall(\w+?)in(\S+?/)", text, re.IGNORECASE)
-    if m:
-        return f"Allow all {m.group(1)} in {m.group(2)}"
-    if re.search(r"allow\s*all\s*bash", text, re.IGNORECASE):
-        return "Allow all Bash"
-    return None
+from cross.pty_helpers import extract_allow_all, is_permission_prompt  # noqa: E402, F811
 
 
 def _text_to_html(text: str) -> str:

@@ -330,9 +330,9 @@ async def _delayed_inject(session_id: str, text: str):
 
 async def _check_permission_prompt(session_id: str, text: str):
     """Check PTY output for Claude Code permission prompts and publish event."""
-    from cross.plugins.slack import _extract_allow_all, _is_permission_prompt
+    from cross.pty_helpers import extract_allow_all, is_permission_prompt
 
-    if not _is_permission_prompt(text):
+    if not is_permission_prompt(text):
         return
 
     # Debounce
@@ -343,7 +343,7 @@ async def _check_permission_prompt(session_id: str, text: str):
     _permission_debounce[session_id] = now
 
     tool_desc = _last_tool_desc.get(session_id, "")
-    allow_all_label = _extract_allow_all(text) or "Allow all (session)"
+    allow_all_label = extract_allow_all(text) or "Allow all (session)"
 
     _permission_pending[session_id] = {
         "session_id": session_id,

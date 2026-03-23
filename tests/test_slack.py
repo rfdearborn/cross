@@ -97,7 +97,7 @@ def _register_session(plugin, mock_web, session_id="sess-1", project="myproj", a
 
 
 # ---------------------------------------------------------------------------
-# Module-level helpers (_slugify, _is_permission_prompt, _extract_allow_all)
+# Module-level helpers (_slugify) and shared PTY helpers (is_permission_prompt, extract_allow_all)
 # ---------------------------------------------------------------------------
 
 
@@ -130,66 +130,66 @@ class TestSlugify:
 
 class TestIsPermissionPrompt:
     def test_do_you_want_to(self, slack_env):
-        from cross.plugins.slack import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
-        assert _is_permission_prompt("Do you want to allow this?") is True
+        assert is_permission_prompt("Do you want to allow this?") is True
 
     def test_garbled_no_spaces(self, slack_env):
-        from cross.plugins.slack import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
-        assert _is_permission_prompt("Doyouwant to proceed") is True
+        assert is_permission_prompt("Doyouwant to proceed") is True
 
     def test_partial_match(self, slack_env):
-        from cross.plugins.slack import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
-        assert _is_permission_prompt("Do you want t") is True
+        assert is_permission_prompt("Do you want t") is True
 
     def test_numbered_options(self, slack_env):
-        from cross.plugins.slack import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
-        assert _is_permission_prompt("1. Yes, allow\n2. Allow all\n3. No, deny") is True
+        assert is_permission_prompt("1. Yes, allow\n2. Allow all\n3. No, deny") is True
 
     def test_not_a_prompt(self, slack_env):
-        from cross.plugins.slack import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
-        assert _is_permission_prompt("Compiling project...") is False
+        assert is_permission_prompt("Compiling project...") is False
 
     def test_partial_numbered_only_yes(self, slack_env):
-        from cross.plugins.slack import _is_permission_prompt
+        from cross.pty_helpers import is_permission_prompt
 
         # Only "1. Yes" without "3. No" should not match the numbered pattern
-        assert _is_permission_prompt("1. Yes but no 3") is False
+        assert is_permission_prompt("1. Yes but no 3") is False
 
 
 class TestExtractAllowAll:
     def test_clean_text(self, slack_env):
-        from cross.plugins.slack import _extract_allow_all
+        from cross.pty_helpers import extract_allow_all
 
-        result = _extract_allow_all("2. allow all edits in Downloads/")
+        result = extract_allow_all("2. allow all edits in Downloads/")
         assert result == "Allow all edits in Downloads/"
 
     def test_garbled_text(self, slack_env):
-        from cross.plugins.slack import _extract_allow_all
+        from cross.pty_helpers import extract_allow_all
 
-        result = _extract_allow_all("allowalleditsinDownloads/")
+        result = extract_allow_all("allowalleditsinDownloads/")
         assert result == "Allow all edits in Downloads/"
 
     def test_bash_commands(self, slack_env):
-        from cross.plugins.slack import _extract_allow_all
+        from cross.pty_helpers import extract_allow_all
 
-        result = _extract_allow_all("allow all bash")
+        result = extract_allow_all("allow all bash")
         assert result == "Allow all Bash"
 
     def test_bash_spaced(self, slack_env):
-        from cross.plugins.slack import _extract_allow_all
+        from cross.pty_helpers import extract_allow_all
 
-        result = _extract_allow_all("Allow all Bash commands")
+        result = extract_allow_all("Allow all Bash commands")
         assert result == "Allow all Bash"
 
     def test_no_match(self, slack_env):
-        from cross.plugins.slack import _extract_allow_all
+        from cross.pty_helpers import extract_allow_all
 
-        result = _extract_allow_all("some random text")
+        result = extract_allow_all("some random text")
         assert result is None
 
 
@@ -2075,7 +2075,7 @@ class TestEdgeCases:
         assert mock_web.chat_postMessage.call_count == 1
 
     def test_handle_pty_output_default_allow_all_label(self, slack_env):
-        """When _extract_allow_all returns None, the default label is used."""
+        """When extract_allow_all returns None, the default label is used."""
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         _register_session(plugin, mock_web)
