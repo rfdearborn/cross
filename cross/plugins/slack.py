@@ -401,8 +401,14 @@ class SlackPlugin:
                         if event.action == "escalate":
                             self._gate_pending[event.tool_use_id] = (channel_id, msg_ts)
                         # Track for conversation follow-ups
+                        conv_id = f"gate:{event.tool_use_id}"
                         with self._lock:
-                            self._conv_threads[msg_ts] = f"gate:{event.tool_use_id}"
+                            self._conv_threads[msg_ts] = conv_id
+                            # Also map the session thread parent ts so replies
+                            # within the session thread route to this conversation
+                            # (most recent gate/sentinel wins per thread)
+                            if thread_ts:
+                                self._conv_threads[thread_ts] = conv_id
 
             case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
                 icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
@@ -419,8 +425,11 @@ class SlackPlugin:
                 )
                 # Track for conversation follow-ups
                 if resp.get("ok") and event.review_id:
+                    conv_id = f"sentinel:{event.review_id}"
                     with self._lock:
-                        self._conv_threads[resp["ts"]] = f"sentinel:{event.review_id}"
+                        self._conv_threads[resp["ts"]] = conv_id
+                        if thread_ts:
+                            self._conv_threads[thread_ts] = conv_id
 
             case PermissionResolvedEvent() if not event.resolver.startswith("slack"):
                 # Permission resolved from another surface (dashboard, terminal, CLI)
