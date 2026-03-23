@@ -19,7 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.28.0",
-    "starlette>=0.52.0",
+    "starlette>=0.52.0,<1.0",
     "uvicorn[standard]>=0.41.0",
     "pydantic-settings>=2.6.0",
     "websockets>=13.0",
