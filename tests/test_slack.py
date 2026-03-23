@@ -377,9 +377,9 @@ class TestEnsureChannel:
         result = plugin._ensure_channel("myproj")
         assert result == "C_PUBLIC"
         assert mock_web.conversations_create.call_count == 2
-        # Second call should NOT have is_private
+        # Second call should be public (is_private=False)
         second_call = mock_web.conversations_create.call_args_list[1]
-        assert "is_private" not in second_call.kwargs
+        assert second_call.kwargs.get("is_private") is False
 
 
 # ---------------------------------------------------------------------------
@@ -951,7 +951,8 @@ class TestHandleEvent:
         assert kwargs["reply_broadcast"] is False
 
     @pytest.mark.anyio
-    async def test_gate_decision_allow_ignored(self, slack_env):
+    async def test_gate_decision_allow_ignored_without_pending(self, slack_env):
+        """Allow events with no pending escalation should not post or update."""
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         _register_session(plugin, mock_web)
@@ -964,6 +965,167 @@ class TestHandleEvent:
         )
         await plugin.handle_event(event)
         mock_web.chat_postMessage.assert_not_called()
+        mock_web.chat_update.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_gate_escalation_resolved_allow_updates_slack(self, slack_env):
+        """When an escalation is approved externally (dashboard), Slack message should update."""
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        # Post escalation message (stores pending gate)
+        mock_web.chat_postMessage.return_value = {"ok": True, "ts": "9999.0001"}
+        escalate_event = GateDecisionEvent(
+            tool_use_id="tu1",
+            tool_name="Bash",
+            action="escalate",
+            reason="Needs review",
+        )
+        await plugin.handle_event(escalate_event)
+        assert "tu1" in plugin._gate_pending
+
+        mock_web.reset_mock()
+
+        # Resolve from dashboard
+        allow_event = GateDecisionEvent(
+            tool_use_id="tu1",
+            tool_name="Bash",
+            action="allow",
+            reason="Approved by human reviewer (@alice)",
+            evaluator="human",
+        )
+        await plugin.handle_event(allow_event)
+
+        mock_web.chat_update.assert_called_once()
+        kwargs = mock_web.chat_update.call_args.kwargs
+        assert kwargs["ts"] == "9999.0001"
+        assert "Approved" in kwargs["text"]
+        assert "@alice" in kwargs["text"]
+        assert "tu1" not in plugin._gate_pending
+
+    @pytest.mark.anyio
+    async def test_gate_escalation_resolved_deny_updates_slack(self, slack_env):
+        """When an escalation is denied externally, Slack message should update."""
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        mock_web.chat_postMessage.return_value = {"ok": True, "ts": "9999.0002"}
+        escalate_event = GateDecisionEvent(
+            tool_use_id="tu2",
+            tool_name="Write",
+            action="escalate",
+            reason="Dangerous write",
+        )
+        await plugin.handle_event(escalate_event)
+        mock_web.reset_mock()
+
+        deny_event = GateDecisionEvent(
+            tool_use_id="tu2",
+            tool_name="Write",
+            action="halt_session",
+            reason="Denied by human reviewer (@bob)",
+            evaluator="human",
+        )
+        await plugin.handle_event(deny_event)
+
+        mock_web.chat_update.assert_called_once()
+        kwargs = mock_web.chat_update.call_args.kwargs
+        assert "Denied" in kwargs["text"]
+        assert "@bob" in kwargs["text"]
+        assert "tu2" not in plugin._gate_pending
+
+    @pytest.mark.anyio
+    async def test_gate_slack_button_clears_pending(self, slack_env):
+        """When Slack's own button resolves an escalation, _gate_pending is cleaned up."""
+        factory, _, _ = slack_env
+        loop = asyncio.get_event_loop()
+        plugin, mock_web = factory(event_loop=loop)
+        plugin._resolve_approval_callback = MagicMock()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        # Simulate an escalation message being posted
+        plugin._gate_pending["tu3"] = ("C_CHAN", "8888.0001")
+
+        # Simulate Slack button click
+        payload = {
+            "type": "block_actions",
+            "actions": [{"action_id": "gate_approve", "value": "tu3"}],
+            "user": {"username": "carol"},
+            "channel": {"id": "C_CHAN"},
+            "message": {"ts": "8888.0001"},
+        }
+        plugin._handle_interactive(payload)
+
+        # _gate_pending should be cleared
+        assert "tu3" not in plugin._gate_pending
+
+    @pytest.mark.anyio
+    async def test_gate_escalation_timeout_updates_slack(self, slack_env):
+        """When an escalation times out, Slack message should update with denied."""
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        mock_web.chat_postMessage.return_value = {"ok": True, "ts": "9999.0003"}
+        await plugin.handle_event(
+            GateDecisionEvent(tool_use_id="tu_to", tool_name="Bash", action="escalate", reason="Review")
+        )
+        mock_web.reset_mock()
+
+        # Timeout produces halt_session with no @username in reason
+        await plugin.handle_event(
+            GateDecisionEvent(
+                tool_use_id="tu_to",
+                tool_name="Bash",
+                action="halt_session",
+                reason="Timed out waiting for human approval",
+                evaluator="human",
+            )
+        )
+
+        mock_web.chat_update.assert_called_once()
+        kwargs = mock_web.chat_update.call_args.kwargs
+        assert "Denied" in kwargs["text"]
+        assert "tu_to" not in plugin._gate_pending
+
+    @pytest.mark.anyio
+    async def test_gate_escalation_streaming_block_updates_slack(self, slack_env):
+        """Streaming denial (action=block) should update escalation, not post new message."""
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        mock_web.chat_postMessage.return_value = {"ok": True, "ts": "9999.0004"}
+        await plugin.handle_event(
+            GateDecisionEvent(tool_use_id="tu_sb", tool_name="Write", action="escalate", reason="Review")
+        )
+        mock_web.reset_mock()
+
+        # Streaming path publishes action="block" on denial
+        await plugin.handle_event(
+            GateDecisionEvent(
+                tool_use_id="tu_sb",
+                tool_name="Write",
+                action="block",
+                reason="Denied by human reviewer (@dave)",
+                evaluator="human",
+            )
+        )
+
+        # Should update the existing message, not post a new one
+        mock_web.chat_update.assert_called_once()
+        mock_web.chat_postMessage.assert_not_called()
+        kwargs = mock_web.chat_update.call_args.kwargs
+        assert "Denied" in kwargs["text"]
+        assert "@dave" in kwargs["text"]
+        assert "tu_sb" not in plugin._gate_pending
 
     @pytest.mark.anyio
     async def test_gate_decision_abstain_ignored(self, slack_env):
@@ -1557,6 +1719,86 @@ class TestHandleInteractive:
         update_text = mock_web.chat_update.call_args.kwargs["text"]
         assert "Denied" in update_text
         assert "carol" in update_text
+        loop.close()
+
+    def test_gate_approve_preserves_context(self, slack_env):
+        """Approving a gate escalation should keep the original command/analysis blocks."""
+        factory, _, _ = slack_env
+        loop = asyncio.new_event_loop()
+        resolve_cb = MagicMock()
+        plugin, mock_web = factory(event_loop=loop)
+        plugin._resolve_approval_callback = resolve_cb
+
+        escalate_text = '⚠️ *Gate ESCALATE*: `Bash`\n>Dangerous command\n```\n{"command": "rm -rf /"}\n```'
+        original_context_block = {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": escalate_text},
+        }
+        original_actions_block = {
+            "type": "actions",
+            "elements": [
+                {"type": "button", "action_id": "gate_approve", "value": "tu1"},
+                {"type": "button", "action_id": "gate_deny", "value": "tu1"},
+            ],
+        }
+
+        payload = {
+            "type": "block_actions",
+            "actions": [{"action_id": "gate_approve", "value": "tu1"}],
+            "user": {"username": "alice"},
+            "channel": {"id": "C_CHAN"},
+            "message": {
+                "ts": "msg_ts",
+                "blocks": [original_context_block, original_actions_block],
+            },
+        }
+
+        plugin._handle_interactive(payload)
+
+        blocks = mock_web.chat_update.call_args.kwargs["blocks"]
+        # Original context block should be preserved
+        assert blocks[0] == original_context_block
+        # Actions block should be replaced with the approval result
+        assert blocks[1]["type"] == "section"
+        assert "Approved" in blocks[1]["text"]["text"]
+        assert "alice" in blocks[1]["text"]["text"]
+        # No actions block should remain
+        assert not any(b.get("type") == "actions" for b in blocks)
+        loop.close()
+
+    def test_gate_deny_preserves_context(self, slack_env):
+        """Denying a gate escalation should keep the original command/analysis blocks."""
+        factory, _, _ = slack_env
+        loop = asyncio.new_event_loop()
+        resolve_cb = MagicMock()
+        plugin, mock_web = factory(event_loop=loop)
+        plugin._resolve_approval_callback = resolve_cb
+
+        original_context_block = {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "⚠️ *Gate ESCALATE*: `Bash`\n>Risky operation"},
+        }
+
+        payload = {
+            "type": "block_actions",
+            "actions": [{"action_id": "gate_deny", "value": "tu2"}],
+            "user": {"username": "bob"},
+            "channel": {"id": "C_CHAN"},
+            "message": {
+                "ts": "msg_ts",
+                "blocks": [
+                    original_context_block,
+                    {"type": "actions", "elements": []},
+                ],
+            },
+        }
+
+        plugin._handle_interactive(payload)
+
+        blocks = mock_web.chat_update.call_args.kwargs["blocks"]
+        assert blocks[0] == original_context_block
+        assert "Denied" in blocks[1]["text"]["text"]
+        assert "bob" in blocks[1]["text"]["text"]
         loop.close()
 
     def test_unknown_action_ignored(self, slack_env):

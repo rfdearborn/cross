@@ -67,11 +67,16 @@ def _reset_proxy_globals():
     _blocked_tool_info.clear()
     _blocked_tool_timestamps.clear()
     _recent_tools.clear()
+    # Reset sentinel halt state
+    proxy_module._sentinel_halted = False
+    proxy_module._sentinel_halt_reason = ""
     # Reset the singleton client
     old_client = proxy_module._client
     proxy_module._client = None
     yield
     # Restore after test
+    proxy_module._sentinel_halted = False
+    proxy_module._sentinel_halt_reason = ""
     proxy_module._client = old_client
 
 
@@ -349,8 +354,8 @@ class TestExtractRequestEvent:
         event = _extract_request_event("POST", "/v1/messages", body)
         assert len(event.last_message_preview) == 200
 
-    def test_list_content_with_types_preview(self):
-        """When user_intent is empty, preview shows content block types."""
+    def test_tool_result_only_no_preview(self):
+        """When last user message has only tool results, preview is None."""
         body = json.dumps(
             {
                 "messages": [
@@ -365,7 +370,7 @@ class TestExtractRequestEvent:
             }
         ).encode()
         event = _extract_request_event("POST", "/v1/messages", body)
-        assert event.last_message_preview == "[tool_result, image]"
+        assert event.last_message_preview is None
 
     def test_stream_defaults_to_false(self):
         body = json.dumps({"model": "claude-3", "messages": []}).encode()
@@ -393,11 +398,11 @@ class TestExtractRequestEvent:
         ).encode()
         event = _extract_request_event("POST", "/v1/messages", body)
         assert event.last_message_role == "assistant"
-        # _extract_user_intent gets text from the last message (the assistant one)
-        assert event.last_message_preview == "Hi there"
+        # _extract_user_intent searches backwards for the last user message
+        assert event.last_message_preview == "Hello"
 
-    def test_system_reminder_content_shows_types_fallback(self):
-        """When all text blocks are system-reminders, falls back to type list."""
+    def test_system_reminder_only_no_preview(self):
+        """When all text blocks are system-reminders, preview is None."""
         body = json.dumps(
             {
                 "messages": [
@@ -411,8 +416,7 @@ class TestExtractRequestEvent:
             }
         ).encode()
         event = _extract_request_event("POST", "/v1/messages", body)
-        # _extract_user_intent returns "", so fallback to types
-        assert event.last_message_preview == "[text]"
+        assert event.last_message_preview is None
 
 
 # ============================================================
@@ -784,6 +788,23 @@ def _make_mock_request(body_dict: dict, method: str = "POST", path: str = "/v1/m
 
 
 class TestHandleProxyRequest:
+    @pytest.mark.anyio
+    async def test_sentinel_halt_blocks_requests(self):
+        """When sentinel has halted, proxy should reject requests with 403."""
+        body = {"model": "claude-3", "stream": False, "messages": [{"role": "user", "content": "hi"}]}
+        req = _make_mock_request(body)
+        event_bus = EventBus()
+
+        proxy_module._sentinel_halted = True
+        proxy_module._sentinel_halt_reason = "Agent exfiltrating credentials"
+
+        resp = await handle_proxy_request(req, event_bus)
+
+        assert resp.status_code == 403
+        resp_data = json.loads(resp.body)
+        assert "sentinel" in resp_data["error"]["message"].lower()
+        assert "exfiltrating credentials" in resp_data["error"]["message"]
+
     @pytest.mark.anyio
     async def test_routes_streaming_request(self):
         body = {"model": "claude-3", "stream": True, "messages": [{"role": "user", "content": "hi"}]}

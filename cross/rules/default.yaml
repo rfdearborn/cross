@@ -11,7 +11,8 @@
 #   name:        unique identifier (for overrides/disable)
 #   tools:       tool names to match, or ["*"] for all
 #   field:       input field to check ("command", "file_path", or "" for all)
-#   action:      block | alert (default: block)
+#   action:      review | escalate | block | alert | halt_session (default: block)
+#                review = LLM decides; escalate/block/halt = action stands, LLM is advisory
 #   description: human explanation
 #   patterns:    regex patterns (case-insensitive, any match triggers)
 #   contains:    substrings (case-insensitive, any match triggers)
@@ -30,28 +31,27 @@ rules:
   - name: destructive-rm
     tools: [Bash, exec]
     field: command
-    action: block
-    description: Recursive forced deletes targeting root, home, or cwd
+    action: review
+    description: Recursive forced deletes (any target — LLM reviews context)
     patterns:
-      # rm -rf / rm -fr (merged flags)
-      - 'rm\s+-\w*r\w*f\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*f\w*r\w*\s+{{dangerous_path}}'
-      # rm -r -f / rm -f -r (split flags)
-      - 'rm\s+-\w*r\w*\s+-\w*f\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*f\w*\s+-\w*r\w*\s+{{dangerous_path}}'
-      # rm --recursive --force (long flags)
-      - 'rm\s+--recursive\s+--force\s+{{dangerous_path}}'
-      - 'rm\s+--force\s+--recursive\s+{{dangerous_path}}'
+      # rm with both -r and -f in any combination (short flags)
+      - '\brm\s+-\w*r\w*f'
+      - '\brm\s+-\w*f\w*r'
+      - '\brm\s+-\w*r\w*\s+-\w*f'
+      - '\brm\s+-\w*f\w*\s+-\w*r'
+      # Long flags
+      - '\brm\s+--recursive\b.*--force\b'
+      - '\brm\s+--force\b.*--recursive\b'
       # Mixed long+short
-      - 'rm\s+--recursive\s+-\w*f\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*f\w*\s+--recursive\s+{{dangerous_path}}'
-      - 'rm\s+--force\s+-\w*r\w*\s+{{dangerous_path}}'
-      - 'rm\s+-\w*r\w*\s+--force\s+{{dangerous_path}}'
+      - '\brm\s+--recursive\b.*-\w*f'
+      - '\brm\s+-\w*f\w*\s+--recursive\b'
+      - '\brm\s+--force\b.*-\w*r'
+      - '\brm\s+-\w*r\w*\s+--force\b'
 
   - name: rm-outside-project
     tools: [Bash, exec]
     field: command
-    action: block
+    action: review
     description: Deleting files in user directories outside typical project scope
     patterns:
       # ~/Downloads/..., ~/Documents/..., etc. (tilde form)
@@ -64,7 +64,7 @@ rules:
   - name: destructive-alt
     tools: [Bash, exec]
     field: command
-    action: block
+    action: review
     description: Alternative file destruction commands
     patterns:
       - 'find\s+/\s+.*-delete\b'
@@ -76,7 +76,7 @@ rules:
   - name: destructive-disk
     tools: [Bash, exec]
     field: command
-    action: block
+    action: review
     description: Disk-level destructive operations
     patterns:
       - '\bdd\b.*\bof=/dev/'
@@ -90,7 +90,7 @@ rules:
   - name: fork-bomb
     tools: [Bash, exec]
     field: command
-    action: block
+    action: review
     description: Fork bombs
     patterns:
       - ':\(\)\s*\{\s*:\|:\s*&\s*\}\s*;'
@@ -98,13 +98,125 @@ rules:
   - name: shell-wrapper-destructive
     tools: [Bash, exec]
     field: command
-    action: block
+    action: review
     description: Destructive commands hidden inside shell wrappers (bash -c, eval)
     patterns:
       - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\brm\s+-\w*r\w*f'
       - '\beval\s+.*\brm\s+-\w*r\w*f'
       - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\bmkfs\.'
       - '\b(ba|z|fi|c|da|a|tc|k)?sh\s+-c\s+.*\bdd\b.*\bof=/dev/'
+
+  # ── Destructive git operations ──
+
+  - name: destructive-git
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Destructive git commands that can lose work or rewrite history
+    patterns:
+      # Force push (--force, -f, --force-with-lease)
+      - '\bgit\s+push\b.*(-\w*f|--force)\b'
+      # Hard reset
+      - '\bgit\s+reset\b.*--hard\b'
+      # Clean (removes untracked files)
+      - '\bgit\s+clean\b.*-\w*f'
+      # Checkout/restore that discards changes (checkout -- ., checkout ., restore .)
+      - '\bgit\s+checkout\b.*--\s*\.'
+      - '\bgit\s+checkout\b\s+\.\s*$'
+      - '\bgit\s+restore\b.*\.\s*$'
+      # Delete branch (-d/-D)
+      - '\bgit\s+branch\b.*-\w*d'
+      # Stash drop/clear
+      - '\bgit\s+stash\s+(drop|clear)\b'
+      # Rebase (rewrites history)
+      - '\bgit\s+rebase\b'
+      # Amend commits
+      - '\bgit\s+commit\b.*--amend\b'
+      # Push to main/master
+      - '\bgit\s+push\b.*\b(main|master)\b'
+      # Modify global/system git config
+      - '\bgit\s+config\b.*--(global|system)\b'
+
+  # ── Process termination ──
+
+  - name: process-kill
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Process termination commands
+    patterns:
+      - '\b(kill|killall|pkill)\b'
+
+  # ── Privilege escalation ──
+
+  - name: sudo
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Commands run with elevated privileges
+    patterns:
+      - '\bsudo\b'
+
+  # ── Mutating HTTP requests ──
+
+  - name: mutating-http
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: HTTP requests that modify remote state
+    patterns:
+      - '\bcurl\b.*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s*(POST|PUT|PATCH|DELETE)|-d\s|--data)'
+      - '\bwget\b.*--post'
+
+  # ── Container destruction ──
+
+  - name: destructive-docker
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Docker commands that remove or stop containers/images
+    patterns:
+      - '\bdocker\s+(rm|rmi|stop|kill)\b'
+      - '\bdocker\s+system\s+prune\b'
+      - '\bdocker\s+(volume|network)\s+rm\b'
+
+  # ── System configuration ──
+
+  - name: system-config
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Commands that modify system-level configuration
+    patterns:
+      - '\blaunchctl\b'
+      - '\bdefaults\s+write\b'
+      - '\bcrontab\b'
+
+  # ── Package management (destructive) ──
+
+  - name: destructive-packages
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Package publish, uninstall, or removal
+    patterns:
+      - '\bnpm\s+publish\b'
+      - '\btwine\s+upload\b'
+      - '\b(pip|pip3)\s+uninstall\b'
+      - '\bnpm\s+uninstall\s+-g\b'
+      - '\bbrew\s+(uninstall|remove)\b'
+
+  # ── Shell config edits ──
+
+  - name: shell-config-edit
+    tools: [Write, Edit]
+    field: file_path
+    action: review
+    description: Edits to shell configuration files
+    patterns:
+      - '~/?\.(zshrc|bashrc|zprofile|bash_profile|profile)$'
+      - '/Users/\w+/\.(zshrc|bashrc|zprofile|bash_profile|profile)$'
+      - '/home/\w+/\.(zshrc|bashrc|zprofile|bash_profile|profile)$'
 
   # ── Credential exfiltration ──
 
@@ -160,7 +272,7 @@ rules:
   - name: system-path-write
     tools: [Write, Edit]
     field: file_path
-    action: block
+    action: review
     description: Writes to system directories
     contains:
       - "/etc/"
@@ -179,7 +291,7 @@ rules:
   - name: system-path-write-bash
     tools: [Bash, exec]
     field: command
-    action: block
+    action: review
     description: Bash writes to system directories via redirection/cp/mv/tee/install/ln/sed
     patterns:
       - '>\s*/(etc|usr|System|boot|sbin|bin|Library)/'
@@ -192,13 +304,51 @@ rules:
   - name: dangerous-chmod
     tools: [Bash, exec]
     field: command
-    action: block
+    action: review
     description: Recursive chmod 777/a+rwx on root, home, or cwd
     patterns:
       - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+[/~\.]'
       - 'chmod\s+777\s+-R\s+[/~\.]'
       - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?a\+rwx\s+[/~\.]'
       - 'chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?ugo\+rwx\s+[/~\.]'
+
+  # ── Script execution (LLM review) ──
+
+  - name: script-execution
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Script execution (file or inline) — LLM gate reviews contents
+    patterns:
+      # python/python3 running a .py file (with optional env/exec/sudo prefix)
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*python[23w]?(?:\.\d+)?\s+(?:-\S+\s+)*\S+\.py\b'
+      # node running a .js/.ts/.mjs/.cjs file
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*node\s+(?:-\S+\s+)*\S+\.(js|ts|mjs|cjs)\b'
+      # ruby running a .rb file
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*ruby\s+(?:-\S+\s+)*\S+\.rb\b'
+      # perl running a .pl file
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*perl\s+(?:-\S+\s+)*\S+\.pl\b'
+      # php running a .php file
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*php\s+(?:-\S+\s+)*\S+\.php\b'
+      # shell interpreters running a script file
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*(ba|z|fi|c|da|a|tc|k)?sh\s+(?:-\S+\s+)*\S+\.(sh|bash|zsh)\b'
+      # Rscript
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*Rscript\s+(?:-\S+\s+)*\S+\.[rR]\b'
+      # lua
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*lua\s+(?:-\S+\s+)*\S+\.lua\b'
+      # Script execution via path (./script.py, ../scripts/run.sh, etc.)
+      - '(?:^|&&|\|\||;)\s*(?:(?:sudo|env|exec|time)\s+)*\./\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\b'
+      # Stdin redirect to interpreter (python < script.py)
+      - '(?:(?:sudo|env|exec)\s+)*(?:python[23w]?(?:\.\d+)?|node|ruby|perl|php|(?:ba|z|fi|c|da|a|tc|k)?sh)\s+.*<\s*\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\b'
+      # Piped script execution (cat script.py | python)
+      - '\bcat\s+\S+\.(py|js|ts|rb|pl|php|sh|bash|lua)\s*\|\s*(?:(?:sudo|env|exec)\s+)*(?:python[23w]?(?:\.\d+)?|node|ruby|perl|php|(?:ba|z|fi|c|da|a|tc|k)?sh)\b'
+      # Inline script execution via -c / -e flag
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*python[23w]?(?:\.\d+)?\s+(?:-\S+\s+)*-c\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*node\s+(?:-\S+\s+)*-e\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*ruby\s+(?:-\S+\s+)*-e\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*perl\s+(?:-\S+\s+)*-e\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*php\s+(?:-\S+\s+)*-r\s'
+      - '(?:(?:sudo|env|exec|time|nice|nohup)\s+)*lua\s+(?:-\S+\s+)*-e\s'
 
   # ── Sensitive file reads (alert, not block) ──
 

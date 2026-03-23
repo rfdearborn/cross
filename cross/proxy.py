@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import deque
 from typing import Any
@@ -28,9 +29,28 @@ from cross.chain import GateChain
 from cross.config import settings
 from cross.evaluator import Action, GateRequest
 from cross.events import ErrorEvent, EventBus, GateDecisionEvent, GateRetryEvent, RequestEvent, ToolUseEvent
+from cross.script_resolver import resolve_script_contents
 from cross.sse import SSEParser
 
 logger = logging.getLogger("cross.proxy")
+
+# Tool names that execute bash commands (for script resolution)
+_BASH_TOOL_NAMES = {"bash", "exec"}
+
+
+def _resolve_scripts_for_tool(tool_name: str, tool_input: Any, cwd: str = "") -> dict[str, str]:
+    """Resolve script file contents if this is a Bash/exec tool call."""
+    if tool_name.lower() not in _BASH_TOOL_NAMES:
+        return {}
+    command = ""
+    if isinstance(tool_input, dict):
+        command = tool_input.get("command", "")
+    elif isinstance(tool_input, str):
+        command = tool_input
+    if not command:
+        return {}
+    return resolve_script_contents(command, cwd=cwd)
+
 
 _client: httpx.AsyncClient | None = None
 
@@ -45,6 +65,24 @@ _recent_tools: deque[dict[str, Any]] = deque(maxlen=max(settings.llm_gate_contex
 # Safety limits for SSE buffering
 _MAX_BUFFER_LINES = 500  # Flush buffer if it exceeds this many lines
 _BLOCKED_TOOL_TTL = 300.0  # Seconds before stale blocked tool entries are cleaned up
+
+# Sentinel halt flag — when set, proxy rejects all requests
+_sentinel_halted = False
+_sentinel_halt_reason = ""
+
+
+def set_sentinel_halt(reason: str) -> None:
+    """Called by the sentinel when it issues a HALT verdict."""
+    global _sentinel_halted, _sentinel_halt_reason
+    _sentinel_halted = True
+    _sentinel_halt_reason = reason
+    logger.critical(f"Proxy halted by sentinel: {reason}")
+
+
+def is_sentinel_halted() -> bool:
+    """Check if the sentinel has halted the proxy."""
+    return _sentinel_halted
+
 
 # Gate approval infrastructure (for ESCALATE → human review)
 _pending_approvals: dict[str, asyncio.Event] = {}
@@ -69,26 +107,33 @@ def get_client() -> httpx.AsyncClient:
     return _client
 
 
+_SKIP_PREFIXES = ("<system-reminder>", "[Request interrupted by user]")
+
+
 def _extract_user_intent(req_data: dict) -> str:
-    """Extract the last user text from a parsed request body, skipping system-reminders."""
+    """Extract user text from the last user message."""
     msgs = req_data.get("messages", [])
-    if not msgs:
+    for msg in reversed(msgs):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            if content and not content.startswith(_SKIP_PREFIXES):
+                return content[:500]
+        elif isinstance(content, list):
+            for b in reversed(content):
+                if b.get("type") == "text":
+                    text = b.get("text", "")
+                    if text and not text.startswith(_SKIP_PREFIXES):
+                        return text[:500]
         return ""
-    last = msgs[-1]
-    content = last.get("content", "")
-    if isinstance(content, str):
-        return content[:500]
-    if isinstance(content, list):
-        for b in content:
-            if b.get("type") == "text":
-                text = b.get("text", "")
-                if text and not text.startswith("<system-reminder>"):
-                    return text[:500]
     return ""
 
 
 def _extract_request_event(method: str, path: str, body: bytes | None) -> RequestEvent:
-    event = RequestEvent(method=method, path=path)
+    from cross.daemon import get_active_agent_label
+
+    event = RequestEvent(method=method, path=path, agent=get_active_agent_label())
     if body:
         try:
             data = json.loads(body)
@@ -108,9 +153,6 @@ def _extract_request_event(method: str, path: str, body: bytes | None) -> Reques
                 intent = _extract_user_intent(data)
                 if intent:
                     event.last_message_preview = intent[:200]
-                elif isinstance(last.get("content"), list):
-                    types = [b.get("type", "?") for b in last["content"]]
-                    event.last_message_preview = f"[{', '.join(types)}]"
         except (json.JSONDecodeError, KeyError):
             pass
     return event
@@ -300,6 +342,21 @@ async def handle_proxy_request(
     gate_chain: GateChain | None = None,
 ) -> Response:
     """Handle a proxy request, publishing events to the given EventBus."""
+    if _sentinel_halted:
+        return Response(
+            content=json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "request_blocked",
+                        "message": f"Session halted by sentinel: {_sentinel_halt_reason}",
+                    },
+                }
+            ).encode(),
+            status_code=403,
+            headers={"content-type": "application/json"},
+        )
+
     body = await request.body()
     path = request.url.path
     if request.url.query:
@@ -403,6 +460,10 @@ async def _gate_non_streaming_response(
         tool_name = block.get("name", "")
         tool_input = block.get("input")
 
+        # Resolve script contents for Bash/exec tool calls
+        proxy_cwd = os.getcwd()
+        script_contents = _resolve_scripts_for_tool(tool_name, tool_input, cwd=proxy_cwd)
+
         gate_request = GateRequest(
             tool_use_id=tool_id,
             tool_name=tool_name,
@@ -412,6 +473,8 @@ async def _gate_non_streaming_response(
             agent=model,
             tool_index_in_message=i,
             recent_tools=list(_recent_tools),
+            script_contents=script_contents,
+            cwd=proxy_cwd,
         )
         result = await gate_chain.evaluate(gate_request)
 
@@ -429,10 +492,11 @@ async def _gate_non_streaming_response(
                 evaluator=result.evaluator,
                 confidence=result.confidence,
                 tool_input=tool_input,
+                script_contents=script_contents or None,
             )
         )
 
-        if result.action == Action.ESCALATE and not any_halted:
+        if result.action in (Action.REVIEW, Action.ESCALATE) and not any_halted:
             # Hold and wait for human approval via Slack
             approval_event = asyncio.Event()
             _pending_approvals[tool_id] = approval_event
@@ -479,7 +543,7 @@ async def _gate_non_streaming_response(
                     GateDecisionEvent(
                         tool_use_id=tool_id,
                         tool_name=tool_name,
-                        action="halt_session",
+                        action="block",
                         reason=reason,
                         evaluator="human",
                         tool_input=tool_input,
@@ -655,6 +719,15 @@ async def _proxy_streaming(
                                 await event_bus.publish(ev)
 
                         if tool_event:
+                            # Resolve script contents for Bash/exec tool calls
+                            proxy_cwd = os.getcwd()
+                            script_contents = _resolve_scripts_for_tool(
+                                tool_event.name,
+                                tool_event.input,
+                                cwd=proxy_cwd,
+                            )
+                            tool_event.script_contents = script_contents or None
+
                             # Tool_use block complete — run gate evaluation
                             gate_request = GateRequest(
                                 tool_use_id=tool_event.tool_use_id,
@@ -665,6 +738,8 @@ async def _proxy_streaming(
                                 agent=model,
                                 tool_index_in_message=tool_index,
                                 recent_tools=list(_recent_tools),
+                                script_contents=script_contents,
+                                cwd=proxy_cwd,
                             )
                             tool_index += 1
                             result = await gate_chain.evaluate(gate_request)
@@ -683,10 +758,11 @@ async def _proxy_streaming(
                                     evaluator=result.evaluator,
                                     confidence=result.confidence,
                                     tool_input=tool_event.input,
+                                    script_contents=script_contents or None,
                                 )
                             )
 
-                            if result.action == Action.ESCALATE and not any_halted:
+                            if result.action in (Action.REVIEW, Action.ESCALATE) and not any_halted:
                                 # Hold stream and wait for human approval
                                 approval_event = asyncio.Event()
                                 _pending_approvals[tool_event.tool_use_id] = approval_event

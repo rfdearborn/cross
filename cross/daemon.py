@@ -19,10 +19,21 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from cross.chain import GateChain
 from cross.config import settings
+from cross.custom_instructions import CustomInstructions
 from cross.evaluator import Action, GateRequest
-from cross.events import EventBus, GateDecisionEvent, ToolUseEvent
-from cross.plugins.dashboard import DASHBOARD_HTML, DashboardPlugin
+from cross.event_store import EventStore
+from cross.events import (
+    EventBus,
+    GateDecisionEvent,
+    PermissionPromptEvent,
+    PermissionResolvedEvent,
+    ToolUseEvent,
+)
+from cross.plugins.dashboard import DASHBOARD_HTML, SETTINGS_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
+from cross.plugins.notifier import handle_event as notify_event
+from cross.plugins.notifier import is_available as native_notifications_available
+from cross.plugins.notifier import set_browser_check
 
 logger = logging.getLogger("cross.daemon")
 
@@ -30,7 +41,9 @@ logger = logging.getLogger("cross.daemon")
 event_bus = EventBus()
 _gate_chain: GateChain | None = None
 _slack = None  # SlackPlugin instance, if configured
+_email = None  # EmailPlugin instance, if configured
 _dashboard: DashboardPlugin | None = None  # always active
+_custom_instructions: CustomInstructions | None = None
 
 # Session tracking: session_id -> session metadata
 _sessions: dict[str, dict[str, Any]] = {}
@@ -40,6 +53,153 @@ _session_ws: dict[str, WebSocket] = {}
 _project_cwds: dict[str, str] = {}
 # session_id -> initial message to inject after WS connects
 _pending_injects: dict[str, str] = {}
+# Agents seen via the gate API (not registered via cross wrap)
+_gate_agents: set[str] = set()
+# Permission prompt tracking
+_permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, allow_all_label, ts}
+_permission_debounce: dict[str, float] = {}  # session_id -> last prompt time
+_PERMISSION_DEBOUNCE_SECS = 3.0
+# Tool description tracking per session (for permission prompt context)
+_last_tool_desc: dict[str, str] = {}
+# Event loop reference (for thread-safe callbacks)
+_event_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _detect_hooked_agents() -> set[str]:
+    """Detect agents that have the cross hook installed (monitored even before first call)."""
+    from pathlib import Path
+
+    hooked: set[str] = set()
+    # Check OpenClaw: if the gateway plist has the cross hook, it's monitored
+    openclaw_plist = Path.home() / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+    if openclaw_plist.exists():
+        try:
+            content = openclaw_plist.read_text()
+            if "openclaw_hook" in content:
+                hooked.add("openclaw")
+        except OSError:
+            pass
+    return hooked
+
+
+def _detect_running_agents() -> dict[str, list[int]]:
+    """Detect running agent processes. Returns {agent_name: [pids]}.
+
+    Claude Desktop Code sessions are reported separately as "claude (desktop)"
+    so they can be distinguished from CLI sessions in the dashboard.
+    """
+    # Pattern per agent — more specific than just the name to avoid false positives
+    agent_patterns = {
+        "claude": ["-x", "claude"],  # exact binary name match
+        "openclaw": ["-f", "openclaw-gateway"],  # runs as openclaw-gateway
+    }
+
+    own_pid = str(os.getpid())
+    result: dict[str, list[int]] = {}
+    for agent, pgrep_args in agent_patterns.items():
+        try:
+            proc = subprocess.run(
+                ["pgrep"] + pgrep_args,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                pids = [int(p) for p in proc.stdout.strip().splitlines() if p != own_pid]
+                if pids:
+                    result[agent] = pids
+        except (OSError, ValueError):
+            continue
+
+    # Distinguish Claude Desktop Code sessions from CLI sessions
+    if "claude" in result:
+        cli_pids = []
+        desktop_pids = []
+        for pid in result["claude"]:
+            if _is_desktop_pid(pid):
+                desktop_pids.append(pid)
+            else:
+                cli_pids.append(pid)
+        result["claude"] = cli_pids
+        if not cli_pids:
+            del result["claude"]
+        if desktop_pids:
+            result["claude (desktop)"] = desktop_pids
+
+    return result
+
+
+def _is_desktop_pid(pid: int) -> bool:
+    """Check if a PID is a Claude Desktop app Code session."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "comm="],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            return "/Claude/claude-code/" in proc.stdout
+    except OSError:
+        pass
+    return False
+
+
+def get_agent_status() -> dict[str, Any]:
+    """Return monitoring coverage: monitored sessions and unmonitored agents."""
+    running = _detect_running_agents()
+    running_agent_names = set(running.keys())
+
+    # Clean up stale sessions (process no longer running)
+    stale = [sid for sid, s in _sessions.items() if s.get("agent") not in running_agent_names]
+    for sid in stale:
+        del _sessions[sid]
+
+    # Clean up stale gate agents (process no longer running)
+    _gate_agents.intersection_update(running_agent_names | {s.get("agent") for s in _sessions.values()})
+
+    monitored = []
+    monitored_pids: set[int] = set()
+    for session in _sessions.values():
+        agent = session.get("agent", "unknown")
+        project = session.get("project", "")
+        label = f"{agent} - {project}" if project else agent
+        pid = session.get("pid")
+        monitored.append({"agent": agent, "project": project, "label": label})
+        if pid:
+            monitored_pids.add(int(pid))
+
+    monitored_agents = {s.get("agent") for s in _sessions.values()} | _gate_agents
+
+    # Add gate-only agents (e.g. OpenClaw) to monitored list
+    for agent in _gate_agents:
+        if agent not in {s.get("agent") for s in _sessions.values()}:
+            monitored.append({"agent": agent, "project": "", "label": agent})
+
+    unmonitored = []
+    for agent, pids in running.items():
+        # Filter out PIDs we know are monitored
+        unmonitored_pids = [p for p in pids if p not in monitored_pids]
+        if unmonitored_pids and agent not in monitored_agents:
+            unmonitored.append({"agent": agent, "count": len(unmonitored_pids), "pids": unmonitored_pids})
+
+    return {
+        "monitored": monitored,
+        "unmonitored": unmonitored,
+        "monitored_count": len(monitored),
+        "unmonitored_count": len(unmonitored),
+    }
+
+
+def get_active_agent_label() -> str:
+    """Return 'agent - project' label for the most recently active session."""
+    if not _sessions:
+        return ""
+    # Use the most recently registered session
+    last = list(_sessions.values())[-1]
+    agent = last.get("agent", "")
+    project = last.get("project", "")
+    if agent and project:
+        return f"{agent} - {project}"
+    return agent or project or ""
 
 
 # --- Local API routes (for wrap processes) ---
@@ -68,6 +228,13 @@ async def api_register_session(request: Request) -> JSONResponse:
         except Exception as e:
             logger.warning(f"Slack session_started failed: {e}")
 
+    # Notify Email
+    if _email:
+        try:
+            _email.session_started_from_data(data)
+        except Exception as e:
+            logger.warning(f"Email session_started failed: {e}")
+
     return JSONResponse({"status": "ok", "session_id": session_id})
 
 
@@ -86,6 +253,13 @@ async def api_end_session(request: Request) -> JSONResponse:
             _slack.session_ended_from_data(session)
         except Exception as e:
             logger.warning(f"Slack session_ended failed: {e}")
+
+    # Notify Email
+    if _email:
+        try:
+            _email.session_ended_from_data(session)
+        except Exception as e:
+            logger.warning(f"Email session_ended failed: {e}")
 
     # Clean up
     _sessions.pop(session_id, None)
@@ -113,8 +287,15 @@ async def api_session_ws(ws: WebSocket):
 
             if msg_type == "pty_output":
                 text = msg.get("text", "")
-                if text and _slack:
-                    _slack.handle_pty_output(session_id, text)
+                if text:
+                    # Forward to Slack for relay
+                    if _slack:
+                        _slack.handle_pty_output(session_id, text)
+                    # Forward to Email for relay
+                    if _email:
+                        _email.handle_pty_output(session_id, text)
+                    # Check for permission prompts (dashboard + notifications)
+                    await _check_permission_prompt(session_id, text)
 
     except WebSocketDisconnect:
         logger.info(f"Session WS disconnected: {session_id}")
@@ -139,6 +320,94 @@ async def _delayed_inject(session_id: str, text: str):
     await asyncio.sleep(5)
     logger.info(f"Injecting initial message for session {session_id}: {text[:50]}")
     await _inject_to_session(session_id, text + "\r")
+
+
+async def _check_permission_prompt(session_id: str, text: str):
+    """Check PTY output for Claude Code permission prompts and publish event."""
+    from cross.plugins.slack import _extract_allow_all, _is_permission_prompt
+
+    if not _is_permission_prompt(text):
+        return
+
+    # Debounce
+    now = time.time()
+    last = _permission_debounce.get(session_id, 0)
+    if now - last < _PERMISSION_DEBOUNCE_SECS:
+        return
+    _permission_debounce[session_id] = now
+
+    tool_desc = _last_tool_desc.get(session_id, "")
+    allow_all_label = _extract_allow_all(text) or "Allow all (session)"
+
+    _permission_pending[session_id] = {
+        "session_id": session_id,
+        "tool_desc": tool_desc,
+        "allow_all_label": allow_all_label,
+        "ts": now,
+    }
+
+    await event_bus.publish(
+        PermissionPromptEvent(
+            session_id=session_id,
+            tool_desc=tool_desc,
+            allow_all_label=allow_all_label,
+        )
+    )
+    # Clear stale tool description
+    _last_tool_desc.pop(session_id, None)
+
+
+async def _resolve_permission_async(session_id: str, action: str, resolver: str):
+    """Resolve a pending permission prompt — inject PTY input and publish event."""
+    info = _permission_pending.pop(session_id, None)
+    if not info:
+        return
+
+    # Map action to PTY keypress
+    key = {"approve": "1", "allow_all": "2", "deny": "3"}.get(action, "3")
+    await _inject_to_session(session_id, key)
+
+    await event_bus.publish(
+        PermissionResolvedEvent(
+            session_id=session_id,
+            action=action,
+            resolver=resolver,
+        )
+    )
+    logger.info(f"Permission {action} for session {session_id} (resolver={resolver})")
+
+
+def resolve_permission(session_id: str, action: str, resolver: str):
+    """Thread-safe: resolve a pending permission prompt from any surface."""
+    if session_id not in _permission_pending:
+        return
+    if _event_loop:
+        asyncio.run_coroutine_threadsafe(
+            _resolve_permission_async(session_id, action, resolver),
+            _event_loop,
+        )
+
+
+async def _track_tool_desc(event):
+    """EventBus handler — track tool descriptions per session for permission context."""
+    if not isinstance(event, ToolUseEvent):
+        return
+    session_id = event.session_id
+    if not session_id:
+        # Fall back to most recently active session
+        if _sessions:
+            session_id = list(_sessions.keys())[-1]
+        else:
+            return
+
+    tool_desc = f"`{event.name}`"
+    if event.name == "Bash":
+        cmd = event.input.get("command", "")
+        tool_desc = f"`Bash`: `{cmd[:80]}`"
+    elif event.name in ("Read", "Write", "Edit"):
+        path = event.input.get("file_path", "")
+        tool_desc = f"`{event.name}`: `{path}`"
+    _last_tool_desc[session_id] = tool_desc
 
 
 async def _spawn_session(project: str, initial_message: str):
@@ -182,10 +451,19 @@ async def api_gate(request: Request) -> JSONResponse:
     user_intent = data.get("user_intent", "")
     cwd = data.get("cwd", "")
 
+    # Track this agent as monitored via gate API
+    if agent and agent != "unknown":
+        _gate_agents.add(agent)
+
     if not _gate_chain:
         return JSONResponse({"action": "ALLOW", "reason": "No gate chain configured"})
 
     tool_use_id = f"ext-{uuid.uuid4().hex[:12]}"
+
+    # Resolve script contents for Bash/exec tool calls
+    from cross.proxy import _resolve_scripts_for_tool
+
+    script_contents = _resolve_scripts_for_tool(tool_name, tool_input, cwd=cwd)
 
     gate_request = GateRequest(
         tool_use_id=tool_use_id,
@@ -196,6 +474,7 @@ async def api_gate(request: Request) -> JSONResponse:
         timestamp=time.time(),
         user_intent=user_intent,
         cwd=cwd,
+        script_contents=script_contents,
     )
 
     result = await _gate_chain.evaluate(gate_request)
@@ -206,6 +485,9 @@ async def api_gate(request: Request) -> JSONResponse:
             name=tool_name,
             tool_use_id=tool_use_id,
             input=tool_input if isinstance(tool_input, dict) else {},
+            script_contents=script_contents or None,
+            agent=agent,
+            session_id=session_id,
         )
     )
     await event_bus.publish(
@@ -218,11 +500,14 @@ async def api_gate(request: Request) -> JSONResponse:
             evaluator=result.evaluator,
             confidence=result.confidence,
             tool_input=tool_input if isinstance(tool_input, dict) else {},
+            script_contents=script_contents or None,
+            agent=agent,
+            session_id=session_id,
         )
     )
 
     # Handle escalation — wait for human approval
-    if result.action == Action.ESCALATE:
+    if result.action in (Action.REVIEW, Action.ESCALATE):
         from cross.proxy import _approval_results, _pending_approvals
 
         approval_event = asyncio.Event()
@@ -305,6 +590,11 @@ async def dashboard_page(request: Request) -> Response:
     return Response(content=DASHBOARD_HTML, media_type="text/html")
 
 
+async def settings_page(request: Request) -> Response:
+    """GET /cross/settings — serves the settings page HTML."""
+    return Response(content=SETTINGS_HTML, media_type="text/html")
+
+
 async def api_events(request: Request) -> JSONResponse:
     """GET /cross/api/events — recent events as JSON."""
     if _dashboard:
@@ -332,6 +622,49 @@ async def api_resolve_pending(request: Request) -> JSONResponse:
     return JSONResponse({"status": "error", "message": "dashboard not initialized"}, status_code=500)
 
 
+async def api_pending_permissions(request: Request) -> JSONResponse:
+    """GET /cross/api/pending-permissions — pending permission prompts as JSON."""
+    return JSONResponse(list(_permission_pending.values()))
+
+
+async def api_resolve_permission(request: Request) -> JSONResponse:
+    """POST /cross/api/permission/{session_id}/resolve — approve, deny, or allow-all."""
+    session_id = request.path_params["session_id"]
+    data = await request.json()
+    action = data.get("action", "deny")  # "approve", "allow_all", "deny"
+    username = data.get("username", "dashboard")
+
+    if session_id not in _permission_pending:
+        return JSONResponse(
+            {"status": "not_found", "message": "No pending permission for this session"},
+            status_code=404,
+        )
+
+    await _resolve_permission_async(session_id, action, f"dashboard (@{username})")
+    return JSONResponse({"status": "ok", "session_id": session_id, "action": action})
+
+
+async def api_get_instructions(request: Request) -> JSONResponse:
+    """GET /cross/api/instructions — return current custom instructions."""
+    content = _custom_instructions.content if _custom_instructions else ""
+    return JSONResponse({"content": content})
+
+
+async def api_put_instructions(request: Request) -> JSONResponse:
+    """PUT /cross/api/instructions — update custom instructions."""
+    if not _custom_instructions:
+        return JSONResponse({"error": "Custom instructions not initialized"}, status_code=500)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    content = data.get("content", "")
+    if not isinstance(content, str):
+        return JSONResponse({"error": "content must be a string"}, status_code=400)
+    _custom_instructions.save(content)
+    return JSONResponse({"status": "ok", "length": len(content)})
+
+
 async def api_dashboard_ws(ws: WebSocket):
     """WS /cross/api/ws — real-time event stream to dashboard clients."""
     if _dashboard:
@@ -357,19 +690,43 @@ _sentinel = None  # LLMSentinel instance, if configured
 
 
 async def on_startup():
-    global _slack, _gate_chain, _sentinel, _dashboard
+    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions
+
+    _event_loop = asyncio.get_running_loop()
+
+    # Initialize custom instructions (hot-reloads on each access)
+    _custom_instructions = CustomInstructions(path=settings.custom_instructions_file)
+    if _custom_instructions.content:
+        logger.info(f"Custom instructions loaded ({len(_custom_instructions.content)} chars)")
 
     # Register logger plugin
     log_plugin = LoggerPlugin()
     event_bus.subscribe(log_plugin.handle)
     logger.info(f"Daemon starting on port {settings.listen_port}")
 
+    # Register event store (persists events to JSONL)
+    store = EventStore()
+    event_bus.subscribe(store.handle_event)
+
     # Register dashboard plugin (always active — no config gating)
     from cross.proxy import resolve_gate_approval as _resolve_gate
 
-    _dashboard = DashboardPlugin(resolve_approval_callback=_resolve_gate)
+    _dashboard = DashboardPlugin(event_store=store, resolve_approval_callback=_resolve_gate)
     event_bus.subscribe(_dashboard.handle_event)
+    event_bus.subscribe(_track_tool_desc)
     logger.info("Dashboard active at /cross/dashboard")
+
+    # Pre-populate monitored agents from hook configuration
+    hooked = _detect_hooked_agents()
+    _gate_agents.update(hooked)
+    if hooked:
+        logger.info(f"Detected hooked agents: {', '.join(hooked)}")
+
+    # Register native desktop notifications (macOS)
+    if native_notifications_available():
+        set_browser_check(lambda: len(_dashboard._ws_clients) > 0)
+        event_bus.subscribe(notify_event)
+        logger.info("Native desktop notifications active")
 
     # Set up gate chain
     if settings.gating_enabled:
@@ -382,7 +739,6 @@ async def on_startup():
 
         # LLM review gate (stage 2) — reviews denylist-flagged calls
         review_gate = None
-        review_threshold = Action.BLOCK
         if settings.llm_gate_enabled:
             from cross.gates.llm_review import LLMReviewGate
             from cross.llm import LLMConfig, resolve_api_key
@@ -400,17 +756,14 @@ async def on_startup():
                     config=llm_config,
                     timeout_ms=settings.llm_gate_timeout_ms,
                     justification=settings.llm_gate_justification,
+                    get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
                 )
-                try:
-                    review_threshold = Action[settings.llm_gate_threshold.upper()]
-                except KeyError:
-                    logger.warning(f"Invalid llm_gate_threshold '{settings.llm_gate_threshold}', using BLOCK")
                 model_name = settings.llm_gate_model
-                logger.info(f"LLM review gate active (model={model_name}, threshold={review_threshold.name})")
+                logger.info(f"LLM review gate active (model={model_name})")
             else:
                 logger.info("LLM gate enabled but no API key available — denylist operates standalone")
 
-        _gate_chain = GateChain(gates=[gate], review_gate=review_gate, review_threshold=review_threshold)
+        _gate_chain = GateChain(gates=[gate], review_gate=review_gate)
         logger.info(f"Gating enabled with {len(gate.rules)} denylist rules")
 
     # Set up LLM sentinel (async periodic reviewer)
@@ -431,6 +784,7 @@ async def on_startup():
                 config=sentinel_config,
                 event_bus=event_bus,
                 interval_seconds=settings.llm_sentinel_interval_seconds,
+                get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
             )
             event_bus.subscribe(_sentinel.observe)
             _sentinel.start()
@@ -441,6 +795,25 @@ async def on_startup():
         else:
             logger.info("LLM sentinel enabled but no API key available — sentinel inactive")
 
+    # Register Email plugin
+    if settings.email_from and settings.email_to:
+        from cross.plugins.email import EmailPlugin
+        from cross.proxy import resolve_gate_approval as _resolve_gate_email
+
+        _email = EmailPlugin(
+            inject_callback=_inject_to_session,
+            resolve_approval_callback=_resolve_gate_email,
+            resolve_permission_callback=resolve_permission,
+            event_loop=asyncio.get_running_loop(),
+        )
+        try:
+            _email.start()
+            event_bus.subscribe(_email.handle_event)
+            logger.info("Email relay active")
+        except Exception as e:
+            logger.warning(f"Email failed to start: {e}")
+            _email = None
+
     # Register Slack plugin
     if settings.slack_bot_token and settings.slack_app_token:
         from cross.plugins.slack import SlackPlugin
@@ -450,6 +823,7 @@ async def on_startup():
             inject_callback=_inject_to_session,
             spawn_callback=_spawn_session,
             resolve_approval_callback=resolve_gate_approval,
+            resolve_permission_callback=resolve_permission,
             event_loop=asyncio.get_running_loop(),
         )
         try:
@@ -460,12 +834,23 @@ async def on_startup():
             logger.warning(f"Slack failed to start: {e}")
             _slack = None
 
+    # Start auto-update background task
+    if settings.auto_update_enabled:
+        from cross.auto_update import run_update_loop
+        from cross.plugins.notifier import _notify as native_notify
+
+        notify_fn = native_notify if native_notifications_available() else None
+        asyncio.create_task(run_update_loop(settings.auto_update_interval_hours, notify_fn=notify_fn))
+        logger.info(f"Auto-update active (every {settings.auto_update_interval_hours}h)")
+
 
 async def on_shutdown():
     if _sentinel:
         _sentinel.stop()
     if _slack:
         _slack.stop()
+    if _email:
+        _email.stop()
     # Clean up LLM httpx client
     from cross.llm import close_client
 
@@ -488,13 +873,24 @@ async def favicon(request: Request) -> Response:
     return Response(status_code=204)
 
 
+async def api_status(request: Request) -> JSONResponse:
+    """GET /cross/api/status — monitoring coverage."""
+    return JSONResponse(get_agent_status())
+
+
 _dashboard_routes = [
     Route("/", root_redirect, methods=["GET"]),
     Route("/favicon.ico", favicon, methods=["GET"]),
     Route("/cross/dashboard", dashboard_page, methods=["GET"]),
+    Route("/cross/settings", settings_page, methods=["GET"]),
+    Route("/cross/api/status", api_status, methods=["GET"]),
     Route("/cross/api/events", api_events, methods=["GET"]),
     Route("/cross/api/pending", api_pending, methods=["GET"]),
     Route("/cross/api/pending/{tool_use_id}/resolve", api_resolve_pending, methods=["POST"]),
+    Route("/cross/api/pending-permissions", api_pending_permissions, methods=["GET"]),
+    Route("/cross/api/permission/{session_id}/resolve", api_resolve_permission, methods=["POST"]),
+    Route("/cross/api/instructions", api_get_instructions, methods=["GET"]),
+    Route("/cross/api/instructions", api_put_instructions, methods=["PUT"]),
 ]
 
 # WebSocket routes

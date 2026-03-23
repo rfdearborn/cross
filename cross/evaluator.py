@@ -20,9 +20,10 @@ class Action(Enum):
     ABSTAIN = 0
     ALLOW = 1
     ALERT = 2
-    ESCALATE = 3
-    BLOCK = 4  # prevent this tool call, proxy retries with error feedback
-    HALT_SESSION = 5  # freeze the session, require human intervention
+    REVIEW = 3  # trigger LLM review — LLM decides the outcome
+    ESCALATE = 4
+    BLOCK = 5  # prevent this tool call, proxy retries with error feedback
+    HALT_SESSION = 6  # freeze the session, require human intervention
 
 
 @dataclass
@@ -42,6 +43,8 @@ class GateRequest:
     user_intent: str = ""
     tool_index_in_message: int = 0
     tool_count_in_message: int = 0
+    # Script contents resolved from bash commands (path -> source)
+    script_contents: dict[str, str] = field(default_factory=dict)
     # Set by chain when invoking review gate (stage 2)
     prior_result: "EvaluationResponse | None" = None
 

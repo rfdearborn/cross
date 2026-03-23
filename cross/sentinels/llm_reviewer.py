@@ -20,6 +20,7 @@ import time
 from collections import deque
 from typing import Any
 
+from cross.custom_instructions import format_instructions_block
 from cross.evaluator import Action, EvaluationResponse, Sentinel, SentinelRequest
 from cross.events import (
     CrossEvent,
@@ -84,7 +85,16 @@ def _format_event_for_review(event: dict[str, Any]) -> str:
         input_str = json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input)
         if len(input_str) > 200:
             input_str = input_str[:200] + "..."
-        return f"[tool_use] {name}: {input_str}"
+        result = f"[tool_use] {name}: {input_str}"
+        # Include script contents if resolved
+        script_contents = event.get("script_contents")
+        if script_contents:
+            for script_path, source in script_contents.items():
+                # Truncate for sentinel review window
+                if len(source) > 500:
+                    source = source[:500] + "... [truncated]"
+                result += f"\n  [script: {script_path}]\n  {source}"
+        return result
     elif event_type == "gate_decision":
         name = event.get("tool_name", "?")
         action = event.get("action", "?")
@@ -102,6 +112,7 @@ def _format_event_for_review(event: dict[str, Any]) -> str:
             if len(input_str) > 200:
                 input_str = input_str[:200] + "..."
             result += f" input={input_str}"
+        # Script contents omitted here — already shown in the preceding [tool_use] event
         return result
     else:
         return f"[{event_type}] {json.dumps(event)[:150]}"
@@ -149,11 +160,13 @@ class LLMSentinel(Sentinel):
         event_bus: EventBus,
         interval_seconds: int = 60,
         max_events: int = 100,
+        get_custom_instructions: callable | None = None,
     ):
         super().__init__(name="llm_sentinel")
         self.config = config
         self.event_bus = event_bus
         self.interval_seconds = interval_seconds
+        self._get_custom_instructions = get_custom_instructions
         self._events: deque[dict[str, Any]] = deque(maxlen=max_events)
         self._task: asyncio.Task | None = None
         self._running = False
@@ -173,17 +186,18 @@ class LLMSentinel(Sentinel):
                     }
                 )
         elif isinstance(event, ToolUseEvent):
-            self._events.append(
-                {
-                    "type": "tool_use",
-                    "name": event.name,
-                    "tool_use_id": event.tool_use_id,
-                    "input": event.input,
-                    "ts": time.time(),
-                }
-            )
-        elif isinstance(event, GateDecisionEvent):
             entry: dict[str, Any] = {
+                "type": "tool_use",
+                "name": event.name,
+                "tool_use_id": event.tool_use_id,
+                "input": event.input,
+                "ts": time.time(),
+            }
+            if event.script_contents:
+                entry["script_contents"] = event.script_contents
+            self._events.append(entry)
+        elif isinstance(event, GateDecisionEvent):
+            gate_entry: dict[str, Any] = {
                 "type": "gate_decision",
                 "tool_name": event.tool_name,
                 "tool_use_id": event.tool_use_id,
@@ -194,8 +208,10 @@ class LLMSentinel(Sentinel):
                 "ts": time.time(),
             }
             if event.tool_input:
-                entry["input"] = event.tool_input
-            self._events.append(entry)
+                gate_entry["input"] = event.tool_input
+            if event.script_contents:
+                gate_entry["script_contents"] = event.script_contents
+            self._events.append(gate_entry)
 
     def start(self) -> None:
         """Start the periodic review loop."""
@@ -239,7 +255,11 @@ class LLMSentinel(Sentinel):
         user_message = _format_review_prompt(events)
         messages = [{"role": "user", "content": user_message}]
 
-        text = await complete(self.config, system=_SYSTEM_PROMPT, messages=messages, timeout_s=60.0)
+        system = _SYSTEM_PROMPT
+        if self._get_custom_instructions:
+            system += format_instructions_block(self._get_custom_instructions())
+
+        text = await complete(self.config, system=system, messages=messages, timeout_s=60.0)
 
         if text is None:
             logger.warning("Sentinel review: LLM returned no response")
@@ -280,6 +300,10 @@ class LLMSentinel(Sentinel):
             logger.warning(f"Sentinel ESCALATE ({len(events)} events): {concerns}")
         elif action == Action.HALT_SESSION:
             logger.critical(f"Sentinel HALT ({len(events)} events): {concerns}")
+            # Actually halt the proxy — stop forwarding requests
+            from cross.proxy import set_sentinel_halt
+
+            set_sentinel_halt(concerns or summary or "Sentinel issued HALT verdict")
 
         return response
 

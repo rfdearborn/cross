@@ -17,6 +17,7 @@ from cross.events import (
     CrossEvent,
     ErrorEvent,
     GateDecisionEvent,
+    PermissionResolvedEvent,
     SentinelReviewEvent,
     TextEvent,
     ToolUseEvent,
@@ -28,12 +29,20 @@ logger = logging.getLogger("cross.plugins.slack")
 class SlackPlugin:
     """Manages Slack channels/threads and relays agent events."""
 
-    def __init__(self, inject_callback=None, spawn_callback=None, resolve_approval_callback=None, event_loop=None):
+    def __init__(
+        self,
+        inject_callback=None,
+        spawn_callback=None,
+        resolve_approval_callback=None,
+        resolve_permission_callback=None,
+        event_loop=None,
+    ):
         self._web = WebClient(token=settings.slack_bot_token)
         self._socket: SocketModeClient | None = None
         self._event_loop = event_loop
         self._spawn_callback = spawn_callback
         self._resolve_approval_callback = resolve_approval_callback
+        self._resolve_permission_callback = resolve_permission_callback
         # channel name -> channel ID
         self._channels: dict[str, str] = {}
         # session_id -> (channel_id, thread_ts)
@@ -58,6 +67,8 @@ class SlackPlugin:
         self._permission_pending: dict[str, tuple[str, str]] = {}
         # Slack-initiated sessions: project -> (channel_id, message_ts) for threading
         self._pending_thread_ts: dict[str, tuple[str, str]] = {}
+        # Pending gate escalations: tool_use_id -> (channel_id, message_ts)
+        self._gate_pending: dict[str, tuple[str, str]] = {}
 
     def start(self):
         """Connect to Slack via Socket Mode."""
@@ -240,10 +251,37 @@ class SlackPlugin:
         sentinel reviews (alert/escalate/halt), and errors. Full conversation
         relay is handled by the JSONL logger, not Slack.
         """
+        # Route to the correct thread based on event source
+        event_agent = getattr(event, "agent", "")
+        event_session = getattr(event, "session_id", "")
+
         with self._lock:
-            if self._threads:
-                # Post to the most recently active session's thread
-                # TODO: correlate proxy events to specific sessions
+            if event_session and event_session in self._threads:
+                # Event has a specific session — use its thread
+                session_id = event_session
+                thread_info = self._threads[session_id]
+            elif event_agent and event_agent not in ("", "unknown"):
+                # External agent (e.g. OpenClaw) — daily thread
+                from datetime import date
+
+                today = date.today().isoformat()
+                agent_key = f"ext-{event_agent}-{today}"
+                thread_info = self._threads.get(agent_key)
+                session_id = agent_key
+                if not thread_info:
+                    try:
+                        channel_id = self._ensure_channel(event_agent)
+                        resp = self._web.chat_postMessage(
+                            channel=channel_id,
+                            text=f"🔌 *{event_agent}* — {today}",
+                        )
+                        thread_info = (channel_id, resp["ts"])
+                        self._threads[agent_key] = thread_info
+                    except Exception as e:
+                        logger.warning(f"Failed to create thread for {event_agent}: {e}")
+                        thread_info = None
+            elif self._threads:
+                # Fall back to most recently active session
                 session_id = list(self._threads.keys())[-1]
                 thread_info = self._threads.get(session_id)
             else:
@@ -288,50 +326,74 @@ class SlackPlugin:
                     except Exception as e:
                         logger.warning(f"Failed to update permission message: {e}")
 
-            case GateDecisionEvent() if event.action in ("block", "escalate", "alert"):
-                icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔"}.get(event.action, "❓")
-                text = f"{icon} *Gate {event.action.upper()}*: `{event.tool_name}`"
-                if event.reason:
-                    text += f"\n>{event.reason[:300]}"
-                if event.tool_input:
-                    input_str = json.dumps(event.tool_input, indent=2)
-                    if len(input_str) > 500:
-                        input_str = input_str[:500] + "\n..."
-                    text += f"\n```\n{input_str}\n```"
+            case GateDecisionEvent() if event.action in ("block", "escalate", "alert", "allow", "halt_session"):
+                # Check if this resolves a pending escalation (from dashboard, CLI, or timeout)
+                pending = self._gate_pending.pop(event.tool_use_id, None)
+                if pending and event.action != "escalate":
+                    pend_channel, pend_ts = pending
+                    # Extract username from reason like "Approved by human reviewer (@alice)"
+                    m = re.search(r"@(\w+)", event.reason or "")
+                    username = m.group(1) if m else "unknown"
+                    if event.action == "allow":
+                        result_text = f"✅ *Approved* by @{username}"
+                    else:
+                        result_text = f"❌ *Denied* by @{username}"
+                    try:
+                        self._web.chat_update(
+                            channel=pend_channel,
+                            ts=pend_ts,
+                            text=result_text,
+                            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update gate escalation message: {e}")
+                elif event.action in ("block", "escalate", "alert"):
+                    # New gate decision (not resolving a pending escalation) — post to channel
+                    icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔"}.get(event.action, "❓")
+                    text = f"{icon} *Gate {event.action.upper()}*: `{event.tool_name}`"
+                    if event.reason:
+                        text += f"\n>{event.reason[:300]}"
+                    if event.tool_input:
+                        input_str = json.dumps(event.tool_input, indent=2)
+                        if len(input_str) > 500:
+                            input_str = input_str[:500] + "\n..."
+                        text += f"\n```\n{input_str}\n```"
 
-                msg_kwargs: dict = {
-                    "channel": channel_id,
-                    "thread_ts": thread_ts,
-                    "text": text,
-                    "reply_broadcast": event.action in ("block", "escalate"),
-                }
+                    msg_kwargs: dict = {
+                        "channel": channel_id,
+                        "thread_ts": thread_ts,
+                        "text": text,
+                        "reply_broadcast": event.action in ("block", "escalate"),
+                    }
 
-                # Add Allow/Deny buttons for escalations
-                if event.action == "escalate":
-                    msg_kwargs["blocks"] = [
-                        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
-                        {
-                            "type": "actions",
-                            "elements": [
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "Allow"},
-                                    "action_id": "gate_approve",
-                                    "value": event.tool_use_id,
-                                    "style": "primary",
-                                },
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "Deny"},
-                                    "action_id": "gate_deny",
-                                    "value": event.tool_use_id,
-                                    "style": "danger",
-                                },
-                            ],
-                        },
-                    ]
+                    # Add Allow/Deny buttons for escalations
+                    if event.action == "escalate":
+                        msg_kwargs["blocks"] = [
+                            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+                            {
+                                "type": "actions",
+                                "elements": [
+                                    {
+                                        "type": "button",
+                                        "text": {"type": "plain_text", "text": "Allow"},
+                                        "action_id": "gate_approve",
+                                        "value": event.tool_use_id,
+                                        "style": "primary",
+                                    },
+                                    {
+                                        "type": "button",
+                                        "text": {"type": "plain_text", "text": "Deny"},
+                                        "action_id": "gate_deny",
+                                        "value": event.tool_use_id,
+                                        "style": "danger",
+                                    },
+                                ],
+                            },
+                        ]
 
-                self._web.chat_postMessage(**msg_kwargs)
+                    resp = self._web.chat_postMessage(**msg_kwargs)
+                    if event.action == "escalate" and resp.get("ok"):
+                        self._gate_pending[event.tool_use_id] = (channel_id, resp["ts"])
 
             case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
                 icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
@@ -346,6 +408,28 @@ class SlackPlugin:
                     text=text,
                     reply_broadcast=event.action in ("escalate", "halt_session"),
                 )
+
+            case PermissionResolvedEvent() if not event.resolver.startswith("slack"):
+                # Permission resolved from another surface (dashboard, terminal, CLI)
+                # Update the Slack message if we had one pending
+                perm_info = self._permission_pending.pop(event.session_id, None)
+                if perm_info:
+                    perm_channel, perm_ts = perm_info
+                    if event.action == "deny":
+                        result_text = f"❌ *Denied* ({event.resolver})"
+                    elif event.action == "allow_all":
+                        result_text = f"✅ *Approved (allow all)* ({event.resolver})"
+                    else:
+                        result_text = f"✅ *Approved* ({event.resolver})"
+                    try:
+                        self._web.chat_update(
+                            channel=perm_channel,
+                            ts=perm_ts,
+                            text=result_text,
+                            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update permission message: {e}")
 
             case ErrorEvent():
                 self._web.chat_postMessage(
@@ -482,18 +566,25 @@ class SlackPlugin:
             result_text = f"✅ *Approved* by @{user_name}" if approved else f"❌ *Denied* by @{user_name}"
             logger.info(f"Gate {'approved' if approved else 'denied'} by {user_name} ({tool_use_id})")
 
+            # Remove from pending so the EventBus handler doesn't double-update
+            self._gate_pending.pop(tool_use_id, None)
+
             # Signal the proxy's waiting approval event (thread-safe)
             if self._resolve_approval_callback and self._event_loop:
                 self._event_loop.call_soon_threadsafe(self._resolve_approval_callback, tool_use_id, approved, user_name)
 
-            # Update message to replace buttons with result
+            # Update message: keep original context, replace buttons with result
             if channel_id and message_ts:
                 try:
+                    original_blocks = payload.get("message", {}).get("blocks", [])
+                    # Keep all non-actions blocks (the command/analysis context)
+                    updated_blocks = [b for b in original_blocks if b.get("type") != "actions"]
+                    updated_blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": result_text}})
                     self._web.chat_update(
                         channel=channel_id,
                         ts=message_ts,
                         text=result_text,
-                        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": result_text}}],
+                        blocks=updated_blocks,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to update gate approval message: {e}")
@@ -503,22 +594,29 @@ class SlackPlugin:
         # value is session_id for these
         session_id = action.get("value", "")
         if action_id == "permission_approve":
-            # Claude Code's TUI acts on keypress immediately — no Enter needed
-            self._inject(session_id, "1")
+            perm_action = "approve"
             logger.info(f"Permission approved by {user_name} for session {session_id}")
             result_text = f"✅ *Approved* by @{user_name}"
         elif action_id == "permission_allow_all":
-            self._inject(session_id, "2")
+            perm_action = "allow_all"
             logger.info(f"Permission allow-all by {user_name} for session {session_id}")
             result_text = f"✅ *Approved (allow all)* by @{user_name}"
         elif action_id == "permission_deny":
-            self._inject(session_id, "3")
+            perm_action = "deny"
             logger.info(f"Permission denied by {user_name} for session {session_id}")
             result_text = f"❌ *Denied* by @{user_name}"
         else:
             return
 
         self._permission_pending.pop(session_id, None)
+
+        # Resolve via daemon callback (handles PTY injection + event publishing)
+        if self._resolve_permission_callback:
+            self._resolve_permission_callback(session_id, perm_action, f"slack (@{user_name})")
+        else:
+            # Fallback: inject directly if no callback
+            key = {"approve": "1", "allow_all": "2", "deny": "3"}.get(perm_action, "3")
+            self._inject(session_id, key)
 
         # Update the message to replace buttons with the result
         if channel_id and message_ts:
@@ -562,23 +660,42 @@ class SlackPlugin:
             self._ensure_users_invited(channel_id)
             return channel_id
 
-        try:
-            resp = self._web.conversations_create(
-                name=name,
-                is_private=True,
-            )
-            channel_id = resp["channel"]["id"]
-            self._channels[name] = channel_id
-            logger.info(f"Created channel #{name} ({channel_id})")
-            self._ensure_users_invited(channel_id)
-            return channel_id
-        except Exception as e:
-            logger.warning(f"Failed to create private channel #{name}: {e}, trying public")
-            resp = self._web.conversations_create(name=name)
-            channel_id = resp["channel"]["id"]
+        # Channel not found — try to create it
+        channel_id = self._try_create_channel(name)
+        if channel_id:
             self._channels[name] = channel_id
             self._ensure_users_invited(channel_id)
             return channel_id
+
+        raise RuntimeError(f"Could not find or create channel #{name}")
+
+    def _try_create_channel(self, name: str) -> str | None:
+        """Try to create a channel, handling name_taken by looking it up."""
+        for is_private in (True, False):
+            try:
+                resp = self._web.conversations_create(
+                    name=name,
+                    is_private=is_private,
+                )
+                channel_id = resp["channel"]["id"]
+                logger.info(f"Created {'private' if is_private else 'public'} channel #{name} ({channel_id})")
+                return channel_id
+            except Exception as e:
+                error_str = str(e)
+                if "name_taken" in error_str:
+                    # Channel exists but _find_channel missed it (ratelimit, pagination, etc.)
+                    # Look it up directly via conversations_list with name search
+                    channel_id = self._find_channel(name)
+                    if channel_id:
+                        return channel_id
+                    # If still not found, log and return None
+                    logger.warning(f"Channel #{name} exists but could not be found via API")
+                    return None
+                if is_private:
+                    logger.warning(f"Failed to create private channel #{name}: {e}, trying public")
+                    continue
+                logger.warning(f"Failed to create channel #{name}: {e}")
+        return None
 
     def _ensure_users_invited(self, channel_id: str):
         """Ensure non-bot workspace users are members of the channel."""

@@ -17,6 +17,7 @@ class RequestEvent:
     last_message_role: str | None = None
     last_message_preview: str | None = None
     raw_body: dict[str, Any] | None = None
+    agent: str = ""
 
 
 @dataclass
@@ -26,6 +27,9 @@ class ToolUseEvent:
     name: str
     tool_use_id: str
     input: dict[str, Any] = field(default_factory=dict)
+    script_contents: dict[str, str] | None = None  # resolved script file contents (path -> source)
+    agent: str = ""  # source agent (for routing notifications)
+    session_id: str = ""
 
 
 @dataclass
@@ -72,6 +76,9 @@ class GateDecisionEvent:
     evaluator: str = ""
     confidence: float = 1.0
     tool_input: dict[str, Any] | None = None  # included so sentinel can see what was blocked
+    script_contents: dict[str, str] | None = None  # resolved script file contents (path -> source)
+    agent: str = ""  # source agent (for routing notifications)
+    session_id: str = ""
 
 
 @dataclass
@@ -96,6 +103,24 @@ class SentinelReviewEvent:
     evaluator: str = ""
 
 
+@dataclass
+class PermissionPromptEvent:
+    """Fired when Claude Code shows a native permission prompt in a PTY session."""
+
+    session_id: str
+    tool_desc: str = ""
+    allow_all_label: str = "Allow all (session)"
+
+
+@dataclass
+class PermissionResolvedEvent:
+    """Fired when a permission prompt is resolved from any surface."""
+
+    session_id: str
+    action: str = ""  # "approve", "allow_all", "deny"
+    resolver: str = ""  # "slack", "dashboard", "terminal", "cli"
+
+
 CrossEvent = (
     RequestEvent
     | ToolUseEvent
@@ -106,6 +131,8 @@ CrossEvent = (
     | GateDecisionEvent
     | GateRetryEvent
     | SentinelReviewEvent
+    | PermissionPromptEvent
+    | PermissionResolvedEvent
 )
 
 EventHandler = Callable[[CrossEvent], Awaitable[None]]

@@ -290,9 +290,12 @@ class TestSentinelReview:
 
         with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
             mock.return_value = "VERDICT: HALT\nSUMMARY: Data exfil.\nCONCERNS: Agent exfiltrating credentials."
-            await sentinel._do_review(events)
+            with patch("cross.proxy.set_sentinel_halt") as halt_mock:
+                await sentinel._do_review(events)
 
         assert published[0].action == "halt_session"
+        halt_mock.assert_called_once()
+        assert "exfiltrating credentials" in halt_mock.call_args[0][0]
 
     @pytest.mark.anyio
     async def test_no_response_does_not_publish(self):

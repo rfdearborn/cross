@@ -25,7 +25,6 @@ def _mock_settings(**overrides):
         "llm_gate_max_tokens": 256,
         "llm_gate_reasoning": "",
         "llm_gate_timeout_ms": 30000,
-        "llm_gate_threshold": "block",
         "llm_sentinel_enabled": False,
         "llm_sentinel_model": "cli/claude",
         "llm_sentinel_api_key": "",
@@ -38,6 +37,7 @@ def _mock_settings(**overrides):
         "slack_app_token": "",
         "listen_port": 2767,
         "log_file": "/dev/null",
+        "auto_update_enabled": False,
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -137,7 +137,6 @@ class TestBuildGateChain:
                     rules_dir=str(rules_dir),
                     llm_gate_enabled=True,
                     llm_gate_api_key="sk-test",
-                    llm_gate_threshold="block",
                 ),
             ),
             patch("cross.llm.resolve_api_key", return_value="sk-test-key"),
@@ -149,7 +148,6 @@ class TestBuildGateChain:
         assert daemon._gate_chain is not None
         assert len(daemon._gate_chain.gates) == 1  # denylist
         assert daemon._gate_chain.review_gate is not None  # LLM review
-        assert daemon._gate_chain.review_threshold == Action.BLOCK
 
     @pytest.mark.anyio
     async def test_llm_gate_no_api_key_falls_back(self, tmp_path):
@@ -183,72 +181,6 @@ class TestBuildGateChain:
 
         assert daemon._gate_chain is not None
         assert daemon._gate_chain.review_gate is None
-
-    @pytest.mark.anyio
-    async def test_invalid_threshold_defaults_to_block(self, tmp_path):
-        """Invalid llm_gate_threshold falls back to BLOCK."""
-        import cross.daemon as daemon
-
-        daemon._gate_chain = None
-        daemon._sentinel = None
-        daemon._slack = None
-
-        rules_dir = tmp_path / "rules.d"
-        rules_dir.mkdir()
-
-        with (
-            patch("cross.daemon.event_bus") as mock_bus,
-            patch("cross.daemon.LoggerPlugin") as mock_logger_cls,
-            patch(
-                "cross.daemon.settings",
-                _mock_settings(
-                    gating_enabled=True,
-                    rules_dir=str(rules_dir),
-                    llm_gate_enabled=True,
-                    llm_gate_api_key="sk-test",
-                    llm_gate_threshold="invalid_value",
-                ),
-            ),
-            patch("cross.llm.resolve_api_key", return_value="sk-test-key"),
-        ):
-            mock_logger_cls.return_value = MagicMock()
-            mock_bus.subscribe = MagicMock()
-            await daemon.on_startup()
-
-        assert daemon._gate_chain.review_threshold == Action.BLOCK
-
-    @pytest.mark.anyio
-    async def test_alert_threshold_parsed(self, tmp_path):
-        """Valid non-default threshold (alert) is parsed correctly."""
-        import cross.daemon as daemon
-
-        daemon._gate_chain = None
-        daemon._sentinel = None
-        daemon._slack = None
-
-        rules_dir = tmp_path / "rules.d"
-        rules_dir.mkdir()
-
-        with (
-            patch("cross.daemon.event_bus") as mock_bus,
-            patch("cross.daemon.LoggerPlugin") as mock_logger_cls,
-            patch(
-                "cross.daemon.settings",
-                _mock_settings(
-                    gating_enabled=True,
-                    rules_dir=str(rules_dir),
-                    llm_gate_enabled=True,
-                    llm_gate_api_key="sk-test",
-                    llm_gate_threshold="alert",
-                ),
-            ),
-            patch("cross.llm.resolve_api_key", return_value="sk-test-key"),
-        ):
-            mock_logger_cls.return_value = MagicMock()
-            mock_bus.subscribe = MagicMock()
-            await daemon.on_startup()
-
-        assert daemon._gate_chain.review_threshold == Action.ALERT
 
 
 class TestBuildSentinel:

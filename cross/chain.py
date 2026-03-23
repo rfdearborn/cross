@@ -2,8 +2,10 @@
 
 Two-stage evaluation:
   Stage 1: Run all gates (denylist, etc.), max action wins.
-  Stage 2: If result >= threshold AND review gate exists, run LLM review.
-           Review verdict overrides stage 1 (catches false positives).
+  Stage 2: If result >= REVIEW AND review gate exists, run LLM review.
+           For REVIEW actions, the LLM decides the outcome (can override).
+           For higher actions (ESCALATE/BLOCK/HALT_SESSION), LLM analysis
+           is advisory — attached as metadata for human decision-makers.
            On ABSTAIN/error, stage 1 result stands.
 """
 
@@ -27,11 +29,9 @@ class GateChain:
         self,
         gates: list[Gate] | None = None,
         review_gate: Gate | None = None,
-        review_threshold: Action = Action.BLOCK,
     ):
         self.gates: list[Gate] = gates or []
         self.review_gate: Gate | None = review_gate
-        self.review_threshold: Action = review_threshold
 
     def add(self, gate: Gate):
         self.gates.append(gate)
@@ -41,12 +41,8 @@ class GateChain:
         # Stage 1: run all gates
         stage1_result = await self._run_gates(request)
 
-        # Stage 2: LLM review if result >= threshold
-        if (
-            self.review_gate
-            and stage1_result.action.value >= self.review_threshold.value
-            and stage1_result.action != Action.ABSTAIN
-        ):
+        # Stage 2: LLM review for anything at REVIEW or above
+        if self.review_gate and stage1_result.action.value >= Action.REVIEW.value:
             review_result = await self._run_review(request, stage1_result)
             if review_result is not None:
                 return review_result
@@ -141,7 +137,29 @@ class GateChain:
                 metadata={"shadow_verdict": resp.action.name, "shadow_reason": resp.reason},
             )
 
+        # For REVIEW: LLM has decision power — its verdict overrides stage 1
+        if stage1_result.action == Action.REVIEW:
+            logger.info(
+                f"Review gate overrides stage-1 ({stage1_result.action.name} → {resp.action.name}): {resp.reason[:100]}"
+            )
+            return resp
+
+        # For higher actions (ESCALATE/BLOCK/HALT_SESSION): LLM analysis is advisory.
+        # Original action stands, but LLM reasoning is attached as metadata for humans.
         logger.info(
-            f"Review gate overrides stage-1 ({stage1_result.action.name} → {resp.action.name}): {resp.reason[:100]}"
+            f"Review gate advisory for {stage1_result.action.name} (LLM says {resp.action.name}): {resp.reason[:100]}"
         )
-        return resp
+        return EvaluationResponse(
+            action=stage1_result.action,
+            reason=stage1_result.reason,
+            rule_id=stage1_result.rule_id,
+            evaluator=stage1_result.evaluator,
+            confidence=stage1_result.confidence,
+            duration_ms=stage1_result.duration_ms + resp.duration_ms,
+            metadata={
+                "llm_review_action": resp.action.name,
+                "llm_review_reason": resp.reason,
+                "llm_review_evaluator": resp.evaluator,
+                "llm_review_confidence": resp.confidence,
+            },
+        )
