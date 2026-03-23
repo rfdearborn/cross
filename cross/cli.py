@@ -181,7 +181,7 @@ def _run_update(local_path: str | None = None, from_head: bool = False) -> int:
     if local_path:
         local_path = os.path.abspath(local_path)
         print(f"Installing from local source: {local_path}")
-        pip_args = [sys.executable, "-m", "pip", "install", "--upgrade", local_path]
+        pip_args = [sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", local_path]
     elif from_head:
         print(f"Installing from main branch: {_GITHUB_REPO}")
         pip_args = [sys.executable, "-m", "pip", "install", "--upgrade", f"git+{_GITHUB_REPO}@main"]
