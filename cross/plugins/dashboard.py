@@ -427,7 +427,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     font-size: 13px;
     align-items: baseline;
     cursor: pointer;
-    user-select: none;
   }
   .event-row:hover { background: var(--surface); }
   .event-row .time {
@@ -470,6 +469,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   .event-row.expanded {
     align-items: flex-start;
+    user-select: text;
+    cursor: default;
   }
   .event-row.expanded .detail {
     white-space: pre-wrap;
@@ -862,6 +863,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       row.addEventListener("click", function(e) {
         // Don't toggle if clicking inside the chat area
         if (e.target.closest(".conv-chat")) return;
+        // Don't toggle if user is selecting text
+        if (window.getSelection().toString()) return;
         var detail = row.querySelector(".detail");
         var isExpanded = row.classList.toggle("expanded");
         detail.textContent = isExpanded ? full : truncate(full, 120);
@@ -873,6 +876,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     } else if (full.length > 120) {
       row.addEventListener("click", function() {
+        // Don't toggle if user is selecting text
+        if (window.getSelection().toString()) return;
         const detail = row.querySelector(".detail");
         const isExpanded = row.classList.toggle("expanded");
         detail.textContent = isExpanded ? full : truncate(full, 120);
