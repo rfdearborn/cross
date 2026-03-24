@@ -78,6 +78,10 @@ class EvaluationResponse:
     evaluator: str = ""
     duration_ms: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Original LLM conversation — enables follow-up questions without reconstruction
+    eval_system_prompt: str = ""
+    eval_user_message: str = ""
+    eval_response_text: str = ""
 
 
 class Evaluator:

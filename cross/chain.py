@@ -163,6 +163,9 @@ class GateChain:
                     confidence=resp.confidence,
                     duration_ms=resp.duration_ms,
                     metadata={"promoted_from": "REVIEW", "reason": "review gate returned REVIEW"},
+                    eval_system_prompt=resp.eval_system_prompt,
+                    eval_user_message=resp.eval_user_message,
+                    eval_response_text=resp.eval_response_text,
                 )
             logger.info(
                 f"Review gate overrides stage-1 ({stage1_result.action.name} → {resp.action.name}): {resp.reason[:100]}"
@@ -187,4 +190,7 @@ class GateChain:
                 "llm_review_evaluator": resp.evaluator,
                 "llm_review_confidence": resp.confidence,
             },
+            eval_system_prompt=resp.eval_system_prompt,
+            eval_user_message=resp.eval_user_message,
+            eval_response_text=resp.eval_response_text,
         )

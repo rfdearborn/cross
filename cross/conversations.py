@@ -4,6 +4,13 @@ Maintains per-evaluation conversation state so users can ask the LLM reviewer
 follow-up questions about a specific gate decision or sentinel review, grounded
 in the original evaluation context.
 
+Preferred path: seed_conversation() stores the original LLM system prompt,
+user message, and response — follow-ups continue that same conversation thread.
+
+Fallback path: register_gate_context() reconstructs a system prompt from event
+metadata (for gate decisions that never hit the LLM, e.g., denylist-only).
+Sentinel reviews always produce eval data so they always use the seeded path.
+
 Conversation IDs: "gate:{tool_use_id}" or "sentinel:{review_id}".
 """
 
@@ -32,12 +39,12 @@ class ConversationMessage:
     timestamp: float = field(default_factory=time.time)
 
 
-# --- System prompts ---
+# --- Fallback system prompt for denylist-only gate decisions ---
 
 _GATE_SYSTEM_PROMPT = """\
 You are a security reviewer for an AI agent monitoring system called Cross. \
-You previously evaluated a tool call and made a decision. The user is now asking \
-you follow-up questions about that evaluation.
+A tool call was flagged by a pattern-matching denylist and the user is asking \
+you about it.
 
 Here is the context of what happened:
 
@@ -45,36 +52,25 @@ Tool: {tool_name}
 Input:
 {tool_input}
 {script_section}\
-Your decision: {action}
-Your reasoning: {reason}
+Decision: {action}
+Reason: {reason}
 {rule_section}\
 {recent_tools_section}\
+{conversation_section}\
 {intent_section}\
 Answer the user's questions about this evaluation. Be specific and reference \
-the actual tool call details. If you made an error in your assessment, \
-acknowledge it. Keep responses concise (2-3 sentences unless more detail \
-is requested)."""
+the actual tool call details. Keep responses concise (2-3 sentences unless \
+more detail is requested)."""
 
-_SENTINEL_SYSTEM_PROMPT = """\
-You are a security sentinel for an AI agent monitoring system called Cross. \
-You previously reviewed a window of agent activity and made an assessment. \
-The user is now asking you follow-up questions about that review.
-
-Your review:
-  Verdict: {action}
-  Summary: {summary}
-  Concerns: {concerns}
-  Events reviewed: {event_count}
-
-Activity window:
-{event_window}
-
-Answer the user's questions about this review. Reference specific events \
-when relevant. Keep responses concise unless more detail is requested."""
+# Appended to the seeded system prompt so the LLM knows follow-ups are coming
+_FOLLOWUP_SUFFIX = (
+    "\n\nThe user is now asking follow-up questions about this evaluation. "
+    "Answer concisely and reference the details above."
+)
 
 
 def _build_gate_system_prompt(ctx: dict[str, Any], custom_instructions: str) -> str:
-    """Build system prompt for a gate conversation."""
+    """Build system prompt for a gate conversation (fallback when no seeded data)."""
     tool_input = ctx.get("tool_input")
     if isinstance(tool_input, dict):
         input_str = json.dumps(tool_input, indent=2)
@@ -115,6 +111,16 @@ def _build_gate_system_prompt(ctx: dict[str, Any], custom_instructions: str) -> 
             lines.append(f"  - {name}: {summary}")
         recent_tools_section = "\n".join(lines) + "\n"
 
+    # Conversation context section
+    conversation_section = ""
+    conversation_context = ctx.get("conversation_context")
+    if conversation_context:
+        lines = ["\nRecent conversation between user and agent:"]
+        for turn in conversation_context:
+            role_label = "User" if turn.get("role") == "user" else "Agent"
+            lines.append(f"  [{role_label}] {turn.get('text', '')}")
+        conversation_section = "\n".join(lines) + "\n"
+
     # Intent section
     intent_section = ""
     user_intent = ctx.get("user_intent")
@@ -129,27 +135,8 @@ def _build_gate_system_prompt(ctx: dict[str, Any], custom_instructions: str) -> 
         reason=ctx.get("reason", ""),
         rule_section=rule_section,
         recent_tools_section=recent_tools_section,
+        conversation_section=conversation_section,
         intent_section=intent_section,
-    )
-
-    if custom_instructions:
-        prompt += format_instructions_block(custom_instructions)
-    return prompt
-
-
-def _build_sentinel_system_prompt(ctx: dict[str, Any], custom_instructions: str) -> str:
-    """Build system prompt for a sentinel conversation."""
-    event_window = ctx.get("event_window_text", "(no event window available)")
-    # Cap event window to avoid blowing context
-    if len(event_window) > 8000:
-        event_window = event_window[:8000] + "\n... [truncated]"
-
-    prompt = _SENTINEL_SYSTEM_PROMPT.format(
-        action=ctx.get("action", "unknown"),
-        summary=ctx.get("summary", ""),
-        concerns=ctx.get("concerns", ""),
-        event_count=ctx.get("event_count", 0),
-        event_window=event_window,
     )
 
     if custom_instructions:
@@ -178,6 +165,31 @@ class ConversationStore:
         # LRU tracking (most recently used at end)
         self._access_order: list[str] = []
 
+    def seed_conversation(
+        self,
+        conversation_id: str,
+        conv_type: str,
+        system_prompt: str,
+        user_message: str,
+        response_text: str,
+    ) -> None:
+        """Seed a conversation with the original LLM evaluation exchange.
+
+        This is the preferred path — the follow-up conversation continues the
+        exact same thread the evaluator used, with full context already present
+        in the system prompt and message history.
+        """
+        self._contexts[conversation_id] = {
+            "type": conv_type,
+            "seeded": True,
+            "system_prompt": system_prompt + _FOLLOWUP_SUFFIX,
+        }
+        self._messages[conversation_id] = [
+            ConversationMessage(role="user", content=user_message),
+            ConversationMessage(role="assistant", content=response_text),
+        ]
+        self._touch(conversation_id)
+
     def register_gate_context(
         self,
         tool_use_id: str,
@@ -190,9 +202,13 @@ class ConversationStore:
         script_contents: dict[str, str] | None = None,
         recent_tools: list[dict[str, Any]] | None = None,
         user_intent: str = "",
+        conversation_context: list[dict[str, str]] | None = None,
     ) -> str:
-        """Register context for a gate conversation. Returns the conversation_id."""
+        """Register context for a gate conversation (fallback). Returns the conversation_id."""
         conv_id = f"gate:{tool_use_id}"
+        # Don't overwrite a seeded conversation
+        if conv_id in self._contexts and self._contexts[conv_id].get("seeded"):
+            return conv_id
         self._contexts[conv_id] = {
             "type": "gate",
             "tool_use_id": tool_use_id,
@@ -205,29 +221,7 @@ class ConversationStore:
             "script_contents": script_contents,
             "recent_tools": recent_tools or [],
             "user_intent": user_intent,
-        }
-        self._touch(conv_id)
-        return conv_id
-
-    def register_sentinel_context(
-        self,
-        review_id: str,
-        action: str,
-        summary: str,
-        concerns: str,
-        event_count: int,
-        event_window_text: str = "",
-    ) -> str:
-        """Register context for a sentinel conversation. Returns the conversation_id."""
-        conv_id = f"sentinel:{review_id}"
-        self._contexts[conv_id] = {
-            "type": "sentinel",
-            "review_id": review_id,
-            "action": action,
-            "summary": summary,
-            "concerns": concerns,
-            "event_count": event_count,
-            "event_window_text": event_window_text,
+            "conversation_context": conversation_context or [],
         }
         self._touch(conv_id)
         return conv_id
@@ -272,12 +266,12 @@ class ConversationStore:
             if len(msgs) > MAX_MESSAGES:
                 msgs[:] = msgs[-MAX_MESSAGES:]
 
-            # Build system prompt
-            custom = self._get_custom_instructions() if self._get_custom_instructions else ""
-            if conv_type == "gate":
-                system = _build_gate_system_prompt(ctx, custom)
+            # Build system prompt — use seeded prompt if available, else reconstruct
+            if ctx.get("seeded"):
+                system = ctx["system_prompt"]
             else:
-                system = _build_sentinel_system_prompt(ctx, custom)
+                custom = self._get_custom_instructions() if self._get_custom_instructions else ""
+                system = _build_gate_system_prompt(ctx, custom)
 
             # Build messages for LLM
             llm_messages = [{"role": m.role, "content": m.content} for m in msgs]

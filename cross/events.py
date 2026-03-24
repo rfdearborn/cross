@@ -80,6 +80,14 @@ class GateDecisionEvent:
     script_contents: dict[str, str] | None = None  # resolved script file contents (path -> source)
     agent: str = ""  # source agent (for routing notifications)
     session_id: str = ""
+    # Context for follow-up conversations ("Ask about this evaluation...")
+    recent_tools: list[dict[str, Any]] | None = None
+    user_intent: str = ""
+    conversation_context: list[dict[str, str]] | None = None
+    # Original LLM evaluation conversation (for seeding follow-ups)
+    eval_system_prompt: str = ""
+    eval_user_message: str = ""
+    eval_response_text: str = ""
 
 
 @dataclass
@@ -104,6 +112,10 @@ class SentinelReviewEvent:
     evaluator: str = ""
     review_id: str = ""  # unique ID for conversation threading
     event_window_text: str = ""  # formatted event window for conversation context
+    # Original LLM evaluation conversation (for seeding follow-ups)
+    eval_system_prompt: str = ""
+    eval_user_message: str = ""
+    eval_response_text: str = ""
 
 
 @dataclass

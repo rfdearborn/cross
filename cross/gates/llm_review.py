@@ -190,4 +190,7 @@ class LLMReviewGate(Gate):
             reason=explanation,
             evaluator=self.name,
             confidence=0.9,
+            eval_system_prompt=system,
+            eval_user_message=user_message,
+            eval_response_text=text,
         )

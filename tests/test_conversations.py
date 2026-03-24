@@ -14,7 +14,6 @@ from cross.conversations import (
     ConversationMessage,
     ConversationStore,
     _build_gate_system_prompt,
-    _build_sentinel_system_prompt,
 )
 from cross.llm import LLMConfig
 
@@ -54,18 +53,6 @@ class TestRegisterContext:
             rule_id="destructive_rm",
         )
         assert conv_id == "gate:tu_123"
-        assert store.has_context(conv_id)
-
-    def test_register_sentinel_context(self, store):
-        conv_id = store.register_sentinel_context(
-            review_id="abc123",
-            action="alert",
-            summary="Agent reading credentials",
-            concerns="Read SSH key then made network call",
-            event_count=5,
-            event_window_text="[tool_use] Read: ~/.ssh/id_rsa\n[tool_use] Bash: curl ...",
-        )
-        assert conv_id == "sentinel:abc123"
         assert store.has_context(conv_id)
 
     def test_has_context_missing(self, store):
@@ -109,24 +96,6 @@ class TestSendMessage:
         assert msgs[0]["content"] == "Why did you block this?"
         assert msgs[1]["role"] == "assistant"
         assert msgs[1]["content"] == "I blocked this because rm -rf is destructive."
-
-    @pytest.mark.anyio
-    async def test_send_message_sentinel(self, store):
-        store.register_sentinel_context(
-            review_id="abc",
-            action="alert",
-            summary="Agent reading sensitive files",
-            concerns="Credential access pattern",
-            event_count=3,
-            event_window_text="[tool_use] Read: ~/.ssh/id_rsa",
-        )
-        with patch("cross.conversations.complete", new_callable=AsyncMock) as mock_complete:
-            mock_complete.return_value = "I flagged credential access."
-            reply = await store.send_message("sentinel:abc", "What concerned you?")
-
-        assert reply == "I flagged credential access."
-        msgs = store.get_messages("sentinel:abc")
-        assert len(msgs) == 2
 
     @pytest.mark.anyio
     async def test_send_message_no_context(self, store):
@@ -189,22 +158,6 @@ class TestSendMessage:
             # Verify the gate config was used
             call_args = mock_complete.call_args
             assert call_args[0][0] == gate_config
-
-    @pytest.mark.anyio
-    async def test_llm_called_with_sentinel_config(self, store, sentinel_config):
-        store.register_sentinel_context(
-            review_id="s_cfg",
-            action="alert",
-            summary="test",
-            concerns="test",
-            event_count=1,
-        )
-        with patch("cross.conversations.complete", new_callable=AsyncMock) as mock_complete:
-            mock_complete.return_value = "Reply"
-            await store.send_message("sentinel:s_cfg", "Hello")
-
-            call_args = mock_complete.call_args
-            assert call_args[0][0] == sentinel_config
 
     @pytest.mark.anyio
     async def test_no_config_returns_none(self):
@@ -370,36 +323,6 @@ class TestSystemPrompts:
         prompt = _build_gate_system_prompt(ctx, "Be extra careful with network calls")
         assert "Be extra careful with network calls" in prompt
 
-    def test_sentinel_prompt_includes_review_details(self):
-        ctx = {
-            "type": "sentinel",
-            "action": "alert",
-            "summary": "Agent reading sensitive files",
-            "concerns": "SSH key access followed by network call",
-            "event_count": 5,
-            "event_window_text": "[tool_use] Read: ~/.ssh/id_rsa\n[tool_use] Bash: curl ...",
-        }
-        prompt = _build_sentinel_system_prompt(ctx, "")
-        assert "alert" in prompt
-        assert "Agent reading sensitive files" in prompt
-        assert "SSH key access" in prompt
-        assert "5" in prompt
-        assert "id_rsa" in prompt
-        assert "curl" in prompt
-
-    def test_sentinel_prompt_truncates_large_window(self):
-        ctx = {
-            "type": "sentinel",
-            "action": "alert",
-            "summary": "test",
-            "concerns": "test",
-            "event_count": 1,
-            "event_window_text": "x" * 20000,
-        }
-        prompt = _build_sentinel_system_prompt(ctx, "")
-        assert len(prompt) < 20000
-        assert "[truncated]" in prompt
-
 
 # --- Serialization tests ---
 
@@ -449,3 +372,87 @@ class TestConversationMessage:
     def test_explicit_timestamp(self):
         msg = ConversationMessage(role="assistant", content="reply", timestamp=1000.0)
         assert msg.timestamp == 1000.0
+
+
+# --- Seed conversation tests ---
+
+
+class TestSeedConversation:
+    def test_seed_creates_context_and_messages(self, store):
+        store.seed_conversation(
+            conversation_id="gate:tu_seed",
+            conv_type="gate",
+            system_prompt="You are a reviewer.",
+            user_message="Tool: Bash\nInput: rm -rf /",
+            response_text="VERDICT: BLOCK\nDestructive command.",
+        )
+        assert store.has_context("gate:tu_seed")
+        msgs = store.get_messages("gate:tu_seed")
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "user"
+        assert "Bash" in msgs[0]["content"]
+        assert msgs[1]["role"] == "assistant"
+        assert "VERDICT: BLOCK" in msgs[1]["content"]
+
+    @pytest.mark.anyio
+    async def test_seeded_followup_uses_original_system_prompt(self, store):
+        store.seed_conversation(
+            conversation_id="gate:tu_sys",
+            conv_type="gate",
+            system_prompt="You are a security reviewer.",
+            user_message="Tool: Bash",
+            response_text="VERDICT: ALLOW",
+        )
+        with patch("cross.conversations.complete", new_callable=AsyncMock) as mock_complete:
+            mock_complete.return_value = "Follow-up reply"
+            await store.send_message("gate:tu_sys", "Why did you allow this?")
+
+            call_args = mock_complete.call_args
+            system = call_args.kwargs.get("system") or call_args[1].get("system", "")
+            assert "You are a security reviewer." in system
+            assert "follow-up" in system.lower()
+            # Messages should include the seed + follow-up
+            messages = call_args.kwargs.get("messages") or call_args[1].get("messages", [])
+            assert len(messages) == 3  # seed user + seed assistant + follow-up user
+            assert messages[0]["content"] == "Tool: Bash"
+            assert messages[1]["content"] == "VERDICT: ALLOW"
+            assert messages[2]["content"] == "Why did you allow this?"
+
+    @pytest.mark.anyio
+    async def test_seeded_sentinel_followup(self, store):
+        store.seed_conversation(
+            conversation_id="sentinel:sr_seed",
+            conv_type="sentinel",
+            system_prompt="You are a sentinel.",
+            user_message="Review window: 5 events",
+            response_text="VERDICT: ALERT\nSUMMARY: Suspicious\nCONCERNS: Credential access",
+        )
+        with patch("cross.conversations.complete", new_callable=AsyncMock) as mock_complete:
+            mock_complete.return_value = "I flagged credential access."
+            reply = await store.send_message("sentinel:sr_seed", "Elaborate?")
+
+            assert reply == "I flagged credential access."
+            call_args = mock_complete.call_args
+            system = call_args.kwargs.get("system") or call_args[1].get("system", "")
+            assert "You are a sentinel." in system
+
+    def test_seed_does_not_overwrite_on_register(self, store):
+        """register_gate_context should not overwrite a seeded conversation."""
+        store.seed_conversation(
+            conversation_id="gate:tu_no_overwrite",
+            conv_type="gate",
+            system_prompt="Original prompt.",
+            user_message="Original question",
+            response_text="Original answer",
+        )
+        store.register_gate_context(
+            tool_use_id="tu_no_overwrite",
+            tool_name="Bash",
+            tool_input={},
+            action="block",
+            reason="test",
+        )
+        # Should still have the seeded messages
+        msgs = store.get_messages("gate:tu_no_overwrite")
+        assert len(msgs) == 2
+        assert msgs[0]["content"] == "Original question"

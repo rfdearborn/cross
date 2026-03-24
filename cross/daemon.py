@@ -560,6 +560,12 @@ async def api_gate(request: Request) -> JSONResponse:
             script_contents=script_contents or None,
             agent=agent,
             session_id=session_id,
+            recent_tools=recent_tools,
+            user_intent=user_intent,
+            conversation_context=conversation_context,
+            eval_system_prompt=result.eval_system_prompt,
+            eval_user_message=result.eval_user_message,
+            eval_response_text=result.eval_response_text,
         )
     )
 
@@ -738,26 +744,34 @@ async def api_conversation_message(request: Request) -> JSONResponse:
     # Lazily register context from event_data if missing (e.g., after restart)
     if not _conversation_store.has_context(conv_id):
         ev = data.get("event_data")
-        if ev and conv_id.startswith("gate:"):
-            _conversation_store.register_gate_context(
-                tool_use_id=ev.get("tool_use_id", conv_id.split(":", 1)[1]),
-                tool_name=ev.get("tool_name", "unknown"),
-                tool_input=ev.get("tool_input"),
-                action=ev.get("action", ""),
-                reason=ev.get("reason", ""),
-                rule_id=ev.get("rule_id", ""),
-                evaluator=ev.get("evaluator", ""),
-                script_contents=ev.get("script_contents"),
-            )
-        elif ev and conv_id.startswith("sentinel:"):
-            _conversation_store.register_sentinel_context(
-                review_id=ev.get("review_id", conv_id.split(":", 1)[1]),
-                action=ev.get("action", ""),
-                summary=ev.get("summary", ""),
-                concerns=ev.get("concerns", ""),
-                event_count=ev.get("event_count", 0),
-                event_window_text=ev.get("event_window_text", ""),
-            )
+        if ev:
+            sys_prompt = ev.get("eval_system_prompt", "")
+            resp_text = ev.get("eval_response_text", "")
+            if sys_prompt and resp_text:
+                c_type = "gate" if conv_id.startswith("gate:") else "sentinel"
+                _conversation_store.seed_conversation(
+                    conversation_id=conv_id,
+                    conv_type=c_type,
+                    system_prompt=sys_prompt,
+                    user_message=ev.get("eval_user_message", ""),
+                    response_text=resp_text,
+                )
+            elif conv_id.startswith("gate:"):
+                _conversation_store.register_gate_context(
+                    tool_use_id=ev.get("tool_use_id", conv_id.split(":", 1)[1]),
+                    tool_name=ev.get("tool_name", "unknown"),
+                    tool_input=ev.get("tool_input"),
+                    action=ev.get("action", ""),
+                    reason=ev.get("reason", ""),
+                    rule_id=ev.get("rule_id", ""),
+                    evaluator=ev.get("evaluator", ""),
+                    script_contents=ev.get("script_contents"),
+                    recent_tools=ev.get("recent_tools"),
+                    user_intent=ev.get("user_intent", ""),
+                    conversation_context=ev.get("conversation_context"),
+                )
+            else:
+                return JSONResponse({"error": "Unknown conversation"}, status_code=404)
         else:
             return JSONResponse({"error": "Unknown conversation"}, status_code=404)
 

@@ -298,6 +298,9 @@ class LLMSentinel(Sentinel):
             evaluator=self.name,
             confidence=0.85,
             metadata={"summary": summary, "concerns": concerns, "event_count": len(events)},
+            eval_system_prompt=system,
+            eval_user_message=user_message,
+            eval_response_text=text,
         )
 
         # Publish review event
@@ -310,6 +313,9 @@ class LLMSentinel(Sentinel):
                 evaluator=self.name,
                 review_id=review_id,
                 event_window_text=user_message,
+                eval_system_prompt=system,
+                eval_user_message=user_message,
+                eval_response_text=text,
             )
         )
 

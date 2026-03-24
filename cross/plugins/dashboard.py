@@ -59,41 +59,48 @@ class DashboardPlugin:
                 del self._pending[event.tool_use_id]
 
             # Register conversation context for non-trivial gate decisions
-            if self._conversation_store and event.action in ("block", "alert", "escalate", "halt_session"):
-                self._conversation_store.register_gate_context(
-                    tool_use_id=event.tool_use_id,
-                    tool_name=event.tool_name,
-                    tool_input=event.tool_input,
-                    action=event.action,
-                    reason=event.reason,
-                    rule_id=event.rule_id,
-                    evaluator=event.evaluator,
-                    script_contents=event.script_contents,
-                )
-            elif self._conversation_store and event.evaluator != "denylist" and event.action == "allow":
-                # LLM-reviewed allows are also interesting to discuss
-                self._conversation_store.register_gate_context(
-                    tool_use_id=event.tool_use_id,
-                    tool_name=event.tool_name,
-                    tool_input=event.tool_input,
-                    action=event.action,
-                    reason=event.reason,
-                    rule_id=event.rule_id,
-                    evaluator=event.evaluator,
-                    script_contents=event.script_contents,
-                )
+            if self._conversation_store and (
+                event.action in ("block", "alert", "escalate", "halt_session")
+                or (event.evaluator != "denylist" and event.action == "allow")
+            ):
+                conv_id = f"gate:{event.tool_use_id}"
+                # Prefer seeding with original eval conversation when available
+                if event.eval_system_prompt and event.eval_response_text:
+                    self._conversation_store.seed_conversation(
+                        conversation_id=conv_id,
+                        conv_type="gate",
+                        system_prompt=event.eval_system_prompt,
+                        user_message=event.eval_user_message,
+                        response_text=event.eval_response_text,
+                    )
+                else:
+                    # Fallback: reconstruct from event metadata
+                    self._conversation_store.register_gate_context(
+                        tool_use_id=event.tool_use_id,
+                        tool_name=event.tool_name,
+                        tool_input=event.tool_input,
+                        action=event.action,
+                        reason=event.reason,
+                        rule_id=event.rule_id,
+                        evaluator=event.evaluator,
+                        script_contents=event.script_contents,
+                        recent_tools=event.recent_tools,
+                        user_intent=event.user_intent,
+                        conversation_context=event.conversation_context,
+                    )
 
         # Register sentinel review conversation context
         elif isinstance(event, SentinelReviewEvent):
             if self._conversation_store and event.review_id:
-                self._conversation_store.register_sentinel_context(
-                    review_id=event.review_id,
-                    action=event.action,
-                    summary=event.summary,
-                    concerns=event.concerns,
-                    event_count=event.event_count,
-                    event_window_text=event.event_window_text,
-                )
+                # Sentinel reviews always produce eval data (they always go through LLM)
+                if event.eval_system_prompt and event.eval_response_text:
+                    self._conversation_store.seed_conversation(
+                        conversation_id=f"sentinel:{event.review_id}",
+                        conv_type="sentinel",
+                        system_prompt=event.eval_system_prompt,
+                        user_message=event.eval_user_message,
+                        response_text=event.eval_response_text,
+                    )
 
         # Track pending permission prompts
         elif isinstance(event, PermissionPromptEvent):
@@ -169,26 +176,34 @@ class DashboardPlugin:
         # The dashboard sends the original event data so we can reconstruct.
         if not self._conversation_store.has_context(conv_id):
             ev = msg.get("event_data")
-            if ev and conv_id.startswith("gate:"):
-                self._conversation_store.register_gate_context(
-                    tool_use_id=ev.get("tool_use_id", conv_id.split(":", 1)[1]),
-                    tool_name=ev.get("tool_name", "unknown"),
-                    tool_input=ev.get("tool_input"),
-                    action=ev.get("action", ""),
-                    reason=ev.get("reason", ""),
-                    rule_id=ev.get("rule_id", ""),
-                    evaluator=ev.get("evaluator", ""),
-                    script_contents=ev.get("script_contents"),
-                )
-            elif ev and conv_id.startswith("sentinel:"):
-                self._conversation_store.register_sentinel_context(
-                    review_id=ev.get("review_id", conv_id.split(":", 1)[1]),
-                    action=ev.get("action", ""),
-                    summary=ev.get("summary", ""),
-                    concerns=ev.get("concerns", ""),
-                    event_count=ev.get("event_count", 0),
-                    event_window_text=ev.get("event_window_text", ""),
-                )
+            if ev:
+                # Prefer seeding with original eval data when available
+                sys_prompt = ev.get("eval_system_prompt", "")
+                resp_text = ev.get("eval_response_text", "")
+                if sys_prompt and resp_text:
+                    c_type = "gate" if conv_id.startswith("gate:") else "sentinel"
+                    self._conversation_store.seed_conversation(
+                        conversation_id=conv_id,
+                        conv_type=c_type,
+                        system_prompt=sys_prompt,
+                        user_message=ev.get("eval_user_message", ""),
+                        response_text=resp_text,
+                    )
+                elif conv_id.startswith("gate:"):
+                    self._conversation_store.register_gate_context(
+                        tool_use_id=ev.get("tool_use_id", conv_id.split(":", 1)[1]),
+                        tool_name=ev.get("tool_name", "unknown"),
+                        tool_input=ev.get("tool_input"),
+                        action=ev.get("action", ""),
+                        reason=ev.get("reason", ""),
+                        rule_id=ev.get("rule_id", ""),
+                        evaluator=ev.get("evaluator", ""),
+                        script_contents=ev.get("script_contents"),
+                        recent_tools=ev.get("recent_tools"),
+                        user_intent=ev.get("user_intent", ""),
+                        conversation_context=ev.get("conversation_context"),
+                    )
+                # Sentinel without eval data — no conversation available
 
         # Send typing indicator
         try:

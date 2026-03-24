@@ -578,6 +578,12 @@ async def _gate_non_streaming_response(
                 script_contents=script_contents or None,
                 agent=agent_label,
                 session_id=session_id,
+                recent_tools=list(_recent_tools),
+                user_intent=user_intent,
+                conversation_context=conversation_context,
+                eval_system_prompt=result.eval_system_prompt,
+                eval_user_message=result.eval_user_message,
+                eval_response_text=result.eval_response_text,
             )
         )
 
@@ -861,6 +867,12 @@ async def _proxy_streaming(
                                     confidence=result.confidence,
                                     tool_input=tool_event.input,
                                     script_contents=script_contents or None,
+                                    recent_tools=list(_recent_tools),
+                                    user_intent=user_intent,
+                                    conversation_context=conversation_context,
+                                    eval_system_prompt=result.eval_system_prompt,
+                                    eval_user_message=result.eval_user_message,
+                                    eval_response_text=result.eval_response_text,
                                 )
                             )
 
