@@ -20,11 +20,78 @@ CROSS_PORT = os.environ.get("CROSS_LISTEN_PORT", "2767")
 GATE_URL = f"http://localhost:{CROSS_PORT}/cross/api/gate"
 TIMEOUT_S = 300  # 5 minutes — allows for human escalation review
 
+MAX_CONV_TURNS = int(os.environ.get("CROSS_LLM_GATE_CONTEXT_TURNS", "5"))
+MAX_CHARS_PER_TURN = 300
+MAX_INTENT_CHARS = 500
+_SKIP_PREFIXES = ("<system-reminder>", "[Request interrupted by user]", "Conversation info")
+
 
 def _is_already_proxied() -> bool:
     """Check if this session is already routed through cross's proxy."""
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
     return "localhost" in base_url or "127.0.0.1" in base_url
+
+
+def _extract_text(content) -> str:
+    """Extract text from a message content field (string or list of blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return " ".join(parts)
+    return ""
+
+
+def _read_transcript(transcript_path: str) -> tuple[list[dict[str, str]], str]:
+    """Read the Claude Code transcript JSONL and extract conversation context + user intent.
+
+    Returns (conversation_context, user_intent).
+    """
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return [], ""
+
+    try:
+        # Read all lines — we'll scan backward from the end
+        with open(transcript_path) as f:
+            lines = f.readlines()
+    except (OSError, IOError):
+        return [], ""
+
+    turns: list[dict[str, str]] = []
+    user_intent = ""
+
+    for line in reversed(lines):
+        if len(turns) >= MAX_CONV_TURNS and user_intent:
+            break
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        msg = obj.get("message")
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        if role not in ("user", "assistant"):
+            continue
+
+        text = _extract_text(msg.get("content", ""))
+        if not text:
+            continue
+        if any(text.startswith(p) for p in _SKIP_PREFIXES):
+            continue
+
+        if len(turns) < MAX_CONV_TURNS:
+            turns.append({"role": role, "text": text[:MAX_CHARS_PER_TURN]})
+
+        if not user_intent and role == "user":
+            user_intent = text[:MAX_INTENT_CHARS]
+
+    turns.reverse()  # chronological order
+    return turns, user_intent
 
 
 def main() -> None:
@@ -44,6 +111,9 @@ def main() -> None:
     tool_input = hook_event.get("tool_input", {})
     session_id = hook_event.get("session_id", "")
     cwd = hook_event.get("cwd", "")
+    transcript_path = hook_event.get("transcript_path", "")
+
+    conversation_context, user_intent = _read_transcript(transcript_path)
 
     payload = json.dumps(
         {
@@ -52,6 +122,8 @@ def main() -> None:
             "agent": "claude (desktop)",
             "session_id": session_id,
             "cwd": cwd,
+            "conversation_context": conversation_context,
+            "user_intent": user_intent,
         }
     ).encode()
 
