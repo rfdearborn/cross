@@ -18,7 +18,7 @@ from cross.events import CrossEvent
 
 logger = logging.getLogger("cross.event_store")
 
-_MAX_EVENTS = 100
+_MAX_EVENTS = 1000
 
 
 def _default_path() -> str:

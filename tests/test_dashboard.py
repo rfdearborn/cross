@@ -95,12 +95,12 @@ class TestDashboardPluginEventHandling:
     @pytest.mark.anyio
     async def test_max_events_bounded(self, store):
         plugin = DashboardPlugin(event_store=store)
-        for i in range(150):
+        for i in range(1100):
             ev = ToolUseEvent(name=f"tool_{i}", tool_use_id=f"tu_{i}", input={})
             await store.handle_event(ev)
 
         events = plugin.get_events()
-        assert len(events) == 100  # bounded by _MAX_EVENTS
+        assert len(events) == 1000  # bounded by _MAX_EVENTS
 
     @pytest.mark.anyio
     async def test_escalate_adds_to_pending(self, store):
