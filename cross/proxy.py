@@ -170,10 +170,10 @@ def _extract_conversation_context(
     return turns
 
 
-def _extract_request_event(method: str, path: str, body: bytes | None) -> RequestEvent:
-    from cross.daemon import get_active_agent_label
+def _extract_request_event(method: str, path: str, body: bytes | None, session_id: str = "") -> RequestEvent:
+    from cross.daemon import get_agent_label
 
-    event = RequestEvent(method=method, path=path, agent=get_active_agent_label())
+    event = RequestEvent(method=method, path=path, agent=get_agent_label(session_id), session_id=session_id)
     if body:
         try:
             data = json.loads(body)
@@ -380,6 +380,7 @@ async def handle_proxy_request(
     request: Request,
     event_bus: EventBus,
     gate_chain: GateChain | None = None,
+    session_id: str = "",
 ) -> Response:
     """Handle a proxy request, publishing events to the given EventBus."""
     if _sentinel_halted:
@@ -398,7 +399,8 @@ async def handle_proxy_request(
         )
 
     body = await request.body()
-    path = request.url.path
+    # Use the path param (already stripped of /s/{session_id} prefix by Starlette)
+    path = "/" + request.path_params.get("path", "")
     if request.url.query:
         path = f"{path}?{request.url.query}"
 
@@ -412,8 +414,13 @@ async def handle_proxy_request(
     # Fix content-length after potential body modification
     headers["content-length"] = str(len(body))
 
+    # Resolve agent label once for this request
+    from cross.daemon import get_agent_label
+
+    agent_label = get_agent_label(session_id)
+
     # Publish request event
-    req_event = _extract_request_event(request.method, path, body)
+    req_event = _extract_request_event(request.method, path, body, session_id=session_id)
     await event_bus.publish(req_event)
 
     client = get_client()
@@ -427,9 +434,29 @@ async def handle_proxy_request(
             pass
 
     if is_streaming:
-        return await _proxy_streaming(client, event_bus, request.method, path, headers, body, gate_chain)
+        return await _proxy_streaming(
+            client,
+            event_bus,
+            request.method,
+            path,
+            headers,
+            body,
+            gate_chain,
+            session_id=session_id,
+            agent_label=agent_label,
+        )
     else:
-        return await _proxy_simple(client, event_bus, request.method, path, headers, body, gate_chain)
+        return await _proxy_simple(
+            client,
+            event_bus,
+            request.method,
+            path,
+            headers,
+            body,
+            gate_chain,
+            session_id=session_id,
+            agent_label=agent_label,
+        )
 
 
 async def _proxy_simple(
@@ -440,6 +467,8 @@ async def _proxy_simple(
     headers: dict,
     body: bytes,
     gate_chain: GateChain | None = None,
+    session_id: str = "",
+    agent_label: str = "",
 ) -> Response:
     resp = await client.request(method, path, headers=headers, content=body)
 
@@ -456,7 +485,14 @@ async def _proxy_simple(
     # Gate tool_use blocks in non-streaming responses
     if gate_chain and resp.status_code == 200:
         try:
-            content = await _gate_non_streaming_response(content, body, gate_chain, event_bus)
+            content = await _gate_non_streaming_response(
+                content,
+                body,
+                gate_chain,
+                event_bus,
+                session_id=session_id,
+                agent_label=agent_label,
+            )
         except Exception as e:
             logger.warning(f"Non-streaming gate check failed: {e}")
 
@@ -476,6 +512,8 @@ async def _gate_non_streaming_response(
     request_body: bytes,
     gate_chain: GateChain,
     event_bus: EventBus,
+    session_id: str = "",
+    agent_label: str = "",
 ) -> bytes:
     """Run gate evaluation on tool_use blocks in a non-streaming response."""
     data = json.loads(content)
@@ -536,6 +574,8 @@ async def _gate_non_streaming_response(
                 confidence=result.confidence,
                 tool_input=tool_input,
                 script_contents=script_contents or None,
+                agent=agent_label,
+                session_id=session_id,
             )
         )
 
@@ -570,6 +610,8 @@ async def _gate_non_streaming_response(
                         reason=f"Approved by human reviewer (@{username})",
                         evaluator="human",
                         tool_input=tool_input,
+                        agent=agent_label,
+                        session_id=session_id,
                     )
                 )
             else:
@@ -590,6 +632,8 @@ async def _gate_non_streaming_response(
                         reason=reason,
                         evaluator="human",
                         tool_input=tool_input,
+                        agent=agent_label,
+                        session_id=session_id,
                     )
                 )
 
@@ -651,6 +695,8 @@ async def _proxy_streaming(
     headers: dict,
     body: bytes,
     gate_chain: GateChain | None = None,
+    session_id: str = "",
+    agent_label: str = "",
 ) -> Response:
     upstream = await client.send(
         client.build_request(method, path, headers=headers, content=body),
@@ -672,6 +718,14 @@ async def _proxy_streaming(
         pass
 
     async def generate():
+        async def _publish(ev):
+            """Stamp session identity on events before publishing."""
+            if hasattr(ev, "session_id") and not ev.session_id:
+                ev.session_id = session_id
+            if hasattr(ev, "agent") and not ev.agent:
+                ev.agent = agent_label
+            await event_bus.publish(ev)
+
         current_body = body
         retries_remaining = settings.gate_max_retries
         next_content_index = 0  # Track how many content blocks have been sent to client
@@ -696,7 +750,7 @@ async def _proxy_streaming(
                     if gate_chain is None:
                         # No gating — pass through as before
                         for ev in events:
-                            await event_bus.publish(ev)
+                            await _publish(ev)
                         yield line + "\n"
                         continue
 
@@ -710,13 +764,13 @@ async def _proxy_streaming(
                                 d = json.loads(line[6:])
                                 if d.get("type") == "message_start":
                                     for ev in events:
-                                        await event_bus.publish(ev)
+                                        await _publish(ev)
                                     continue
                             except (json.JSONDecodeError, TypeError):
                                 pass
                         if line.startswith("event: message_start"):
                             for ev in events:
-                                await event_bus.publish(ev)
+                                await _publish(ev)
                             continue
 
                         # Rewrite content block indices
@@ -731,7 +785,7 @@ async def _proxy_streaming(
                             pending_line = None
                         buffer.append(line)
                         for ev in events:
-                            await event_bus.publish(ev)
+                            await _publish(ev)
                         continue
 
                     # When buffering, ALL lines (event: and data:) go into the buffer
@@ -748,7 +802,7 @@ async def _proxy_streaming(
                                 f"Buffer exceeded {_MAX_BUFFER_LINES} lines, flushing without gate evaluation"
                             )
                             for ev in events:
-                                await event_bus.publish(ev)
+                                await _publish(ev)
                             for buffered_line in buffer:
                                 yield buffered_line + "\n"
                             buffer = []
@@ -761,7 +815,7 @@ async def _proxy_streaming(
                             if isinstance(ev, ToolUseEvent):
                                 tool_event = ev
                             else:
-                                await event_bus.publish(ev)
+                                await _publish(ev)
 
                         if tool_event:
                             # Resolve script contents for Bash/exec tool calls
@@ -794,7 +848,7 @@ async def _proxy_streaming(
                             _recent_tools.append({"name": tool_event.name, "input": tool_event.input})
 
                             # Publish gate decision (include tool_input so sentinel can see blocked calls)
-                            await event_bus.publish(
+                            await _publish(
                                 GateDecisionEvent(
                                     tool_use_id=tool_event.tool_use_id,
                                     tool_name=tool_event.name,
@@ -834,7 +888,7 @@ async def _proxy_streaming(
                                 if approved:
                                     logger.info(f"APPROVED tool {tool_event.name} by {username}")
                                     # Publish approval so sentinel sees the full flow
-                                    await event_bus.publish(
+                                    await _publish(
                                         GateDecisionEvent(
                                             tool_use_id=tool_event.tool_use_id,
                                             tool_name=tool_event.name,
@@ -845,7 +899,7 @@ async def _proxy_streaming(
                                         )
                                     )
                                     # Flush buffer — tool is approved
-                                    await event_bus.publish(tool_event)
+                                    await _publish(tool_event)
                                     for buffered_line in buffer:
                                         yield buffered_line + "\n"
                                     next_content_index += 1
@@ -859,7 +913,7 @@ async def _proxy_streaming(
                                     logger.warning(
                                         f"DENIED tool {tool_event.name} ({tool_event.tool_use_id}): {reason}"
                                     )
-                                    await event_bus.publish(
+                                    await _publish(
                                         GateDecisionEvent(
                                             tool_use_id=tool_event.tool_use_id,
                                             tool_name=tool_event.name,
@@ -869,7 +923,7 @@ async def _proxy_streaming(
                                             tool_input=tool_event.input,
                                         )
                                     )
-                                    await event_bus.publish(tool_event)
+                                    await _publish(tool_event)
                                     blocked_tools_for_retry.append(
                                         {
                                             "tool_use_id": tool_event.tool_use_id,
@@ -896,7 +950,7 @@ async def _proxy_streaming(
                                 _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
                                 logger.warning(f"HALTED tool {tool_event.name} (id={tool_event.tool_use_id}): {reason}")
                                 any_halted = True
-                                await event_bus.publish(tool_event)
+                                await _publish(tool_event)
                                 # Suppress tool_use, terminate response cleanly
                                 for sse_line in _synthetic_message_end_sse():
                                     yield sse_line + "\n"
@@ -909,7 +963,7 @@ async def _proxy_streaming(
                                 logger.warning(
                                     f"BLOCKED tool {tool_event.name} (id={tool_event.tool_use_id}): {reason}"
                                 )
-                                await event_bus.publish(tool_event)
+                                await _publish(tool_event)
                                 blocked_tools_for_retry.append(
                                     {
                                         "tool_use_id": tool_event.tool_use_id,
@@ -926,13 +980,13 @@ async def _proxy_streaming(
                                 logger.warning(
                                     f"ALERT on tool {tool_event.name} (id={tool_event.tool_use_id}): {result.reason}"
                                 )
-                                await event_bus.publish(tool_event)
+                                await _publish(tool_event)
                                 for buffered_line in buffer:
                                     yield buffered_line + "\n"
                                 next_content_index += 1
                             else:
                                 # Allow: flush buffer
-                                await event_bus.publish(tool_event)
+                                await _publish(tool_event)
                                 for buffered_line in buffer:
                                     yield buffered_line + "\n"
                                 next_content_index += 1
@@ -964,12 +1018,12 @@ async def _proxy_streaming(
                     if line.startswith("event: "):
                         pending_line = line
                         for ev in events:
-                            await event_bus.publish(ev)
+                            await _publish(ev)
                         continue
 
                     # Stream text and other events through immediately
                     for ev in events:
-                        await event_bus.publish(ev)
+                        await _publish(ev)
                     yield line + "\n"
 
                 if not response_terminated and not should_retry:
@@ -980,7 +1034,7 @@ async def _proxy_streaming(
                     # Flush any remaining parser state
                     events = current_parser.feed_line("")
                     for ev in events:
-                        await event_bus.publish(ev)
+                        await _publish(ev)
             finally:
                 await current_upstream.aclose()
 
@@ -989,7 +1043,7 @@ async def _proxy_streaming(
                 retries_remaining -= 1
                 retry_number = settings.gate_max_retries - retries_remaining
                 for bt in blocked_tools_for_retry:
-                    await event_bus.publish(
+                    await _publish(
                         GateRetryEvent(
                             tool_use_id=bt["tool_use_id"],
                             tool_name=bt["name"],

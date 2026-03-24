@@ -621,9 +621,13 @@ def _run_wrap(argv: list[str], log: logging.Logger) -> int:
     agent_name = os.path.basename(argv[0])
     argv[0] = agent_bin
 
+    # Create local session (before env setup so we can embed session_id in the URL)
+    info = registry.create(agent=agent_name, argv=argv)
+
     # Set up env to route API traffic through the daemon's proxy
+    # Embed session_id in the URL path so the proxy can attribute requests correctly
     env = {
-        "ANTHROPIC_BASE_URL": f"http://localhost:{settings.listen_port}",
+        "ANTHROPIC_BASE_URL": f"http://localhost:{settings.listen_port}/s/{info.session_id}",
     }
 
     # OpenClaw: inject tool hook via --import (ESM)
@@ -633,9 +637,6 @@ def _run_wrap(argv: list[str], log: logging.Logger) -> int:
             existing_node_opts = os.environ.get("NODE_OPTIONS", "")
             env["NODE_OPTIONS"] = f"--import {hook_path} {existing_node_opts}".strip()
             env["CROSS_LISTEN_PORT"] = str(settings.listen_port)
-
-    # Create local session
-    info = registry.create(agent=agent_name, argv=argv)
     log.info(f"Session {info.session_id} started: {agent_name} in {info.project} ({info.cwd})")
 
     # Set session ID for OpenClaw hook (must be after session creation)

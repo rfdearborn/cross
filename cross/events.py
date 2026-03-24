@@ -18,6 +18,7 @@ class RequestEvent:
     last_message_preview: str | None = None
     raw_body: dict[str, Any] | None = None
     agent: str = ""
+    session_id: str = ""
 
 
 @dataclass

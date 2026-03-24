@@ -35,10 +35,10 @@ def event_to_dict(event: CrossEvent) -> dict[str, Any]:
     # Remove raw_body from RequestEvent — too large for storage
     d.pop("raw_body", None)
     # Ensure all events carry agent label (for dashboard persistence)
-    if "agent" not in d:
-        from cross.daemon import get_active_agent_label
+    if not d.get("agent"):
+        from cross.daemon import get_agent_label
 
-        d["agent"] = get_active_agent_label()
+        d["agent"] = get_agent_label(d.get("session_id", ""))
     return d
 
 

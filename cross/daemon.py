@@ -195,17 +195,23 @@ def get_agent_status() -> dict[str, Any]:
     }
 
 
-def get_active_agent_label() -> str:
-    """Return 'agent - project' label for the most recently active session."""
-    if not _sessions:
+def get_agent_label(session_id: str = "") -> str:
+    """Return 'agent - project' label for a specific session, or the most recent."""
+    if session_id and session_id in _sessions:
+        s = _sessions[session_id]
+    elif _sessions:
+        s = list(_sessions.values())[-1]
+    else:
         return ""
-    # Use the most recently registered session
-    last = list(_sessions.values())[-1]
-    agent = last.get("agent", "")
-    project = last.get("project", "")
+    agent = s.get("agent", "")
+    project = s.get("project", "")
     if agent and project:
         return f"{agent} - {project}"
     return agent or project or ""
+
+
+# Backward compat alias
+get_active_agent_label = get_agent_label
 
 
 # --- Local API routes (for wrap processes) ---
@@ -778,7 +784,8 @@ async def _proxy_handler(request: Request) -> Response:
     """Forward to the actual proxy logic."""
     from cross.proxy import handle_proxy_request
 
-    return await handle_proxy_request(request, event_bus, gate_chain=_gate_chain)
+    session_id = request.path_params.get("session_id", "")
+    return await handle_proxy_request(request, event_bus, gate_chain=_gate_chain, session_id=session_id)
 
 
 # --- App lifecycle ---
@@ -1035,8 +1042,9 @@ _ws_routes = [
     WebSocketRoute("/cross/api/ws", api_dashboard_ws),
 ]
 
-# Proxy catch-all (must be last)
+# Proxy routes — session-prefixed route first, then catch-all for backward compat
 _proxy_routes = [
+    Route("/s/{session_id}/{path:path}", _proxy_handler, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]),
     Route("/{path:path}", _proxy_handler, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]),
 ]
 

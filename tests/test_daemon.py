@@ -427,6 +427,50 @@ class TestSlackSetup:
         assert daemon._slack is None
 
 
+class TestGetAgentLabel:
+    """Test session-aware agent label lookup."""
+
+    def test_specific_session(self):
+        import cross.daemon as daemon
+
+        daemon._sessions.clear()
+        daemon._sessions["s1"] = {"agent": "claude", "project": "alpha"}
+        daemon._sessions["s2"] = {"agent": "claude", "project": "beta"}
+
+        assert daemon.get_agent_label("s1") == "claude - alpha"
+        assert daemon.get_agent_label("s2") == "claude - beta"
+
+    def test_unknown_session_falls_back_to_last(self):
+        import cross.daemon as daemon
+
+        daemon._sessions.clear()
+        daemon._sessions["s1"] = {"agent": "claude", "project": "alpha"}
+
+        # Unknown session_id falls back to last registered
+        assert daemon.get_agent_label("unknown") == "claude - alpha"
+
+    def test_empty_session_id_falls_back_to_last(self):
+        import cross.daemon as daemon
+
+        daemon._sessions.clear()
+        daemon._sessions["s1"] = {"agent": "claude", "project": "alpha"}
+        daemon._sessions["s2"] = {"agent": "claude", "project": "beta"}
+
+        assert daemon.get_agent_label("") == "claude - beta"
+
+    def test_no_sessions_returns_empty(self):
+        import cross.daemon as daemon
+
+        daemon._sessions.clear()
+        assert daemon.get_agent_label("s1") == ""
+        assert daemon.get_agent_label("") == ""
+
+    def test_backward_compat_alias(self):
+        import cross.daemon as daemon
+
+        assert daemon.get_active_agent_label is daemon.get_agent_label
+
+
 class TestRouteRegistration:
     """Test that the Starlette app has the expected routes."""
 
@@ -454,6 +498,20 @@ class TestRouteRegistration:
 
         last_route = app.routes[-1]
         assert last_route.path == "/{path:path}"
+
+    def test_app_has_session_prefixed_proxy_route(self):
+        from cross.daemon import app
+
+        paths = [r.path for r in app.routes]
+        assert "/s/{session_id}/{path:path}" in paths
+
+    def test_session_proxy_route_before_catchall(self):
+        from cross.daemon import app
+
+        paths = [r.path for r in app.routes]
+        session_idx = paths.index("/s/{session_id}/{path:path}")
+        catchall_idx = paths.index("/{path:path}")
+        assert session_idx < catchall_idx
 
 
 class TestSessionAPI:

@@ -458,6 +458,16 @@ class TestExtractRequestEvent:
         assert event.last_message_role is None
         assert event.last_message_preview is None
 
+    def test_session_id_stamped(self):
+        body = json.dumps({"model": "claude-3", "messages": []}).encode()
+        event = _extract_request_event("POST", "/v1/messages", body, session_id="sess-42")
+        assert event.session_id == "sess-42"
+
+    def test_session_id_default_empty(self):
+        body = json.dumps({"model": "claude-3", "messages": []}).encode()
+        event = _extract_request_event("POST", "/v1/messages", body)
+        assert event.session_id == ""
+
     def test_preview_truncated_to_200(self):
         long_msg = "z" * 600
         body = json.dumps(
@@ -896,6 +906,8 @@ def _make_mock_request(body_dict: dict, method: str = "POST", path: str = "/v1/m
     req.url = MagicMock()
     req.url.path = path
     req.url.query = query
+    # path_params.get("path") returns the path without leading slash (as Starlette does)
+    req.path_params = {"path": path.lstrip("/"), "session_id": ""}
     req.headers = {"host": "localhost:8080", "content-type": "application/json", "x-api-key": "sk-test"}
     req.body = AsyncMock(return_value=body_bytes)
     return req
@@ -1138,6 +1150,132 @@ class TestHandleProxyRequest:
             path_arg = call_args[0][3]
             assert path_arg == "/v1/messages"
             assert "?" not in path_arg
+
+
+# ============================================================
+# Session ID threading
+# ============================================================
+
+
+class TestSessionIdThreading:
+    """Test that session_id is correctly threaded through the proxy pipeline."""
+
+    @pytest.mark.anyio
+    async def test_handle_proxy_request_passes_session_id_to_simple(self):
+        """session_id should be passed through to _proxy_simple."""
+        body = {"model": "claude-3", "stream": False, "messages": []}
+        req = _make_mock_request(body)
+        req.path_params = {"path": "v1/messages", "session_id": "sess-abc"}
+        event_bus = EventBus()
+
+        with patch("cross.proxy._proxy_simple", new_callable=AsyncMock) as mock_simple:
+            mock_simple.return_value = MagicMock()
+            await handle_proxy_request(req, event_bus, session_id="sess-abc")
+
+            assert mock_simple.call_args.kwargs["session_id"] == "sess-abc"
+
+    @pytest.mark.anyio
+    async def test_handle_proxy_request_passes_session_id_to_streaming(self):
+        """session_id should be passed through to _proxy_streaming."""
+        body = {"model": "claude-3", "stream": True, "messages": []}
+        req = _make_mock_request(body)
+        req.path_params = {"path": "v1/messages", "session_id": "sess-xyz"}
+        event_bus = EventBus()
+
+        with patch("cross.proxy._proxy_streaming", new_callable=AsyncMock) as mock_streaming:
+            mock_streaming.return_value = MagicMock()
+            await handle_proxy_request(req, event_bus, session_id="sess-xyz")
+
+            assert mock_streaming.call_args.kwargs["session_id"] == "sess-xyz"
+
+    @pytest.mark.anyio
+    async def test_request_event_carries_session_id(self):
+        """The RequestEvent published by handle_proxy_request should carry session_id."""
+        body = {"model": "claude-3", "stream": False, "messages": []}
+        req = _make_mock_request(body)
+        req.path_params = {"path": "v1/messages", "session_id": "sess-req"}
+        event_bus = EventBus()
+        published = []
+        event_bus.subscribe(lambda e: published.append(e) or asyncio.sleep(0))
+
+        with patch("cross.proxy._proxy_simple", new_callable=AsyncMock) as mock_simple:
+            mock_simple.return_value = MagicMock()
+            await handle_proxy_request(req, event_bus, session_id="sess-req")
+
+        req_events = [e for e in published if isinstance(e, RequestEvent)]
+        assert len(req_events) == 1
+        assert req_events[0].session_id == "sess-req"
+
+    @pytest.mark.anyio
+    async def test_default_session_id_is_empty(self):
+        """When no session_id is provided, it defaults to empty string."""
+        body = {"model": "claude-3", "stream": False, "messages": []}
+        req = _make_mock_request(body)
+        event_bus = EventBus()
+
+        with patch("cross.proxy._proxy_simple", new_callable=AsyncMock) as mock_simple:
+            mock_simple.return_value = MagicMock()
+            await handle_proxy_request(req, event_bus)
+
+            assert mock_simple.call_args.kwargs["session_id"] == ""
+
+
+# ============================================================
+# event_to_dict session awareness
+# ============================================================
+
+
+class TestEventToDictSessionAwareness:
+    """Test that event_to_dict uses session_id for agent label lookup."""
+
+    def test_uses_session_id_for_label(self):
+        import cross.daemon as daemon
+        from cross.event_store import event_to_dict
+        from cross.events import GateDecisionEvent
+
+        daemon._sessions.clear()
+        daemon._sessions["s1"] = {"agent": "claude", "project": "alpha"}
+        daemon._sessions["s2"] = {"agent": "claude", "project": "beta"}
+
+        event = GateDecisionEvent(
+            tool_use_id="t1",
+            tool_name="Bash",
+            action="allow",
+            session_id="s1",
+        )
+        d = event_to_dict(event)
+        assert d["agent"] == "claude - alpha"
+
+    def test_preserves_existing_agent_label(self):
+        from cross.event_store import event_to_dict
+        from cross.events import GateDecisionEvent
+
+        event = GateDecisionEvent(
+            tool_use_id="t1",
+            tool_name="Bash",
+            action="allow",
+            agent="already-set",
+            session_id="s1",
+        )
+        d = event_to_dict(event)
+        assert d["agent"] == "already-set"
+
+    def test_fallback_when_no_session_id(self):
+        import cross.daemon as daemon
+        from cross.event_store import event_to_dict
+        from cross.events import GateDecisionEvent
+
+        daemon._sessions.clear()
+        daemon._sessions["s1"] = {"agent": "claude", "project": "last"}
+
+        event = GateDecisionEvent(
+            tool_use_id="t1",
+            tool_name="Bash",
+            action="allow",
+        )
+        d = event_to_dict(event)
+        # Falls back to last registered session
+        assert d["agent"] == "claude - last"
 
 
 # ============================================================
