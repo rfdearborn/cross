@@ -61,12 +61,10 @@ _pending_injects: dict[str, str] = {}
 _gate_agents: set[str] = set()
 # Per-session recent tool calls for external agents (keyed by session_id)
 _gate_recent_tools: dict[str, deque] = {}
-# Permission prompt tracking
-_permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, allow_all_label, ts}
-_permission_debounce: dict[str, float] = {}  # session_id -> last prompt time
-_PERMISSION_DEBOUNCE_SECS = 3.0
-# Tool description tracking per session (for permission prompt context)
-_last_tool_desc: dict[str, str] = {}
+# Permission prompt tracking (hook-based — PermissionRequest hook notifies daemon)
+_permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, ts}
+_permission_notify_tasks: dict[str, asyncio.Task] = {}  # session_id -> delayed notify task
+_PERMISSION_NOTIFY_DELAY = 10.0  # Seconds to wait before notifying (gives user time to approve)
 # Event loop reference (for thread-safe callbacks)
 _event_loop: asyncio.AbstractEventLoop | None = None
 
@@ -306,8 +304,6 @@ async def api_session_ws(ws: WebSocket):
                     # Forward to Email for relay
                     if _email:
                         _email.handle_pty_output(session_id, text)
-                    # Check for permission prompts (dashboard + notifications)
-                    await _check_permission_prompt(session_id, text)
 
     except WebSocketDisconnect:
         logger.info(f"Session WS disconnected: {session_id}")
@@ -334,39 +330,53 @@ async def _delayed_inject(session_id: str, text: str):
     await _inject_to_session(session_id, text + "\r")
 
 
-async def _check_permission_prompt(session_id: str, text: str):
-    """Check PTY output for Claude Code permission prompts and publish event."""
-    from cross.pty_helpers import extract_allow_all, is_permission_prompt
+async def _delayed_permission_notify(session_id: str, tool_desc: str):
+    """Wait, then publish the permission notification if still pending."""
+    await asyncio.sleep(_PERMISSION_NOTIFY_DELAY)
 
-    if not is_permission_prompt(text):
+    if not _permission_pending.pop(session_id, None):
+        logger.debug(f"Permission prompt for {session_id} resolved before delay elapsed")
         return
 
-    # Debounce
-    now = time.time()
-    last = _permission_debounce.get(session_id, 0)
-    if now - last < _PERMISSION_DEBOUNCE_SECS:
-        return
-    _permission_debounce[session_id] = now
-
-    tool_desc = _last_tool_desc.get(session_id, "")
-    allow_all_label = extract_allow_all(text) or "Allow all (session)"
-
-    _permission_pending[session_id] = {
-        "session_id": session_id,
-        "tool_desc": tool_desc,
-        "allow_all_label": allow_all_label,
-        "ts": now,
-    }
-
+    # Still pending after delay — user hasn't acted, send notification
+    logger.info(f"Permission prompt still pending for {session_id} after {_PERMISSION_NOTIFY_DELAY}s, notifying")
     await event_bus.publish(
         PermissionPromptEvent(
             session_id=session_id,
             tool_desc=tool_desc,
-            allow_all_label=allow_all_label,
+            allow_all_label="Allow all (session)",
         )
     )
-    # Clear stale tool description
-    _last_tool_desc.pop(session_id, None)
+
+
+async def api_permission_hook(request: Request) -> JSONResponse:
+    """POST /cross/sessions/{session_id}/permission — PermissionRequest hook notification.
+
+    Called by the Claude Code PermissionRequest hook when a permission prompt
+    appears.  Schedules a delayed notification — if the user approves in
+    terminal before the delay elapses, no notification is sent.
+    """
+    session_id = request.path_params["session_id"]
+    data = await request.json()
+    tool_desc = data.get("tool_desc", "")
+
+    # If there's already a pending prompt for this session, ignore the new one
+    if session_id in _permission_pending:
+        return JSONResponse({"status": "already_pending"})
+
+    logger.info(f"Permission hook fired for {session_id}: {tool_desc}")
+
+    _permission_pending[session_id] = {
+        "session_id": session_id,
+        "tool_desc": tool_desc,
+        "allow_all_label": "Allow all (session)",
+        "ts": time.time(),
+    }
+
+    task = asyncio.create_task(_delayed_permission_notify(session_id, tool_desc))
+    _permission_notify_tasks[session_id] = task
+
+    return JSONResponse({"status": "pending"})
 
 
 async def _resolve_permission_async(session_id: str, action: str, resolver: str):
@@ -374,6 +384,11 @@ async def _resolve_permission_async(session_id: str, action: str, resolver: str)
     info = _permission_pending.pop(session_id, None)
     if not info:
         return
+
+    # Cancel delayed notification if it hasn't fired yet
+    task = _permission_notify_tasks.pop(session_id, None)
+    if task and not task.done():
+        task.cancel()
 
     # Map action to PTY keypress
     key = {"approve": "1", "allow_all": "2", "deny": "3"}.get(action, "3")
@@ -389,6 +404,20 @@ async def _resolve_permission_async(session_id: str, action: str, resolver: str)
     logger.info(f"Permission {action} for session {session_id} (resolver={resolver})")
 
 
+async def _clear_permission_on_activity(event):
+    """Clear pending permission when new activity arrives (user approved in terminal)."""
+    session_id = getattr(event, "session_id", "")
+    if not session_id or session_id not in _permission_pending:
+        return
+    # A new request or tool use means the user approved the permission in terminal
+    if isinstance(event, (RequestEvent, ToolUseEvent)):
+        logger.debug(f"Clearing pending permission for {session_id} — new activity detected")
+        _permission_pending.pop(session_id, None)
+        task = _permission_notify_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+
+
 def resolve_permission(session_id: str, action: str, resolver: str):
     """Thread-safe: resolve a pending permission prompt from any surface."""
     if session_id not in _permission_pending:
@@ -398,28 +427,6 @@ def resolve_permission(session_id: str, action: str, resolver: str):
             _resolve_permission_async(session_id, action, resolver),
             _event_loop,
         )
-
-
-async def _track_tool_desc(event):
-    """EventBus handler — track tool descriptions per session for permission context."""
-    if not isinstance(event, ToolUseEvent):
-        return
-    session_id = event.session_id
-    if not session_id:
-        # Fall back to most recently active session
-        if _sessions:
-            session_id = list(_sessions.keys())[-1]
-        else:
-            return
-
-    tool_desc = f"`{event.name}`"
-    if event.name == "Bash":
-        cmd = event.input.get("command", "")
-        tool_desc = f"`Bash`: `{cmd[:80]}`"
-    elif event.name in ("Read", "Write", "Edit"):
-        path = event.input.get("file_path", "")
-        tool_desc = f"`{event.name}`: `{path}`"
-    _last_tool_desc[session_id] = tool_desc
 
 
 async def _spawn_session(project: str, initial_message: str):
@@ -818,7 +825,7 @@ async def on_startup():
 
     _dashboard = DashboardPlugin(event_store=store, resolve_approval_callback=_resolve_gate)
     event_bus.subscribe(_dashboard.handle_event)
-    event_bus.subscribe(_track_tool_desc)
+    event_bus.subscribe(_clear_permission_on_activity)
     logger.info("Dashboard active at /cross/dashboard")
 
     # Pre-populate monitored agents from hook configuration
@@ -1004,6 +1011,7 @@ async def on_shutdown():
 _api_routes = [
     Route("/cross/sessions", api_register_session, methods=["POST"]),
     Route("/cross/sessions/{session_id}/end", api_end_session, methods=["POST"]),
+    Route("/cross/sessions/{session_id}/permission", api_permission_hook, methods=["POST"]),
     Route("/cross/api/gate", api_gate, methods=["POST"]),
 ]
 

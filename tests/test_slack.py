@@ -129,25 +129,27 @@ class TestSlugify:
 
 
 class TestIsPermissionPrompt:
-    def test_do_you_want_to(self, slack_env):
+    def test_full_prompt(self, slack_env):
         from cross.pty_helpers import is_permission_prompt
 
-        assert is_permission_prompt("Do you want to allow this?") is True
+        assert is_permission_prompt("Do you want to allow this?\n1. Yes\n2. Allow all\n3. No") is True
 
-    def test_garbled_no_spaces(self, slack_env):
+    def test_garbled_full_prompt(self, slack_env):
         from cross.pty_helpers import is_permission_prompt
 
-        assert is_permission_prompt("Doyouwant to proceed") is True
+        assert is_permission_prompt("Doyouwant to proceed\n1. Yes\n3. No") is True
 
-    def test_partial_match(self, slack_env):
+    def test_question_alone_is_false(self, slack_env):
         from cross.pty_helpers import is_permission_prompt
 
-        assert is_permission_prompt("Do you want t") is True
+        # Question without numbered options — could be conversation text
+        assert is_permission_prompt("Do you want to allow this?") is False
 
-    def test_numbered_options(self, slack_env):
+    def test_options_alone_is_false(self, slack_env):
         from cross.pty_helpers import is_permission_prompt
 
-        assert is_permission_prompt("1. Yes, allow\n2. Allow all\n3. No, deny") is True
+        # Numbered options without the question — could be any list
+        assert is_permission_prompt("1. Yes, allow\n2. Allow all\n3. No, deny") is False
 
     def test_not_a_prompt(self, slack_env):
         from cross.pty_helpers import is_permission_prompt
@@ -157,8 +159,7 @@ class TestIsPermissionPrompt:
     def test_partial_numbered_only_yes(self, slack_env):
         from cross.pty_helpers import is_permission_prompt
 
-        # Only "1. Yes" without "3. No" should not match the numbered pattern
-        assert is_permission_prompt("1. Yes but no 3") is False
+        assert is_permission_prompt("Do you want to? 1. Yes but no 3") is False
 
 
 class TestExtractAllowAll:
@@ -685,6 +686,18 @@ class TestSessionEndedFromData:
 
 
 class TestHandlePtyOutput:
+    def test_handle_pty_output_is_noop(self, slack_env):
+        """PTY output no longer triggers permission posts directly — centralized in daemon."""
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+
+        plugin.handle_pty_output("sess-1", "Do you want to allow this? 1. Yes 2. Allow all 3. No")
+        mock_web.chat_postMessage.assert_not_called()
+
+
+class TestPostPermissionPrompt:
     def test_permission_prompt_posts(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
@@ -692,7 +705,7 @@ class TestHandlePtyOutput:
         mock_web.reset_mock()
         mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
 
-        plugin.handle_pty_output("sess-1", "Do you want to allow this? 1. Yes 2. Allow all 3. No")
+        plugin._post_permission_prompt("sess-1", "", "Allow all (session)")
 
         mock_web.chat_postMessage.assert_called_once()
         call_kwargs = mock_web.chat_postMessage.call_args.kwargs
@@ -700,58 +713,23 @@ class TestHandlePtyOutput:
         assert "blocks" in call_kwargs
         assert "sess-1" in plugin._permission_pending
 
-    def test_non_permission_text_ignored(self, slack_env):
-        factory, _, _ = slack_env
-        plugin, mock_web = factory()
-        _register_session(plugin, mock_web)
-        mock_web.reset_mock()
-
-        plugin.handle_pty_output("sess-1", "Compiling project...")
-        mock_web.chat_postMessage.assert_not_called()
-
     def test_no_thread_returns(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
-        plugin.handle_pty_output("unknown", "Do you want to proceed?")
+        plugin._post_permission_prompt("unknown", "", "Allow all (session)")
         mock_web.chat_postMessage.assert_not_called()
-
-    def test_debounce(self, slack_env):
-        factory, _, _ = slack_env
-        plugin, mock_web = factory()
-        _register_session(plugin, mock_web)
-        mock_web.reset_mock()
-        mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
-
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-
-        # Second call should be debounced
-        assert mock_web.chat_postMessage.call_count == 1
 
     def test_tool_desc_included(self, slack_env):
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         _register_session(plugin, mock_web)
-        plugin._last_tool_desc["sess-1"] = "`Bash`: `rm -rf /`"
         mock_web.reset_mock()
         mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
 
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
+        plugin._post_permission_prompt("sess-1", "`Bash`: `rm -rf /`", "Allow all (session)")
 
         call_kwargs = mock_web.chat_postMessage.call_args.kwargs
         assert "`Bash`: `rm -rf /`" in call_kwargs["text"]
-
-    def test_tool_desc_cleared_after_post(self, slack_env):
-        factory, _, _ = slack_env
-        plugin, mock_web = factory()
-        _register_session(plugin, mock_web)
-        plugin._last_tool_desc["sess-1"] = "`Bash`: `ls`"
-        mock_web.reset_mock()
-        mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
-
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-
-        assert "sess-1" not in plugin._last_tool_desc
 
     def test_allow_all_label_extracted(self, slack_env):
         factory, _, _ = slack_env
@@ -760,14 +738,35 @@ class TestHandlePtyOutput:
         mock_web.reset_mock()
         mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
 
-        plugin.handle_pty_output("sess-1", "Do you want to allow all edits in Downloads/?")
+        plugin._post_permission_prompt("sess-1", "", "Allow all edits in Downloads/")
 
         call_kwargs = mock_web.chat_postMessage.call_args.kwargs
         blocks = call_kwargs["blocks"]
-        # Find the actions block
         actions = [b for b in blocks if b["type"] == "actions"][0]
         allow_all_btn = [e for e in actions["elements"] if e["action_id"] == "permission_allow_all"][0]
         assert allow_all_btn["text"]["text"] == "Allow all edits in Downloads/"
+
+    @pytest.mark.anyio
+    async def test_permission_prompt_event_triggers_post(self, slack_env):
+        """PermissionPromptEvent from event bus should trigger Slack post."""
+        from cross.events import PermissionPromptEvent
+
+        factory, _, _ = slack_env
+        plugin, mock_web = factory()
+        _register_session(plugin, mock_web)
+        mock_web.reset_mock()
+        mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
+
+        event = PermissionPromptEvent(
+            session_id="sess-1",
+            tool_desc="`Bash`: `ls`",
+            allow_all_label="Allow all Bash",
+        )
+        await plugin.handle_event(event)
+
+        mock_web.chat_postMessage.assert_called_once()
+        call_kwargs = mock_web.chat_postMessage.call_args.kwargs
+        assert "`Bash`: `ls`" in call_kwargs["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -2055,35 +2054,27 @@ class TestEdgeCases:
         # Full 1000-char body should not appear
         assert "x" * 501 not in kwargs["text"]
 
-    def test_debounce_resets_after_interval(self, slack_env):
-        """After the debounce interval, a new permission prompt should post."""
+    def test_duplicate_permission_prompts_post_independently(self, slack_env):
+        """Each call to _post_permission_prompt should post (dedup is in daemon)."""
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         _register_session(plugin, mock_web)
         mock_web.reset_mock()
         mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
 
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        assert mock_web.chat_postMessage.call_count == 1
+        plugin._post_permission_prompt("sess-1", "", "Allow all (session)")
+        plugin._post_permission_prompt("sess-1", "", "Allow all (session)")
+        assert mock_web.chat_postMessage.call_count == 2
 
-        # Simulate time passing past the debounce interval
-        plugin._last_permission_post["sess-1"] -= 10.0
-        mock_web.reset_mock()
-        mock_web.chat_postMessage.return_value = {"ts": "perm_ts2"}
-
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        assert mock_web.chat_postMessage.call_count == 1
-
-    def test_handle_pty_output_default_allow_all_label(self, slack_env):
-        """When extract_allow_all returns None, the default label is used."""
+    def test_post_permission_prompt_default_allow_all_label(self, slack_env):
+        """When no allow_all_label is provided, the default is used."""
         factory, _, _ = slack_env
         plugin, mock_web = factory()
         _register_session(plugin, mock_web)
         mock_web.reset_mock()
         mock_web.chat_postMessage.return_value = {"ts": "perm_ts"}
 
-        # "Do you want to" triggers prompt, but no "allow all" pattern
-        plugin.handle_pty_output("sess-1", "Do you want to proceed?")
+        plugin._post_permission_prompt("sess-1", "", "Allow all (session)")
 
         call_kwargs = mock_web.chat_postMessage.call_args.kwargs
         blocks = call_kwargs["blocks"]

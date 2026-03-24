@@ -4,18 +4,16 @@ import re
 
 
 def is_permission_prompt(text: str) -> bool:
-    """Detect actual Claude Code permission prompts vs TUI redraws.
+    """Detect actual Claude Code permission prompts vs TUI content.
 
-    Requires the specific "Do you want to" prompt structure that Claude Code
-    always shows, rather than broad pattern matching that catches redraws.
+    Requires BOTH the "Do you want to" question AND the numbered options
+    structure together.  Either signal alone can appear in normal conversation
+    text (e.g. the assistant discussing permission prompts), so both must be
+    present to avoid false positives.
     """
-    # "Do you want to" — may appear garbled as "Doyouwant" or "Do you want t"
-    if re.search(r"Do\s*you\s*want\s*t", text, re.IGNORECASE):
-        return True
-    # Numbered options structure: "1. Yes" + "3. No" together
-    if re.search(r"1\.\s*Yes", text) and re.search(r"3\.\s*No", text):
-        return True
-    return False
+    has_question = bool(re.search(r"Do\s*you\s*want\s*t", text, re.IGNORECASE))
+    has_options = bool(re.search(r"1\.\s*Yes", text)) and bool(re.search(r"3\.\s*No", text))
+    return has_question and has_options
 
 
 def extract_allow_all(text: str) -> str | None:

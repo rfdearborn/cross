@@ -292,58 +292,94 @@ def _patch_openclaw_gateway(print_fn) -> bool:
 
 _CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 _HOOK_MARKER = "claude_code_hook.py"
+_PERMISSION_HOOK_MARKER = "permission_hook.py"
 
 
-def _install_claude_code_hook(print_fn) -> bool:
-    """Install cross PreToolUse hook into Claude Code settings.json.
+def _read_claude_settings(print_fn) -> dict | None:
+    """Read and parse Claude Code settings.json, or return None on failure."""
+    if not _CLAUDE_SETTINGS.exists():
+        return {}
+    try:
+        return json.loads(_CLAUDE_SETTINGS.read_text())
+    except (json.JSONDecodeError, OSError):
+        print_fn("  Could not parse existing settings.json, skipping.")
+        return None
 
-    The hook gates Desktop/Cowork sessions through cross's /cross/api/gate
-    endpoint. CLI sessions launched via `cross wrap` are skipped automatically
-    (the hook detects ANTHROPIC_BASE_URL pointing to localhost).
-    """
+
+def _write_claude_settings(settings: dict):
+    """Write Claude Code settings.json."""
+    _CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    _CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def _install_gate_hook(print_fn) -> bool:
+    """Install cross PreToolUse gate hook for Desktop/Cowork sessions."""
     hook_path = Path(__file__).parent / "patches" / "claude_code_hook.py"
     if not hook_path.exists():
         print_fn(f"  Hook file not found: {hook_path}")
         return False
 
-    # Read existing settings
-    settings: dict = {}
-    if _CLAUDE_SETTINGS.exists():
-        try:
-            settings = json.loads(_CLAUDE_SETTINGS.read_text())
-        except (json.JSONDecodeError, OSError):
-            print_fn("  Could not parse existing settings.json, skipping.")
-            return False
+    settings = _read_claude_settings(print_fn)
+    if settings is None:
+        return False
 
-    # Check if already installed
     hooks = settings.get("hooks", {})
     pre_tool_use = hooks.get("PreToolUse", [])
-    for entry in pre_tool_use:
-        for h in entry.get("hooks", []):
-            if _HOOK_MARKER in h.get("command", ""):
-                print_fn("  Claude Code hook already installed.")
-                return True
+    if any(_HOOK_MARKER in h.get("command", "") for entry in pre_tool_use for h in entry.get("hooks", [])):
+        print_fn("  PreToolUse gate hook already installed.")
+        return True
 
-    # Add the hook
-    hook_entry = {
-        "matcher": "",  # all tools
-        "hooks": [
-            {
-                "type": "command",
-                "command": f"python3 {hook_path}",
-                "timeout": 600,
-            }
-        ],
-    }
-    pre_tool_use.append(hook_entry)
+    pre_tool_use.append(
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": f"python3 {hook_path}", "timeout": 600}],
+        }
+    )
     hooks["PreToolUse"] = pre_tool_use
     settings["hooks"] = hooks
+    _write_claude_settings(settings)
+    print_fn("  PreToolUse gate hook installed.")
+    return True
 
-    # Write back
-    _CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    _CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2) + "\n")
-    print_fn(f"  Hook installed in {_CLAUDE_SETTINGS}")
-    print_fn("  Desktop and Cowork sessions will be gated through cross.")
+
+def _install_permission_hook(print_fn) -> bool:
+    """Install cross PermissionRequest notification hook.
+
+    Notifies the daemon when a permission prompt appears, enabling delayed
+    relay to Slack/email/dashboard. Works for both CLI and Desktop sessions.
+    """
+    hook_path = Path(__file__).parent / "patches" / "permission_hook.py"
+    if not hook_path.exists():
+        print_fn(f"  Hook file not found: {hook_path}")
+        return False
+
+    settings = _read_claude_settings(print_fn)
+    if settings is None:
+        return False
+
+    hooks = settings.get("hooks", {})
+    perm_request = hooks.get("PermissionRequest", [])
+    if any(_PERMISSION_HOOK_MARKER in h.get("command", "") for entry in perm_request for h in entry.get("hooks", [])):
+        print_fn("  PermissionRequest hook already installed.")
+        return True
+
+    perm_request.append(
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": f"python3 {hook_path}", "timeout": 10}],
+        }
+    )
+    hooks["PermissionRequest"] = perm_request
+    settings["hooks"] = hooks
+    _write_claude_settings(settings)
+    print_fn("  PermissionRequest hook installed.")
+    return True
+
+
+def _install_claude_code_hook(print_fn) -> bool:
+    """Install both cross hooks (gate + permission). Legacy entry point."""
+    _install_gate_hook(print_fn)
+    _install_permission_hook(print_fn)
     return True
 
 
@@ -358,23 +394,42 @@ def _uninstall_claude_code_hook(print_fn) -> bool:
         return False
 
     hooks = settings.get("hooks", {})
+    changed = False
+
+    # Remove PreToolUse gate hook
     pre_tool_use = hooks.get("PreToolUse", [])
     filtered = [
         entry for entry in pre_tool_use if not any(_HOOK_MARKER in h.get("command", "") for h in entry.get("hooks", []))
     ]
+    if len(filtered) != len(pre_tool_use):
+        changed = True
+        if filtered:
+            hooks["PreToolUse"] = filtered
+        else:
+            hooks.pop("PreToolUse", None)
 
-    if len(filtered) == len(pre_tool_use):
-        return False  # wasn't installed
+    # Remove PermissionRequest hook
+    perm_request = hooks.get("PermissionRequest", [])
+    filtered_perm = [
+        entry
+        for entry in perm_request
+        if not any(_PERMISSION_HOOK_MARKER in h.get("command", "") for h in entry.get("hooks", []))
+    ]
+    if len(filtered_perm) != len(perm_request):
+        changed = True
+        if filtered_perm:
+            hooks["PermissionRequest"] = filtered_perm
+        else:
+            hooks.pop("PermissionRequest", None)
 
-    if filtered:
-        hooks["PreToolUse"] = filtered
-    else:
-        hooks.pop("PreToolUse", None)
+    if not changed:
+        return False
+
     if not hooks:
         settings.pop("hooks", None)
 
     _CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2) + "\n")
-    print_fn("  Claude Code hook removed.")
+    print_fn("  Claude Code hooks removed.")
     return True
 
 
@@ -699,20 +754,28 @@ def run_setup(
                 print_fn(f"  {_build_shell_wrappers(agents)}")
         print_fn("")
 
-    # ── Step 7: Patch OpenClaw Gateway ──
+    # ── Step 7a: Claude Code permission hook (all Claude Code users) ──
+    if "claude" in agents:
+        print_fn("Claude Code detected.")
+        perm_answer = input_fn("Install hook to relay permission prompts to Slack/email? (Y/n): ").strip().lower()
+        if perm_answer not in ("n", "no"):
+            result["permission_hook_installed"] = _install_permission_hook(print_fn)
+        print_fn("")
+
+    # ── Step 7b: Claude Code gate hook (Desktop/Cowork only) ──
+    if sys.platform == "darwin" and _is_claude_desktop_installed():
+        print_fn("Claude Desktop detected.")
+        hook_answer = input_fn("Install hook to gate Desktop/Cowork sessions? (Y/n): ").strip().lower()
+        if hook_answer not in ("n", "no"):
+            result["claude_code_hook_installed"] = _install_gate_hook(print_fn)
+        print_fn("")
+
+    # ── Step 7c: Patch OpenClaw Gateway ──
     if sys.platform == "darwin" and "openclaw" in agents and _OPENCLAW_PLIST.exists():
         print_fn("OpenClaw Gateway detected.")
         patch_answer = input_fn("Patch Gateway to enable cross tool gating? (Y/n): ").strip().lower()
         if patch_answer not in ("n", "no"):
             result["openclaw_patched"] = _patch_openclaw_gateway(print_fn)
-        print_fn("")
-
-    # ── Step 7b: Claude Code hook (Desktop/Cowork) ──
-    if sys.platform == "darwin" and _is_claude_desktop_installed():
-        print_fn("Claude Desktop detected.")
-        hook_answer = input_fn("Install hook to gate Desktop/Cowork sessions? (Y/n): ").strip().lower()
-        if hook_answer not in ("n", "no"):
-            result["claude_code_hook_installed"] = _install_claude_code_hook(print_fn)
         print_fn("")
 
     # ── Step 8: Auto-start daemon ──

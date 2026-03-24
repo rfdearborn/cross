@@ -17,6 +17,7 @@ from cross.events import (
     CrossEvent,
     ErrorEvent,
     GateDecisionEvent,
+    PermissionPromptEvent,
     PermissionResolvedEvent,
     SentinelReviewEvent,
     TextEvent,
@@ -170,9 +171,15 @@ class SlackPlugin:
     def handle_pty_output(self, session_id: str, text: str):
         """Handle cleaned PTY output from a wrap process.
 
-        Only posts high-signal events (permission prompts) to Slack.
-        Regular output is already captured by the network proxy.
+        Permission prompt detection is now centralized in the daemon
+        (via _check_permission_prompt → PermissionPromptEvent), which
+        applies delayed notification logic to avoid false positives from
+        TUI redraws and auto-approved tool calls. This method is kept
+        for future PTY-based signals but no longer detects prompts.
         """
+
+    def _post_permission_prompt(self, session_id: str, tool_desc: str, allow_all_label: str):
+        """Post a permission prompt message to Slack (called from event handler)."""
         with self._lock:
             thread_info = self._threads.get(session_id)
 
@@ -180,28 +187,9 @@ class SlackPlugin:
             return
         channel_id, thread_ts = thread_info
 
-        # Check for permission prompts — require the specific Claude Code prompt
-        # structure, not broad patterns that match TUI redraws
-        if not is_permission_prompt(text):
-            return
-
-        # Debounce — don't spam channel for the same permission prompt
-        import time
-
-        now = time.time()
-        last = self._last_permission_post.get(session_id, 0)
-        if now - last < self._PERMISSION_DEBOUNCE_SECS:
-            return
-        self._last_permission_post[session_id] = now
-
-        # Build permission message with interactive buttons
-        tool_desc = self._last_tool_desc.get(session_id, "")
         prompt_text = "⚠️ *Permission needed*"
         if tool_desc:
             prompt_text += f" for {tool_desc}"
-
-        # Extract the "allow all" option text from the PTY output
-        allow_all_label = extract_allow_all(text) or "Allow all (session)"
 
         blocks = [
             {
@@ -243,8 +231,6 @@ class SlackPlugin:
             blocks=blocks,
         )
         self._permission_pending[session_id] = (channel_id, resp["ts"])
-        # Clear stale tool description so it can't be reused for a false match
-        self._last_tool_desc.pop(session_id, None)
 
     # --- EventBus handler (proxy events) ---
 
@@ -430,6 +416,13 @@ class SlackPlugin:
                         self._conv_threads[resp["ts"]] = conv_id
                         if thread_ts:
                             self._conv_threads[thread_ts] = conv_id
+
+            case PermissionPromptEvent():
+                self._post_permission_prompt(
+                    event.session_id,
+                    event.tool_desc,
+                    event.allow_all_label,
+                )
 
             case PermissionResolvedEvent() if not event.resolver.startswith("slack"):
                 # Permission resolved from another surface (dashboard, terminal, CLI)
@@ -810,9 +803,6 @@ class SlackPlugin:
         if settings.slack_channel_append_user and self._username:
             parts.append(_slugify(self._username))
         return "-".join(parts)[:80]
-
-
-from cross.pty_helpers import extract_allow_all, is_permission_prompt  # noqa: E402, F811
 
 
 def _slugify(text: str) -> str:

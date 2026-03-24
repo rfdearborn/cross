@@ -109,10 +109,15 @@ def _get_email_body(mock_smtp) -> str:
 
 
 class TestIsPermissionPrompt:
-    def test_do_you_want_to(self, email_env):
+    def test_full_prompt(self, email_env):
         from cross.pty_helpers import is_permission_prompt
 
-        assert is_permission_prompt("Do you want to allow this?") is True
+        assert is_permission_prompt("Do you want to allow this?\n1. Yes\n2. Allow all\n3. No") is True
+
+    def test_question_alone_is_not_enough(self, email_env):
+        from cross.pty_helpers import is_permission_prompt
+
+        assert is_permission_prompt("Do you want to allow this?") is False
 
     def test_not_a_prompt(self, email_env):
         from cross.pty_helpers import is_permission_prompt
@@ -302,64 +307,67 @@ class TestSessionEndedFromData:
 
 
 class TestHandlePtyOutput:
-    def test_permission_prompt_sends_email(self, email_env):
+    def test_handle_pty_output_is_noop(self, email_env):
+        """PTY output no longer triggers permission emails directly — centralized in daemon."""
         factory, _, _ = email_env
         plugin, mock_smtp = factory()
         _register_session(plugin)
         mock_smtp.reset_mock()
 
         plugin.handle_pty_output("sess-1", "Do you want to allow this? 1. Yes 2. Allow all 3. No")
+        mock_smtp.sendmail.assert_not_called()
+
+
+class TestPostPermissionPrompt:
+    def test_permission_prompt_sends_email(self, email_env):
+        factory, _, _ = email_env
+        plugin, mock_smtp = factory()
+        _register_session(plugin)
+        mock_smtp.reset_mock()
+
+        plugin._post_permission_prompt("sess-1", "", "Allow all (session)")
         mock_smtp.sendmail.assert_called_once()
         body = _get_email_body(mock_smtp)
         assert "Permission needed" in body
         assert "APPROVE" in body
         assert "sess-1" in plugin._permission_pending
 
-    def test_non_permission_text_ignored(self, email_env):
-        factory, _, _ = email_env
-        plugin, mock_smtp = factory()
-        _register_session(plugin)
-        mock_smtp.reset_mock()
-
-        plugin.handle_pty_output("sess-1", "Compiling project...")
-        mock_smtp.sendmail.assert_not_called()
-
     def test_no_thread_returns(self, email_env):
         factory, _, _ = email_env
         plugin, mock_smtp = factory()
-        plugin.handle_pty_output("unknown", "Do you want to proceed?")
+        plugin._post_permission_prompt("unknown", "", "Allow all (session)")
         mock_smtp.sendmail.assert_not_called()
-
-    def test_debounce(self, email_env):
-        factory, _, _ = email_env
-        plugin, mock_smtp = factory()
-        _register_session(plugin)
-        mock_smtp.reset_mock()
-
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        assert mock_smtp.sendmail.call_count == 1
 
     def test_tool_desc_included(self, email_env):
         factory, _, _ = email_env
         plugin, mock_smtp = factory()
         _register_session(plugin)
-        plugin._last_tool_desc["sess-1"] = "`Bash`: `rm -rf /`"
         mock_smtp.reset_mock()
 
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
+        plugin._post_permission_prompt("sess-1", "`Bash`: `rm -rf /`", "Allow all (session)")
         body = _get_email_body(mock_smtp)
         assert "Bash" in body
 
-    def test_tool_desc_cleared_after_post(self, email_env):
+    @pytest.mark.anyio
+    async def test_permission_prompt_event_triggers_email(self, email_env):
+        """PermissionPromptEvent from event bus should trigger email."""
+        from cross.events import PermissionPromptEvent
+
         factory, _, _ = email_env
         plugin, mock_smtp = factory()
         _register_session(plugin)
-        plugin._last_tool_desc["sess-1"] = "`Bash`: `ls`"
         mock_smtp.reset_mock()
 
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        assert "sess-1" not in plugin._last_tool_desc
+        event = PermissionPromptEvent(
+            session_id="sess-1",
+            tool_desc="`Bash`: `ls`",
+            allow_all_label="Allow all Bash",
+        )
+        await plugin.handle_event(event)
+
+        mock_smtp.sendmail.assert_called_once()
+        body = _get_email_body(mock_smtp)
+        assert "`Bash`: `ls`" in body
 
 
 # ---------------------------------------------------------------------------
@@ -791,18 +799,13 @@ class TestEdgeCases:
         # No threads = no in_reply_to, but still sends
         mock_smtp.sendmail.assert_called_once()
 
-    def test_debounce_resets_after_interval(self, email_env):
+    def test_duplicate_permission_prompts_post_independently(self, email_env):
+        """Each call to _post_permission_prompt should post (dedup is in daemon)."""
         factory, _, _ = email_env
         plugin, mock_smtp = factory()
         _register_session(plugin)
         mock_smtp.reset_mock()
 
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        assert mock_smtp.sendmail.call_count == 1
-
-        # Simulate time passing past the debounce interval
-        plugin._last_permission_post["sess-1"] -= 10.0
-        mock_smtp.reset_mock()
-
-        plugin.handle_pty_output("sess-1", "Do you want to allow this?")
-        assert mock_smtp.sendmail.call_count == 1
+        plugin._post_permission_prompt("sess-1", "", "Allow all (session)")
+        plugin._post_permission_prompt("sess-1", "", "Allow all (session)")
+        assert mock_smtp.sendmail.call_count == 2

@@ -244,8 +244,8 @@ class TestRunSetupDefaultModel:
         shell_rc.write_text("# existing content\n")
         mock_shell_rc.return_value = shell_rc
 
-        # "" gate (default cli/claude, no key), "" sentinel, "" interval, N email, N slack, Y wrappers
-        inputs = iter(["", "", "", "N", "N", "Y", "Y"])
+        # "" gate, "" sentinel, "" interval, N email, N slack, Y wrappers, Y perm hook
+        inputs = iter(["", "", "", "N", "N", "Y", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -653,7 +653,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "N", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -677,7 +677,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text(f'# existing\n{SHELL_WRAPPER_HEADER}\nclaude() {{ cross wrap -- claude "$@"; }}\n')
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "N", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -700,7 +700,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "N", "n", "Y"])
+        inputs = iter(["none", "N", "N", "n", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -719,7 +719,7 @@ class TestRunSetupShellWrappers:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "N", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -864,7 +864,7 @@ class TestRunSetupSummaryOutput:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "N", "n", "Y"])
+        inputs = iter(["none", "N", "N", "n", "Y", "Y"])
 
         output = []
         run_setup(
@@ -996,7 +996,7 @@ class TestInstallClaudeCodeHook:
 class TestClaudeCodeHookSetupStep:
     """Test the setup wizard step for Claude Desktop hook installation."""
 
-    @patch("cross.setup._install_claude_code_hook", return_value=True)
+    @patch("cross.setup._install_gate_hook", return_value=True)
     @patch("cross.setup._is_claude_desktop_installed", return_value=True)
     @patch("cross.setup._detect_agents", return_value=[])
     @patch("cross.setup.sys")
