@@ -143,15 +143,16 @@ class TestTwoStageChain:
         assert result.action == Action.ESCALATE
 
     @pytest.mark.anyio
-    async def test_review_abstain_keeps_stage1(self):
-        """If review abstains, stage 1 result stands."""
+    async def test_review_abstain_promotes_to_escalate(self):
+        """If review abstains on a REVIEW, promote to ESCALATE (human should decide)."""
         chain = GateChain(
             gates=[StubGate(Action.REVIEW, name="denylist", reason="original reason")],
             review_gate=StubGate(Action.ABSTAIN, name="review"),
         )
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
-        assert result.action == Action.REVIEW
+        assert result.action == Action.ESCALATE
         assert result.reason == "original reason"
+        assert result.metadata["promoted_from"] == "REVIEW"
 
     @pytest.mark.anyio
     async def test_review_receives_prior_result(self):
@@ -187,26 +188,39 @@ class TestTwoStageChain:
         assert result.action == Action.BLOCK
 
     @pytest.mark.anyio
-    async def test_review_timeout_keeps_stage1(self):
-        """If review gate times out, stage 1 result stands."""
+    async def test_review_timeout_promotes_to_escalate(self):
+        """If review gate times out on REVIEW, promote to ESCALATE."""
         chain = GateChain(
             gates=[StubGate(Action.REVIEW, name="denylist", reason="original")],
             review_gate=SlowGate(delay_s=5.0, name="slow_review"),
         )
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
-        assert result.action == Action.REVIEW
+        assert result.action == Action.ESCALATE
         assert result.reason == "original"
+        assert result.metadata["promoted_from"] == "REVIEW"
 
     @pytest.mark.anyio
-    async def test_review_error_keeps_stage1(self):
-        """If review gate errors, stage 1 result stands."""
+    async def test_review_error_promotes_to_escalate(self):
+        """If review gate errors on REVIEW, promote to ESCALATE."""
         chain = GateChain(
             gates=[StubGate(Action.REVIEW, name="denylist", reason="original")],
             review_gate=ErrorGate(name="broken_review"),
         )
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
-        assert result.action == Action.REVIEW
+        assert result.action == Action.ESCALATE
         assert result.reason == "original"
+        assert result.metadata["promoted_from"] == "REVIEW"
+
+    @pytest.mark.anyio
+    async def test_review_gate_returning_review_promotes_to_escalate(self):
+        """If the review gate itself returns REVIEW, clamp to ESCALATE."""
+        chain = GateChain(
+            gates=[StubGate(Action.REVIEW, name="denylist", reason="flagged")],
+            review_gate=StubGate(Action.REVIEW, name="llm", reason="unsure"),
+        )
+        result = await chain.evaluate(GateRequest(tool_name="Bash"))
+        assert result.action == Action.ESCALATE
+        assert result.metadata["promoted_from"] == "REVIEW"
 
 
 class TestAdvisoryReview:
@@ -409,7 +423,7 @@ class TestShadowMode:
 
     @pytest.mark.anyio
     async def test_shadow_does_not_affect_abstain(self):
-        """If LLM abstains, shadow mode doesn't apply — stage 1 result stands."""
+        """If LLM abstains, shadow mode doesn't apply — REVIEW promotes to ESCALATE."""
         chain = GateChain(
             gates=[StubGate(Action.REVIEW, name="denylist", reason="flagged")],
             review_gate=StubGate(Action.ABSTAIN, name="llm"),
@@ -417,7 +431,7 @@ class TestShadowMode:
         with unittest.mock.patch.object(settings, "llm_gate_shadow", True):
             result = await chain.evaluate(GateRequest(tool_name="Bash"))
 
-        assert result.action == Action.REVIEW  # stage 1 stands
+        assert result.action == Action.ESCALATE  # promoted from REVIEW
 
     @pytest.mark.anyio
     async def test_shadow_does_not_affect_below_review(self):

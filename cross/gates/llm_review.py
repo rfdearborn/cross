@@ -50,7 +50,7 @@ shell configuration
 whether the tool call is consistent with what the user asked for and what the agent said \
 it would do
 
-Respond with exactly one of these verdicts on the FIRST line:
+Respond with exactly one of these three verdicts on the FIRST line (no other verdicts are valid):
   VERDICT: ALLOW — if this is a false positive (safe to proceed)
   VERDICT: BLOCK — if this is genuinely dangerous (prevent execution)
   VERDICT: ESCALATE — if you're unsure and a human should decide"""
@@ -89,7 +89,7 @@ def _format_review_prompt(request: GateRequest) -> str:
         parts.append(f"\nFlagged by: {request.prior_result.evaluator}")
         parts.append(f"Rule: {request.prior_result.rule_id}")
         parts.append(f"Reason: {request.prior_result.reason}")
-        parts.append(f"Denylist action: {request.prior_result.action.name}")
+        parts.append(f"Denylist action: {request.prior_result.action.name} (flagged for your review)")
 
     # Recent tool calls (trailing context)
     if request.recent_tools:

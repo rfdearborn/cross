@@ -46,7 +46,21 @@ class GateChain:
             review_result = await self._run_review(request, stage1_result)
             if review_result is not None:
                 return review_result
-            # ABSTAIN/error → stage 1 stands
+            # ABSTAIN/error: if stage 1 was REVIEW (i.e. "needs LLM judgment"),
+            # promote to ESCALATE — the LLM couldn't decide, so a human should.
+            # For higher actions (ESCALATE/BLOCK/HALT_SESSION) the stage-1 result
+            # already stands at the right severity.
+            if stage1_result.action == Action.REVIEW:
+                logger.warning("LLM review unavailable for REVIEW-level result, promoting to ESCALATE")
+                return EvaluationResponse(
+                    action=Action.ESCALATE,
+                    reason=stage1_result.reason,
+                    rule_id=stage1_result.rule_id,
+                    evaluator=stage1_result.evaluator,
+                    confidence=stage1_result.confidence,
+                    duration_ms=stage1_result.duration_ms,
+                    metadata={"promoted_from": "REVIEW", "reason": "LLM review unavailable"},
+                )
 
         return stage1_result
 
@@ -139,6 +153,17 @@ class GateChain:
 
         # For REVIEW: LLM has decision power — its verdict overrides stage 1
         if stage1_result.action == Action.REVIEW:
+            # Guard: review gate must not return REVIEW itself (would leak through)
+            if resp.action == Action.REVIEW:
+                logger.warning("Review gate returned REVIEW — promoting to ESCALATE")
+                resp = EvaluationResponse(
+                    action=Action.ESCALATE,
+                    reason=resp.reason,
+                    evaluator=resp.evaluator,
+                    confidence=resp.confidence,
+                    duration_ms=resp.duration_ms,
+                    metadata={"promoted_from": "REVIEW", "reason": "review gate returned REVIEW"},
+                )
             logger.info(
                 f"Review gate overrides stage-1 ({stage1_result.action.name} → {resp.action.name}): {resp.reason[:100]}"
             )
