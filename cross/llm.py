@@ -331,6 +331,8 @@ async def _complete_cli(
     strip_keys = {"ANTHROPIC_API_KEY"} if cross_settings.cli_strip_anthropic_api_key else set()
     env = {k: v for k, v in os.environ.items() if not k.startswith("CROSS_") and k not in strip_keys}
     env["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+    # Signal to hooks that this is an internal cross LLM call, not a monitored session
+    env["CROSS_INTERNAL"] = "1"
 
     model_desc = f" --model {model_flag}" if model_flag else ""
     logger.debug(f"CLI invoke: {cmd} -p{model_desc} (prompt length {len(prompt)})")

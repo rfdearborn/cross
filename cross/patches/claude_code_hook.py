@@ -27,10 +27,16 @@ MAX_INTENT_CHARS = int(os.environ.get("CROSS_LLM_GATE_CONTEXT_INTENT_CHARS", "50
 _SKIP_PREFIXES = ("<system-reminder>", "[Request interrupted by user]", "Conversation info")
 
 
-def _is_already_proxied() -> bool:
-    """Check if this session is already routed through cross's proxy."""
+def _should_skip() -> bool:
+    """Check if this session should skip gating."""
+    # Already proxied via `cross wrap`
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
-    return "localhost" in base_url or "127.0.0.1" in base_url
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        return True
+    # Internal cross LLM call (gate/sentinel subprocess)
+    if os.environ.get("CROSS_INTERNAL"):
+        return True
+    return False
 
 
 def _extract_text(content) -> str:
@@ -96,8 +102,8 @@ def _read_transcript(transcript_path: str) -> tuple[list[dict[str, str]], str]:
 
 
 def main() -> None:
-    # Skip if already proxied via `cross wrap`
-    if _is_already_proxied():
+    # Skip gating for proxied sessions and internal cross LLM calls
+    if _should_skip():
         sys.exit(0)
 
     try:

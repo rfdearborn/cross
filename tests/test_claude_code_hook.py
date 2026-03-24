@@ -57,13 +57,17 @@ def _run_hook(
     return proc.returncode, proc.stdout, proc.stderr
 
 
-class TestHookSkipIfProxied:
+class TestHookSkip:
     def test_skips_when_base_url_is_localhost(self):
         exit_code, _, _ = _run_hook(env_override={"ANTHROPIC_BASE_URL": "http://localhost:2767"})
         assert exit_code == 0
 
     def test_skips_when_base_url_is_127(self):
         exit_code, _, _ = _run_hook(env_override={"ANTHROPIC_BASE_URL": "http://127.0.0.1:2767"})
+        assert exit_code == 0
+
+    def test_skips_when_cross_internal(self):
+        exit_code, _, _ = _run_hook(env_override={"CROSS_INTERNAL": "1"})
         assert exit_code == 0
 
 
