@@ -20,9 +20,10 @@ CROSS_PORT = os.environ.get("CROSS_LISTEN_PORT", "2767")
 GATE_URL = f"http://localhost:{CROSS_PORT}/cross/api/gate"
 TIMEOUT_S = 300  # 5 minutes — allows for human escalation review
 
+# Defaults match cross/config.py Settings; hooks read env vars since they can't import cross.
 MAX_CONV_TURNS = int(os.environ.get("CROSS_LLM_GATE_CONTEXT_TURNS", "5"))
-MAX_CHARS_PER_TURN = 300
-MAX_INTENT_CHARS = 500
+MAX_CHARS_PER_TURN = int(os.environ.get("CROSS_LLM_GATE_CONTEXT_CHARS_PER_TURN", "300"))
+MAX_INTENT_CHARS = int(os.environ.get("CROSS_LLM_GATE_CONTEXT_INTENT_CHARS", "500"))
 _SKIP_PREFIXES = ("<system-reminder>", "[Request interrupted by user]", "Conversation info")
 
 

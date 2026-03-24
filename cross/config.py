@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     llm_gate_timeout_ms: float = 30000  # max wait for LLM response before falling back
     llm_gate_context_tools: int = 3  # number of recent tool calls to include in LLM review
     llm_gate_context_turns: int = 5  # number of recent conversation turns to include in LLM review
+    llm_gate_context_chars_per_turn: int = 300  # max characters per conversation turn
+    llm_gate_context_intent_chars: int = 500  # max characters for user intent extraction
     llm_gate_justification: bool = False  # include explanation after verdict (costs tokens)
     llm_gate_shadow: bool = False  # LLM decides but human makes the final call
     gate_approval_timeout: int = 300  # seconds to wait for human approval on escalation

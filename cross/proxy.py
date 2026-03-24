@@ -107,7 +107,7 @@ def get_client() -> httpx.AsyncClient:
     return _client
 
 
-_SKIP_PREFIXES = ("<system-reminder>", "[Request interrupted by user]")
+_SKIP_PREFIXES = ("<system-reminder>", "[Request interrupted by user]", "Conversation info")
 
 
 def _extract_user_intent(req_data: dict) -> str:
@@ -119,13 +119,13 @@ def _extract_user_intent(req_data: dict) -> str:
         content = msg.get("content", "")
         if isinstance(content, str):
             if content and not content.startswith(_SKIP_PREFIXES):
-                return content[:500]
+                return content[: settings.llm_gate_context_intent_chars]
         elif isinstance(content, list):
             for b in reversed(content):
                 if b.get("type") == "text":
                     text = b.get("text", "")
                     if text and not text.startswith(_SKIP_PREFIXES):
-                        return text[:500]
+                        return text[: settings.llm_gate_context_intent_chars]
         return ""
     return ""
 
@@ -133,7 +133,7 @@ def _extract_user_intent(req_data: dict) -> str:
 def _extract_conversation_context(
     req_data: dict,
     max_turns: int | None = None,
-    max_chars_per_turn: int = 300,
+    max_chars_per_turn: int | None = None,
 ) -> list[dict[str, str]]:
     """Extract recent user/assistant text exchanges from the messages array.
 
@@ -142,6 +142,8 @@ def _extract_conversation_context(
     """
     if max_turns is None:
         max_turns = settings.llm_gate_context_turns
+    if max_chars_per_turn is None:
+        max_chars_per_turn = settings.llm_gate_context_chars_per_turn
     msgs = req_data.get("messages", [])
     turns: list[dict[str, str]] = []
 

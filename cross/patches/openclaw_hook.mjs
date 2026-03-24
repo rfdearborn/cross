@@ -18,9 +18,10 @@ const CROSS_PORT = process.env.CROSS_LISTEN_PORT || '2767';
 const SESSION_ID = process.env.CROSS_SESSION_ID || '';
 const TIMEOUT_MS = 300000; // 5 minutes — allows for human escalation review
 
-const MAX_CONV_TURNS = 5;
-const MAX_CHARS_PER_TURN = 300;
-const MAX_INTENT_CHARS = 500;
+// Defaults match cross/config.py Settings; hooks read env vars since they can't import cross.
+const MAX_CONV_TURNS = parseInt(process.env.CROSS_LLM_GATE_CONTEXT_TURNS || '5', 10);
+const MAX_CHARS_PER_TURN = parseInt(process.env.CROSS_LLM_GATE_CONTEXT_CHARS_PER_TURN || '300', 10);
+const MAX_INTENT_CHARS = parseInt(process.env.CROSS_LLM_GATE_CONTEXT_INTENT_CHARS || '500', 10);
 const SKIP_PREFIXES = ['<system-reminder>', '[Request interrupted by user]', 'Conversation info'];
 
 let patched = false;
