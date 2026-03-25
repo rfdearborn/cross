@@ -475,12 +475,16 @@ async def _proxy_simple(
     resp = await client.request(method, path, headers=headers, content=body)
 
     if resp.status_code >= 400:
-        await event_bus.publish(
-            ErrorEvent(
-                status_code=resp.status_code,
-                body=resp.text[:500],
+        # Claude Code sends HEAD /s/<session_id> at session start as a
+        # registration ping.  Anthropic returns 404 for this — it's harmless.
+        is_session_ping = method == "HEAD" and resp.status_code == 404
+        if not is_session_ping:
+            await event_bus.publish(
+                ErrorEvent(
+                    status_code=resp.status_code,
+                    body=resp.text[:500],
+                )
             )
-        )
 
     content = resp.content
 
