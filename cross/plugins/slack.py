@@ -337,9 +337,9 @@ class SlackPlugin:
                         )
                     except Exception as e:
                         logger.warning(f"Failed to update gate escalation message: {e}")
-                elif event.action in ("block", "escalate", "alert"):
+                elif event.action in ("block", "escalate", "alert", "halt_session"):
                     # New gate decision (not resolving a pending escalation) — post to channel
-                    icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔"}.get(event.action, "❓")
+                    icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔", "halt_session": "🚨"}.get(event.action, "❓")
                     text = f"{icon} *Gate {event.action.upper()}*: `{event.tool_name}`"
                     if event.reason:
                         text += f"\n>{event.reason[:300]}"
@@ -353,7 +353,7 @@ class SlackPlugin:
                         "channel": channel_id,
                         "thread_ts": thread_ts,
                         "text": text,
-                        "reply_broadcast": event.action in ("block", "escalate"),
+                        "reply_broadcast": event.action in ("block", "escalate", "halt_session"),
                     }
 
                     # Add Allow/Deny buttons for escalations

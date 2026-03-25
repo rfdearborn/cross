@@ -213,8 +213,8 @@ class EmailPlugin:
                         in_reply_to=pending_msg_id,
                         thread_session_id=session_id,
                     )
-                elif event.action in ("block", "escalate", "alert"):
-                    icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔"}.get(event.action, "❓")
+                elif event.action in ("block", "escalate", "alert", "halt_session"):
+                    icon = {"block": "🛑", "escalate": "⚠️", "alert": "🔔", "halt_session": "🚨"}.get(event.action, "❓")
                     body = f"{icon} Gate {event.action.upper()}: {event.tool_name}"
                     if event.reason:
                         body += f"\nReason: {event.reason[:300]}"
