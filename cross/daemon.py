@@ -334,11 +334,14 @@ async def _delayed_permission_notify(session_id: str, tool_desc: str):
     """Wait, then publish the permission notification if still pending."""
     await asyncio.sleep(_PERMISSION_NOTIFY_DELAY)
 
-    if not _permission_pending.pop(session_id, None):
+    if session_id not in _permission_pending:
         logger.debug(f"Permission prompt for {session_id} resolved before delay elapsed")
         return
 
     # Still pending after delay — user hasn't acted, send notification
+    # Keep the entry but mark as notified so resolve_permission can still find it
+    # and _clear_permission_on_activity won't clear it prematurely
+    _permission_pending[session_id]["notified"] = True
     logger.info(f"Permission prompt still pending for {session_id} after {_PERMISSION_NOTIFY_DELAY}s, notifying")
     await event_bus.publish(
         PermissionPromptEvent(
@@ -408,6 +411,10 @@ async def _clear_permission_on_activity(event):
     """Clear pending permission when new activity arrives (user approved in terminal)."""
     session_id = getattr(event, "session_id", "")
     if not session_id or session_id not in _permission_pending:
+        return
+    # Don't auto-clear if notification already sent — user may be clicking Approve
+    info = _permission_pending.get(session_id, {})
+    if info.get("notified"):
         return
     # A new request or tool use means the user approved the permission in terminal
     if isinstance(event, (RequestEvent, ToolUseEvent)):
