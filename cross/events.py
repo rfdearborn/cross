@@ -112,6 +112,8 @@ class SentinelReviewEvent:
     evaluator: str = ""
     review_id: str = ""  # unique ID for conversation threading
     event_window_text: str = ""  # formatted event window for conversation context
+    agent: str = ""  # dominant agent in the review window (for Slack routing)
+    session_id: str = ""
     # Original LLM evaluation conversation (for seeding follow-ups)
     eval_system_prompt: str = ""
     eval_user_message: str = ""

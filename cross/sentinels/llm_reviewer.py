@@ -18,7 +18,7 @@ import logging
 import re
 import time
 import uuid
-from collections import deque
+from collections import Counter, deque
 from typing import Any
 
 from cross.custom_instructions import format_instructions_block
@@ -159,6 +159,23 @@ def _parse_sentinel_response(text: str) -> tuple[Action, str, str]:
     return action, summary, concerns
 
 
+def _dominant_agent(events: list[dict[str, Any]]) -> tuple[str, str]:
+    """Return the (agent, session_id) that appears most often in the events."""
+    agents: Counter[str] = Counter()
+    sessions: dict[str, str] = {}  # agent -> most recent session_id
+    for ev in events:
+        agent = ev.get("agent", "")
+        if agent:
+            agents[agent] += 1
+            sid = ev.get("session_id", "")
+            if sid:
+                sessions[agent] = sid
+    if not agents:
+        return "", ""
+    top_agent = agents.most_common(1)[0][0]
+    return top_agent, sessions.get(top_agent, "")
+
+
 class LLMSentinel(Sentinel):
     """Async LLM reviewer that periodically reviews all agent activity."""
 
@@ -201,6 +218,10 @@ class LLMSentinel(Sentinel):
                 "input": event.input,
                 "ts": time.time(),
             }
+            if event.agent:
+                entry["agent"] = event.agent
+            if event.session_id:
+                entry["session_id"] = event.session_id
             if event.script_contents:
                 entry["script_contents"] = event.script_contents
             self._events.append(entry)
@@ -225,6 +246,10 @@ class LLMSentinel(Sentinel):
                 "evaluator": event.evaluator,
                 "ts": time.time(),
             }
+            if event.agent:
+                gate_entry["agent"] = event.agent
+            if event.session_id:
+                gate_entry["session_id"] = event.session_id
             if event.tool_input:
                 gate_entry["input"] = event.tool_input
             if event.script_contents:
@@ -290,6 +315,7 @@ class LLMSentinel(Sentinel):
             return None
 
         review_id = uuid.uuid4().hex[:12]
+        agent, session_id = _dominant_agent(events)
 
         # Build evaluation response
         response = EvaluationResponse(
@@ -313,6 +339,8 @@ class LLMSentinel(Sentinel):
                 evaluator=self.name,
                 review_id=review_id,
                 event_window_text=user_message,
+                agent=agent,
+                session_id=session_id,
                 eval_system_prompt=system,
                 eval_user_message=user_message,
                 eval_response_text=text,
