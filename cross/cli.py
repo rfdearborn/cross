@@ -210,7 +210,7 @@ def _run_update(local_path: str | None = None, from_head: bool = False) -> int:
 
     if new_version and new_version != old_version:
         print(f"Updated cross: {old_version} -> {new_version}")
-    else:
+    elif not local_path:
         print(f"cross is already up to date ({new_version or old_version}).")
     return 0
 
