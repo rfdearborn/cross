@@ -19,7 +19,7 @@ import re
 
 from cross.custom_instructions import format_instructions_block
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
-from cross.llm import LLMConfig, complete
+from cross.llm import LLMConfig, complete, complete_with_fallback
 
 logger = logging.getLogger("cross.gates.llm_review")
 
@@ -157,9 +157,11 @@ class LLMReviewGate(Gate):
         timeout_ms: float = 30000,
         justification: bool = False,
         get_custom_instructions: callable | None = None,
+        backup_config: LLMConfig | None = None,
     ):
         super().__init__(name="llm_review")
         self.config = config
+        self.backup_config = backup_config
         self.timeout_ms = timeout_ms
         self.justification = justification
         self.on_error = Action.ABSTAIN  # fall back to denylist verdict
@@ -175,7 +177,9 @@ class LLMReviewGate(Gate):
         if self._get_custom_instructions:
             system += format_instructions_block(self._get_custom_instructions())
         timeout_s = self.timeout_ms / 1000.0
-        text = await complete(self.config, system=system, messages=messages, timeout_s=timeout_s)
+        text = await complete_with_fallback(
+            self.config, self.backup_config, system=system, messages=messages, timeout_s=timeout_s
+        )
 
         if text is None:
             logger.warning("LLM review returned no response, abstaining")

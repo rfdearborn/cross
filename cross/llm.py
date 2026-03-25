@@ -281,6 +281,25 @@ async def _complete_openai(
         return None
 
 
+async def complete_with_fallback(
+    config: LLMConfig,
+    backup_config: LLMConfig | None,
+    system: str,
+    messages: list[dict],
+    timeout_s: float = 30.0,
+) -> str | None:
+    """Try primary config, fall back to backup on failure. Returns text or None."""
+    result = await complete(config, system, messages, timeout_s)
+    if result is not None:
+        return result
+
+    if backup_config and backup_config.model:
+        logger.info(f"Primary model '{config.model}' failed, falling back to backup '{backup_config.model}'")
+        return await complete(backup_config, system, messages, timeout_s)
+
+    return None
+
+
 def _build_cli_prompt(system: str, messages: list[dict]) -> str:
     """Flatten system prompt + messages into a single prompt string for CLI mode."""
     parts: list[str] = []

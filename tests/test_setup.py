@@ -244,8 +244,8 @@ class TestRunSetupDefaultModel:
         shell_rc.write_text("# existing content\n")
         mock_shell_rc.return_value = shell_rc
 
-        # "" gate, "" sentinel, "" interval, N email, N slack, Y wrappers, Y perm hook
-        inputs = iter(["", "", "", "N", "N", "Y", "Y", "Y"])
+        # "" gate, "none" gate backup, "" sentinel, "" interval, "none" sentinel backup, N email, N slack, Y wrappers, Y perm hook
+        inputs = iter(["", "none", "", "", "none", "N", "N", "Y", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -282,8 +282,8 @@ class TestRunSetupAnthropicModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # anthropic model, "" sentinel (same), "" interval, N email, N slack
-        inputs = iter(["anthropic/claude-haiku-4-5", "", "", "N", "N", "Y"])
+        # anthropic model, "none" gate backup, "" sentinel (same), "" interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["anthropic/claude-haiku-4-5", "none", "", "", "none", "N", "N", "Y"])
         secrets = iter(["sk-ant-test-key"])
 
         output = []
@@ -309,7 +309,7 @@ class TestRunSetupOpenAIModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["openai/gpt-5-mini", "", "", "N", "N", "Y"])
+        inputs = iter(["openai/gpt-5-mini", "none", "", "", "none", "N", "N", "Y"])
         secrets = iter(["sk-openai-test"])
 
         output = []
@@ -334,8 +334,8 @@ class TestRunSetupOllamaModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # ollama gate, "" sentinel (same), "" interval, N email, N slack
-        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "N", "Y"])
+        # ollama gate, "none" gate backup, "" sentinel (same), "" interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["ollama/llama3.1:8b", "none", "", "", "none", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -356,7 +356,7 @@ class TestRunSetupOllamaModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["ollama/llama3.1:8b", "", "", "N", "N", "Y"])
+        inputs = iter(["ollama/llama3.1:8b", "none", "", "", "none", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -381,8 +381,8 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # cli/claude gate, google sentinel (different provider, asks for key), 120s, N email, N slack
-        inputs = iter(["", "google/gemini-2.5-flash", "120", "N", "N", "Y"])
+        # cli/claude gate, "none" gate backup, google sentinel (different provider, asks for key), 120s, "none" sentinel backup, N email, N slack
+        inputs = iter(["", "none", "google/gemini-2.5-flash", "120", "none", "N", "N", "Y"])
         secrets = iter(["google-key"])
 
         output = []
@@ -407,8 +407,8 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # cli/claude gate, anthropic sentinel (different provider, asks for key), "" interval, N email, N slack
-        inputs = iter(["", "anthropic/claude-haiku-4-5", "", "N", "N", "Y"])
+        # cli/claude gate, "none" gate backup, anthropic sentinel (different provider, asks for key), "" interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["", "none", "anthropic/claude-haiku-4-5", "", "none", "N", "N", "Y"])
         secrets = iter(["ant-key"])
 
         output = []
@@ -432,8 +432,8 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # default gate (cli/claude, no key prompt), "" sentinel (same), 300s interval, N email, N slack
-        inputs = iter(["", "", "300", "N", "N", "Y"])
+        # default gate (cli/claude, no key prompt), "none" gate backup, "" sentinel (same), 300s interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["", "none", "", "300", "none", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -452,8 +452,8 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # default gate (cli/claude, no key prompt), "" sentinel (same), "abc" interval, N email, N slack
-        inputs = iter(["", "", "abc", "N", "N", "Y"])
+        # default gate (cli/claude, no key prompt), "none" gate backup, "" sentinel (same), "abc" interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["", "none", "", "abc", "none", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -526,8 +526,8 @@ class TestRunSetupEmptyApiKey:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # Explicit google model, empty key (env fallback), "" sentinel, "" interval, N email, N slack
-        inputs = iter(["google/gemini-3-flash-preview", "", "", "N", "N", "Y"])
+        # Explicit google model, empty key (env fallback), "none" gate backup, "" sentinel, "" interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["google/gemini-3-flash-preview", "none", "", "", "none", "N", "N", "Y"])
         secrets = iter([""])  # empty key
 
         output = []
@@ -789,7 +789,7 @@ class TestRunSetupCustomModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["google/gemini-2.5-flash", "", "", "N", "N", "Y"])
+        inputs = iter(["google/gemini-2.5-flash", "none", "", "", "none", "N", "N", "Y"])
         secrets = iter(["my-key"])
 
         output = []
@@ -815,8 +815,8 @@ class TestRunSetupClaudeModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "claude" gate model → cli/claude, no key prompt, "" sentinel (same), "" interval, N email, N slack
-        inputs = iter(["claude", "", "", "N", "N", "Y"])
+        # "claude" gate model → cli/claude, no key prompt, "none" gate backup, "" sentinel (same), "" interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["claude", "none", "", "", "none", "N", "N", "Y"])
 
         output = []
         result = run_setup(
@@ -839,8 +839,8 @@ class TestRunSetupClaudeModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "cli/claude" gate model, no key prompt, "" sentinel (same), "" interval, N email, N slack
-        inputs = iter(["cli/claude", "", "", "N", "N", "Y"])
+        # "cli/claude" gate model, no key prompt, "none" gate backup, "" sentinel (same), "" interval, "none" sentinel backup, N email, N slack
+        inputs = iter(["cli/claude", "none", "", "", "none", "N", "N", "Y"])
 
         output = []
         result = run_setup(
