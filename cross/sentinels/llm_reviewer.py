@@ -197,6 +197,7 @@ class LLMSentinel(Sentinel):
         interval_seconds: int = 60,
         max_events: int = 100,
         get_custom_instructions: callable | None = None,
+        seed_events: list[dict[str, Any]] | None = None,
     ):
         super().__init__(name="llm_sentinel")
         self.config = config
@@ -207,6 +208,12 @@ class LLMSentinel(Sentinel):
         self._task: asyncio.Task | None = None
         self._running = False
         self._last_review_time: float = 0.0
+
+        # Seed with persisted events from a previous daemon run
+        if seed_events:
+            for ev in seed_events:
+                self._events.append(ev)
+            logger.info(f"Sentinel seeded with {len(seed_events)} events from previous run")
 
     async def observe(self, event: CrossEvent) -> None:
         """Accumulate events for periodic review. Never blocks."""
@@ -282,6 +289,10 @@ class LLMSentinel(Sentinel):
             self._task.cancel()
             self._task = None
         logger.info("Sentinel stopped")
+
+    def get_events(self) -> list[dict[str, Any]]:
+        """Return a copy of the current event window (for persistence)."""
+        return list(self._events)
 
     async def _review_loop(self) -> None:
         """Periodically review accumulated events."""
