@@ -234,31 +234,30 @@ class SlackPlugin:
 
     # --- EventBus handler (proxy events) ---
 
-    async def handle_event(self, event: CrossEvent):
-        """Handle events from the network proxy EventBus.
+    def _resolve_thread(self, event_agent: str, event_session: str, create_daily: bool = False):
+        """Resolve (session_id, thread_info) for an event.
 
-        Only relays high-signal events: gate decisions (block/alert/escalate),
-        sentinel reviews (alert/escalate/halt), and errors. Full conversation
-        relay is handled by the JSONL logger, not Slack.
+        Args:
+            event_agent: Agent label from the event.
+            event_session: Session ID from the event.
+            create_daily: If True and no session thread exists, create a daily
+                thread header for the agent.  Only pass True when the caller
+                will actually post a Slack message, to avoid spurious top-level
+                messages from events that only update internal state.
         """
-        # Route to the correct thread based on event source
-        event_agent = getattr(event, "agent", "")
-        event_session = getattr(event, "session_id", "")
-
         with self._lock:
             if event_session and event_session in self._threads:
-                # Event has a specific session — use its thread
-                session_id = event_session
-                thread_info = self._threads[session_id]
-            elif event_agent and event_agent not in ("", "unknown"):
-                # External agent (e.g. OpenClaw) — daily thread
+                return event_session, self._threads[event_session]
+
+            if event_agent and event_agent not in ("", "unknown"):
                 from datetime import date
 
                 today = date.today().isoformat()
                 agent_key = f"ext-{event_agent}-{today}"
                 thread_info = self._threads.get(agent_key)
-                session_id = agent_key
-                if not thread_info:
+                if thread_info:
+                    return agent_key, thread_info
+                if create_daily:
                     try:
                         channel_id = self._ensure_channel(event_agent)
                         resp = self._web.chat_postMessage(
@@ -267,16 +266,33 @@ class SlackPlugin:
                         )
                         thread_info = (channel_id, resp["ts"])
                         self._threads[agent_key] = thread_info
+                        return agent_key, thread_info
                     except Exception as e:
                         logger.warning(f"Failed to create thread for {event_agent}: {e}")
-                        thread_info = None
-            elif self._threads:
-                # Fall back to most recently active session
+                return agent_key, None
+
+            if self._threads:
                 session_id = list(self._threads.keys())[-1]
-                thread_info = self._threads.get(session_id)
-            else:
-                session_id = None
-                thread_info = None
+                return session_id, self._threads.get(session_id)
+
+            return None, None
+
+    async def handle_event(self, event: CrossEvent):
+        """Handle events from the network proxy EventBus.
+
+        Only relays high-signal events: gate decisions (block/alert/escalate),
+        sentinel reviews (alert/escalate/halt), and errors. Full conversation
+        relay is handled by the JSONL logger, not Slack.
+        """
+        event_agent = getattr(event, "agent", "")
+        event_session = getattr(event, "session_id", "")
+
+        # Events that only update internal state — resolve thread without
+        # creating a daily header (no Slack message will be posted).
+        will_post = isinstance(
+            event, (GateDecisionEvent, SentinelReviewEvent, ErrorEvent, PermissionPromptEvent, PermissionResolvedEvent)
+        )
+        session_id, thread_info = self._resolve_thread(event_agent, event_session, create_daily=will_post)
 
         if thread_info:
             channel_id, thread_ts = thread_info
