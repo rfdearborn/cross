@@ -245,6 +245,9 @@ async def api_register_session(request: Request) -> JSONResponse:
         except Exception as e:
             logger.warning(f"Email session_started failed: {e}")
 
+    # Persist state so this session survives daemon restarts
+    _persist_state()
+
     return JSONResponse({"status": "ok", "session_id": session_id})
 
 
@@ -274,6 +277,9 @@ async def api_end_session(request: Request) -> JSONResponse:
     # Clean up
     _sessions.pop(session_id, None)
     _session_ws.pop(session_id, None)
+
+    # Persist state after session cleanup
+    _persist_state()
 
     return JSONResponse({"status": "ok"})
 
@@ -822,6 +828,28 @@ async def _proxy_handler(request: Request) -> Response:
 _sentinel = None  # LLMSentinel instance, if configured
 
 
+def _persist_state() -> None:
+    """Save current daemon state to disk (called on session changes and shutdown)."""
+    from cross.state import save_state
+
+    sentinel_events = None
+    if _sentinel is not None:
+        try:
+            sentinel_events = _sentinel.get_events()
+        except Exception:
+            pass
+
+    try:
+        save_state(
+            sessions=_sessions,
+            project_cwds=_project_cwds,
+            gate_agents=_gate_agents,
+            sentinel_events=sentinel_events,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to persist state: {e}")
+
+
 async def on_startup():
     global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions, _conversation_store
 
@@ -854,6 +882,17 @@ async def on_startup():
     _gate_agents.update(hooked)
     if hooked:
         logger.info(f"Detected hooked agents: {', '.join(hooked)}")
+
+    # Restore persisted state from previous daemon run
+    from cross.state import load_state
+
+    _restored_state = load_state()
+    _sessions.update(_restored_state["sessions"])
+    _project_cwds.update(_restored_state["project_cwds"])
+    _gate_agents.update(_restored_state["gate_agents"])
+    _restored_sentinel_events = _restored_state["sentinel_events"]
+    if _sessions:
+        logger.info(f"Restored {len(_sessions)} sessions from previous run")
 
     # Register native desktop notifications (macOS)
     if native_notifications_available():
@@ -918,6 +957,7 @@ async def on_startup():
                 event_bus=event_bus,
                 interval_seconds=settings.llm_sentinel_interval_seconds,
                 get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
+                seed_events=_restored_sentinel_events,
             )
             event_bus.subscribe(_sentinel.observe)
             _sentinel.start()
@@ -1014,6 +1054,9 @@ async def on_startup():
 
 
 async def on_shutdown():
+    # Persist state before stopping services so sentinel events are captured
+    _persist_state()
+
     if _sentinel:
         _sentinel.stop()
     if _slack:
