@@ -38,6 +38,8 @@ class TextEvent:
     """Fired when a complete text block is assembled."""
 
     text: str
+    agent: str = ""
+    session_id: str = ""
 
 
 @dataclass
@@ -46,6 +48,8 @@ class MessageStartEvent:
 
     message_id: str
     model: str
+    agent: str = ""
+    session_id: str = ""
 
 
 @dataclass
@@ -55,6 +59,8 @@ class MessageDeltaEvent:
     stop_reason: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    agent: str = ""
+    session_id: str = ""
 
 
 @dataclass
