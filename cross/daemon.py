@@ -83,6 +83,15 @@ def _detect_hooked_agents() -> set[str]:
                 hooked.add("openclaw")
         except OSError:
             pass
+    # Check Codex: if the hooks.json has the cross hook, it's monitored
+    codex_hooks = Path.home() / ".codex" / "hooks.json"
+    if codex_hooks.exists():
+        try:
+            content = codex_hooks.read_text()
+            if "codex_hook" in content:
+                hooked.add("codex")
+        except OSError:
+            pass
     return hooked
 
 
@@ -95,6 +104,7 @@ def _detect_running_agents() -> dict[str, list[int]]:
     # Pattern per agent — more specific than just the name to avoid false positives
     agent_patterns = {
         "claude": ["-x", "claude"],  # exact binary name match
+        "codex": ["-x", "codex"],  # OpenAI Codex CLI
         "openclaw": ["-f", "openclaw-gateway"],  # runs as openclaw-gateway
     }
 
@@ -129,7 +139,31 @@ def _detect_running_agents() -> dict[str, list[int]]:
         if desktop_pids:
             result["claude (desktop)"] = desktop_pids
 
+    # Filter out codex PIDs that are Cursor extension subprocesses
+    # (Cursor bundles a codex binary in its OpenAI ChatGPT extension)
+    if "codex" in result:
+        real_codex = [p for p in result["codex"] if not _is_cursor_embedded_codex(p)]
+        if real_codex:
+            result["codex"] = real_codex
+        else:
+            del result["codex"]
+
     return result
+
+
+def _is_cursor_embedded_codex(pid: int) -> bool:
+    """Check if a codex PID is Cursor's bundled codex binary (not standalone CLI)."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "comm="],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            return ".cursor/" in proc.stdout
+    except OSError:
+        pass
+    return False
 
 
 def _is_desktop_pid(pid: int) -> bool:
@@ -816,6 +850,10 @@ async def api_dashboard_ws(ws: WebSocket):
 
 async def _proxy_handler(request: Request) -> Response:
     """Forward to the actual proxy logic."""
+    # Reject WebSocket upgrades early — Codex falls back to HTTP faster
+    if request.headers.get("upgrade", "").lower() == "websocket":
+        return Response(status_code=426, content=b"WebSocket not supported")
+
     from cross.proxy import handle_proxy_request
 
     session_id = request.path_params.get("session_id", "")
@@ -1142,16 +1180,24 @@ _dashboard_routes = [
     Route("/cross/api/conversations/{conversation_id:path}", api_conversation_history, methods=["GET"]),
 ]
 
+
 # WebSocket routes
+async def _reject_ws_upgrade(ws: WebSocket):
+    """Reject WebSocket upgrades on proxy routes (Codex Responses API)."""
+    await ws.close(code=1002, reason="WebSocket proxy not supported")
+
+
 _ws_routes = [
     WebSocketRoute("/cross/sessions/{session_id}/io", api_session_ws),
     WebSocketRoute("/cross/api/ws", api_dashboard_ws),
+    WebSocketRoute("/s/{session_id}/{path:path}", _reject_ws_upgrade),
 ]
 
 # Proxy routes — session-prefixed route first, then catch-all for backward compat
+_PROXY_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
 _proxy_routes = [
-    Route("/s/{session_id}/{path:path}", _proxy_handler, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]),
-    Route("/{path:path}", _proxy_handler, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]),
+    Route("/s/{session_id}/{path:path}", _proxy_handler, methods=_PROXY_METHODS),
+    Route("/{path:path}", _proxy_handler, methods=_PROXY_METHODS),
 ]
 
 app = Starlette(

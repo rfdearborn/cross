@@ -78,6 +78,7 @@ Blocked tool calls are suppressed from the API response stream. The proxy automa
 ## Supported Agents
 
 - **Claude Code** -- validated, full PTY + proxy + tool-level gating
+- **Codex** (OpenAI) -- validated, full PTY + proxy + tool-level gating. `cross wrap -- codex` routes API traffic through the proxy for streaming interception and pre-execution blocking of tool calls
 - **OpenClaw** -- validated, PTY + tool-level gating via `beforeToolCall` hook. `cross wrap -- openclaw` automatically injects a Node.js hook that gates every tool call through the cross daemon
 - **Any CLI agent** -- `cross wrap -- <agent-command>` provides PTY wrapping and API proxy for any CLI agent
 - **Any agent using Anthropic APIs** -- set `ANTHROPIC_BASE_URL=http://localhost:2767`

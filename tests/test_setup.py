@@ -13,8 +13,10 @@ from cross.setup import (
     _check_ollama,
     _detect_agents,
     _detect_shell_rc,
+    _install_codex_hook,
     _parse_provider,
     _strip_ansi,
+    _uninstall_codex_hook,
     run_setup,
 )
 
@@ -659,7 +661,8 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
+        # none LLM, N email, N slack, Y wrappers, Y codex hook, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -1261,3 +1264,97 @@ class TestCLISetupRouting:
         with patch("sys.argv", ["cross", "setup"]):
             main()
         mock_run_setup.assert_called_once()
+
+
+class TestDetectAgentsIncludesCodex:
+    @patch("shutil.which")
+    def test_finds_codex(self, mock_which):
+        mock_which.side_effect = lambda name: f"/usr/local/bin/{name}" if name == "codex" else None
+        agents = _detect_agents()
+        assert agents == ["codex"]
+
+    def test_known_agents_includes_codex(self):
+        assert "codex" in KNOWN_AGENTS
+
+
+class TestInstallCodexHook:
+    """Tests for _install_codex_hook and _uninstall_codex_hook."""
+
+    def test_installs_hook_in_empty_settings(self, tmp_path):
+        import json
+
+        hooks_file = tmp_path / "hooks.json"
+        hooks_file.write_text("{}")
+        output = []
+        with patch("cross.setup._CODEX_HOOKS_FILE", hooks_file):
+            result = _install_codex_hook(output.append)
+
+        assert result is True
+        config = json.loads(hooks_file.read_text())
+        hooks = config["hooks"]["PreToolUse"]
+        assert len(hooks) == 1
+        assert "codex_hook.py" in hooks[0]["hooks"][0]["command"]
+
+    def test_skips_if_already_installed(self, tmp_path):
+        import json
+
+        hooks_file = tmp_path / "hooks.json"
+        existing = {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/codex_hook.py"}]}
+                ]
+            }
+        }
+        hooks_file.write_text(json.dumps(existing))
+        output = []
+        with patch("cross.setup._CODEX_HOOKS_FILE", hooks_file):
+            result = _install_codex_hook(output.append)
+
+        assert result is True
+        assert any("already installed" in s for s in output)
+
+    def test_uninstall_removes_hook(self, tmp_path):
+        import json
+
+        hooks_file = tmp_path / "hooks.json"
+        existing = {
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/codex_hook.py"}]}
+                ]
+            }
+        }
+        hooks_file.write_text(json.dumps(existing))
+        output = []
+        with patch("cross.setup._CODEX_HOOKS_FILE", hooks_file):
+            result = _uninstall_codex_hook(output.append)
+
+        assert result is True
+        config = json.loads(hooks_file.read_text())
+        assert "hooks" not in config
+
+
+class TestCodexHookSetupStep:
+    @patch("cross.setup._install_codex_hook", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=["codex"])
+    @patch("cross.setup._detect_shell_rc", return_value=None)
+    @patch("cross.setup.sys")
+    def test_codex_detected_prompts_hook(self, mock_sys, mock_shell_rc, mock_agents, mock_install, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        # none LLM, N email, N slack, Y wrappers, Y codex hook, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        mock_install.assert_called_once()
+        assert result.get("codex_hook_installed") is True
+        full_output = "\n".join(str(o) for o in output)
+        assert "Codex" in full_output

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 # Agents we detect on PATH (cross wrap should work with any CLI agent)
-KNOWN_AGENTS = ["claude", "openclaw"]
+KNOWN_AGENTS = ["claude", "codex", "openclaw"]
 
 DEFAULT_GATE_MODEL = "anthropic/claude-code/claude-sonnet-4-6"
 DEFAULT_SENTINEL_MODEL = "anthropic/claude-code/claude-opus-4-6"
@@ -491,6 +491,90 @@ def _is_claude_desktop_installed() -> bool:
     return Path("/Applications/Claude.app").exists()
 
 
+_CODEX_HOOKS_FILE = Path.home() / ".codex" / "hooks.json"
+_CODEX_HOOK_MARKER = "codex_hook.py"
+
+
+def _read_codex_hooks(print_fn) -> dict | None:
+    """Read and parse Codex hooks.json, or return None on failure."""
+    if not _CODEX_HOOKS_FILE.exists():
+        return {}
+    try:
+        return json.loads(_CODEX_HOOKS_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        print_fn("  Could not parse existing Codex hooks.json, skipping.")
+        return None
+
+
+def _write_codex_hooks(config: dict):
+    """Write Codex hooks.json."""
+    _CODEX_HOOKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _CODEX_HOOKS_FILE.write_text(json.dumps(config, indent=2) + "\n")
+
+
+def _install_codex_hook(print_fn) -> bool:
+    """Install cross gate hook for Codex CLI sessions."""
+    hook_path = Path(__file__).parent / "patches" / "codex_hook.py"
+    if not hook_path.exists():
+        print_fn(f"  Hook file not found: {hook_path}")
+        return False
+
+    config = _read_codex_hooks(print_fn)
+    if config is None:
+        return False
+
+    hooks = config.get("hooks", {})
+    pre_tool_use = hooks.get("PreToolUse", [])
+    if any(_CODEX_HOOK_MARKER in h.get("command", "") for entry in pre_tool_use for h in entry.get("hooks", [])):
+        print_fn("  Codex PreToolUse hook already installed.")
+        return True
+
+    pre_tool_use.append(
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": f"python3 {hook_path}", "timeout": 600}],
+        }
+    )
+    hooks["PreToolUse"] = pre_tool_use
+    config["hooks"] = hooks
+    _write_codex_hooks(config)
+    print_fn("  Codex PreToolUse hook installed.")
+    return True
+
+
+def _uninstall_codex_hook(print_fn) -> bool:
+    """Remove cross hook from Codex hooks.json."""
+    if not _CODEX_HOOKS_FILE.exists():
+        return False
+
+    try:
+        config = json.loads(_CODEX_HOOKS_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    hooks = config.get("hooks", {})
+    pre_tool_use = hooks.get("PreToolUse", [])
+    filtered = [
+        entry
+        for entry in pre_tool_use
+        if not any(_CODEX_HOOK_MARKER in h.get("command", "") for h in entry.get("hooks", []))
+    ]
+    if len(filtered) == len(pre_tool_use):
+        return False
+
+    if filtered:
+        hooks["PreToolUse"] = filtered
+    else:
+        hooks.pop("PreToolUse", None)
+
+    if not hooks:
+        config.pop("hooks", None)
+
+    _CODEX_HOOKS_FILE.write_text(json.dumps(config, indent=2) + "\n")
+    print_fn("  Codex hook removed.")
+    return True
+
+
 def run_setup(
     cross_dir: Path | None = None,
     input_fn=input,
@@ -830,6 +914,14 @@ def run_setup(
         hook_answer = input_fn("Install hook to gate Desktop/Cowork sessions? (Y/n): ").strip().lower()
         if hook_answer not in ("n", "no"):
             result["claude_code_hook_installed"] = _install_gate_hook(print_fn)
+        print_fn("")
+
+    # ── Step 7b2: Codex hook ──
+    if "codex" in agents:
+        print_fn("OpenAI Codex CLI detected.")
+        codex_answer = input_fn("Install hook to gate Codex agent sessions? (Y/n): ").strip().lower()
+        if codex_answer not in ("n", "no"):
+            result["codex_hook_installed"] = _install_codex_hook(print_fn)
         print_fn("")
 
     # ── Step 7c: Patch OpenClaw Gateway ──
