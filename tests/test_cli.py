@@ -340,14 +340,14 @@ class TestStartWsRelay:
         output_queue = queue.Queue()
         log = logging.getLogger("test")
 
-        # The thread will fail to connect but that's fine -- we just test it starts
+        # The relay reconnects forever; just verify the thread starts
         with patch("websockets.sync.client.connect", side_effect=Exception("no server")):
-            thread = _start_ws_relay("http://localhost:8080", info, output_queue, log)
+            with patch("time.sleep", side_effect=Exception("stop")):
+                thread = _start_ws_relay("http://localhost:8080", info, output_queue, log)
+                thread.join(timeout=2.0)
 
         assert thread is not None
         assert thread.daemon is True
-        # Wait for thread to finish (it should fail quickly)
-        thread.join(timeout=2.0)
 
     def test_relay_sends_queued_output(self):
         """The relay loop should send queued messages over the WebSocket."""
@@ -367,8 +367,9 @@ class TestStartWsRelay:
         with patch("websockets.sync.client.connect") as mock_connect:
             mock_connect.return_value.__enter__ = MagicMock(return_value=mock_ws)
             mock_connect.return_value.__exit__ = MagicMock(return_value=False)
-            thread = _start_ws_relay("http://localhost:8080", info, output_queue, log)
-            thread.join(timeout=2.0)
+            with patch("time.sleep", side_effect=Exception("stop")):
+                thread = _start_ws_relay("http://localhost:8080", info, output_queue, log)
+                thread.join(timeout=2.0)
 
         mock_ws.send.assert_called_once()
         import json
@@ -397,8 +398,9 @@ class TestStartWsRelay:
         with patch("websockets.sync.client.connect") as mock_connect:
             mock_connect.return_value.__enter__ = MagicMock(return_value=mock_ws)
             mock_connect.return_value.__exit__ = MagicMock(return_value=False)
-            thread = _start_ws_relay("http://localhost:8080", info, output_queue, log)
-            thread.join(timeout=2.0)
+            with patch("time.sleep", side_effect=Exception("stop")):
+                thread = _start_ws_relay("http://localhost:8080", info, output_queue, log)
+                thread.join(timeout=2.0)
 
         info.pty_session.inject_input.assert_called_once_with(b"injected text")
 
@@ -412,10 +414,11 @@ class TestStartWsRelay:
         log = logging.getLogger("test")
 
         with patch("websockets.sync.client.connect", side_effect=Exception("no server")) as mock_connect:
-            thread = _start_ws_relay("http://localhost:9090", info, output_queue, log)
-            thread.join(timeout=2.0)
+            with patch("time.sleep", side_effect=Exception("stop")):
+                thread = _start_ws_relay("http://localhost:9090", info, output_queue, log)
+                thread.join(timeout=2.0)
 
-        mock_connect.assert_called_once_with("ws://localhost:9090/cross/sessions/session42/io")
+        mock_connect.assert_called_with("ws://localhost:9090/cross/sessions/session42/io")
 
 
 class TestRunWrapExitCodePropagation:

@@ -10,6 +10,7 @@ import queue
 import shutil
 import sys
 import threading
+import time
 
 import httpx
 import websockets.sync.client
@@ -722,30 +723,38 @@ def _start_ws_relay(daemon_url: str, info, output_queue: queue.Queue, log: loggi
     ws_url = daemon_url.replace("http://", "ws://") + f"/cross/sessions/{info.session_id}/io"
 
     def relay():
-        try:
-            with websockets.sync.client.connect(ws_url) as ws:
-                while True:
-                    # Send queued PTY output to daemon
-                    try:
-                        while True:
-                            msg = output_queue.get_nowait()
-                            ws.send(json.dumps(msg))
-                    except queue.Empty:
-                        pass
+        backoff = 1
+        max_backoff = 30
+        while True:
+            try:
+                with websockets.sync.client.connect(ws_url) as ws:
+                    backoff = 1  # Reset on successful connect
+                    log.info("WebSocket relay connected")
+                    while True:
+                        # Send queued PTY output to daemon
+                        try:
+                            while True:
+                                msg = output_queue.get_nowait()
+                                ws.send(json.dumps(msg))
+                        except queue.Empty:
+                            pass
 
-                    # Receive inject messages from daemon (Slack -> PTY)
-                    try:
-                        msg = ws.recv(timeout=0.2)
-                        data = json.loads(msg)
-                        if data.get("type") == "inject" and info.pty_session:
-                            info.pty_session.inject_input(data["text"].encode())
-                            log.info(f"Injected from Slack: {data['text'][:50]}")
-                    except TimeoutError:
-                        continue
-                    except Exception:
-                        break
-        except Exception as e:
-            log.warning(f"WebSocket relay failed: {e}")
+                        # Receive inject messages from daemon (Slack -> PTY)
+                        try:
+                            msg = ws.recv(timeout=0.2)
+                            data = json.loads(msg)
+                            if data.get("type") == "inject" and info.pty_session:
+                                info.pty_session.inject_input(data["text"].encode())
+                                log.info(f"Injected from daemon: {data['text'][:50]}")
+                        except TimeoutError:
+                            continue
+                        except Exception:
+                            break
+            except Exception as e:
+                log.debug(f"WebSocket relay disconnected: {e}")
+            # Reconnect with backoff (daemon may have restarted)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
 
     thread = threading.Thread(target=relay, daemon=True)
     thread.start()
