@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mitmproxy>=12.0.0", "pytest>=8.0", "pytest-cov>=6.0", "anyio[trio]>=4.0", "pytest-anyio>=0.0.0"]
+dev = ["mitmproxy>=12.0.0", "pytest>=8.0", "pytest-cov>=6.0", "pytest-timeout>=2.0", "anyio[trio]>=4.0", "pytest-anyio>=0.0.0"]
 email = []  # email plugin uses stdlib only (smtplib, imaplib); extra for documentation
 slack = ["slack-sdk>=3.0.0", "aiohttp>=3.9.0"]
 
@@ -55,6 +55,7 @@ select = ["E", "F", "I", "W"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/test_proxy.py" = ["E501"]  # SSE data lines exceed 120 chars
+"tests/e2e/mock_servers.py" = ["E501"]  # SSE data lines exceed 120 chars
 "cross/plugins/dashboard.py" = ["E501"]  # inline HTML/SVG strings
 
 [tool.hatch.build.targets.wheel]
