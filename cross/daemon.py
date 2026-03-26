@@ -62,6 +62,10 @@ _pending_injects: dict[str, str] = {}
 _gate_agents: set[str] = set()
 # Per-session recent tool calls for external agents (keyed by session_id)
 _gate_recent_tools: dict[str, deque] = {}
+# Per-session last activity timestamp (updated on proxy/gate requests)
+_session_last_activity: dict[str, float] = {}
+# Threshold in seconds — sessions with activity within this window are "active"
+_ACTIVITY_THRESHOLD_SECONDS = 30.0
 # Permission prompt tracking (hook-based — PermissionRequest hook notifies daemon)
 _permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, ts}
 _permission_notify_tasks: dict[str, asyncio.Task] = {}  # session_id -> delayed notify task
@@ -182,6 +186,12 @@ def _is_desktop_pid(pid: int) -> bool:
     return False
 
 
+def record_session_activity(session_id: str) -> None:
+    """Record that a session has had recent activity (proxy or gate request)."""
+    if session_id:
+        _session_last_activity[session_id] = time.time()
+
+
 def get_agent_status() -> dict[str, Any]:
     """Return monitoring coverage: monitored sessions and unmonitored agents."""
     running = _detect_running_agents()
@@ -195,14 +205,23 @@ def get_agent_status() -> dict[str, Any]:
     # Clean up stale gate agents (process no longer running)
     _gate_agents.intersection_update(running_agent_names | {s.get("agent") for s in _sessions.values()})
 
+    now = time.time()
+
+    # Clean up stale activity entries
+    stale_activity = [sid for sid in _session_last_activity if sid not in _sessions]
+    for sid in stale_activity:
+        del _session_last_activity[sid]
+
     monitored = []
     monitored_pids: set[int] = set()
-    for session in _sessions.values():
+    for sid, session in _sessions.items():
         agent = session.get("agent", "unknown")
         project = session.get("project", "")
         label = f"{agent} - {project}" if project else agent
         pid = session.get("pid")
-        monitored.append({"agent": agent, "project": project, "label": label})
+        last_activity = _session_last_activity.get(sid, 0)
+        active = (now - last_activity) < _ACTIVITY_THRESHOLD_SECONDS if last_activity else False
+        monitored.append({"agent": agent, "project": project, "label": label, "active": active})
         if pid:
             monitored_pids.add(int(pid))
 
@@ -211,7 +230,12 @@ def get_agent_status() -> dict[str, Any]:
     # Add gate-only agents (e.g. OpenClaw) to monitored list
     for agent in _gate_agents:
         if agent not in {s.get("agent") for s in _sessions.values()}:
-            monitored.append({"agent": agent, "project": "", "label": agent})
+            # Gate-only agents: check if any gate request was recent
+            gate_active = any(
+                (now - _session_last_activity.get(sid, 0)) < _ACTIVITY_THRESHOLD_SECONDS
+                for sid, s in _sessions.items() if s.get("agent") == agent
+            )
+            monitored.append({"agent": agent, "project": "", "label": agent, "active": gate_active})
 
     unmonitored = []
     for agent, pids in running.items():
@@ -518,6 +542,9 @@ async def api_gate(request: Request) -> JSONResponse:
     user_intent = data.get("user_intent", "")
     cwd = data.get("cwd", "")
     conversation_context = data.get("conversation_context", [])
+
+    # Record activity for this session
+    record_session_activity(session_id)
 
     # Track this agent as monitored via gate API
     if agent and agent != "unknown":

@@ -11,8 +11,10 @@ from cross.daemon import (
     _detect_running_agents,
     _gate_agents,
     _is_desktop_pid,
+    _session_last_activity,
     _sessions,
     get_agent_status,
+    record_session_activity,
 )
 
 
@@ -21,9 +23,11 @@ def _clean_state():
     """Reset daemon state between tests."""
     _sessions.clear()
     _gate_agents.clear()
+    _session_last_activity.clear()
     yield
     _sessions.clear()
     _gate_agents.clear()
+    _session_last_activity.clear()
 
 
 class TestDetectHookedAgents:
@@ -197,3 +201,29 @@ class TestGetAgentStatus:
         assert status["monitored_count"] == 0
         assert status["unmonitored_count"] == 1
         assert status["unmonitored"][0]["agent"] == "claude (desktop)"
+
+    @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
+    def test_active_agent_has_active_true(self, mock_detect):
+        """Agent with recent activity should be marked active."""
+        _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
+        record_session_activity("s1")
+        status = get_agent_status()
+        assert status["monitored"][0]["active"] is True
+
+    @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
+    def test_idle_agent_has_active_false(self, mock_detect):
+        """Agent with no recent activity should be marked inactive."""
+        _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
+        # No activity recorded
+        status = get_agent_status()
+        assert status["monitored"][0]["active"] is False
+
+    @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
+    def test_stale_activity_has_active_false(self, mock_detect):
+        """Agent with old activity should be marked inactive."""
+        import time
+
+        _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
+        _session_last_activity["s1"] = time.time() - 60  # 60 seconds ago
+        status = get_agent_status()
+        assert status["monitored"][0]["active"] is False

@@ -427,6 +427,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   .agent-chip.monitored .dot { background: var(--green); }
   .agent-chip.unmonitored .dot { background: var(--text-dim); }
+  .agent-chip.active .dot {
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--green); }
+    50% { opacity: 0.7; box-shadow: 0 0 4px 2px var(--green); }
+  }
+  .agent-chip.stopped .dot { opacity: 0.5; }
 
   /* Event feed */
   .event-feed {
@@ -1292,11 +1300,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     var html = "";
     for (var i = 0; i < data.monitored.length; i++) {
       var m = data.monitored[i];
-      html += '<span class="agent-chip monitored"><span class="dot"></span>' + escHtml(m.label) + '</span>';
+      var state = m.active ? "active" : "stopped";
+      html += '<span class="agent-chip monitored ' + state + '"><span class="dot"></span>' + escHtml(m.label) + '</span>';
     }
     for (var i = 0; i < data.unmonitored.length; i++) {
       var u = data.unmonitored[i];
-      html += '<span class="agent-chip unmonitored"><span class="dot"></span>' + escHtml(u.agent) + '</span>';
+      html += '<span class="agent-chip unmonitored stopped"><span class="dot"></span>' + escHtml(u.agent) + '</span>';
     }
     if (!data.monitored.length && !data.unmonitored.length) {
       html = '<span class="status-summary">No agents detected</span>';
@@ -1308,7 +1317,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     fetch("/cross/api/status").then(function(r) { return r.json(); }).then(renderStatus).catch(function() {});
   }
   refreshStatus();
-  setInterval(refreshStatus, 10000);
+  setInterval(refreshStatus, 5000);
 
   // Initial load: fetch existing events and pending
   fetch("/cross/api/events").then(function(r) { return r.json(); }).then(function(events) {

@@ -621,6 +621,10 @@ async def handle_proxy_request(
         session_id=session_id,
     )
 
+    # Record session activity for status tracking
+    from cross.daemon import record_session_activity
+    record_session_activity(session_id)
+
     # Publish request event (use decompressed body for parsing)
     req_event = _extract_request_event(preq.method, preq.path, preq.body_parsed, session_id=session_id)
     await event_bus.publish(req_event)
