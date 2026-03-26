@@ -412,8 +412,8 @@ class SlackPlugin:
                             if thread_ts:
                                 self._conv_threads[thread_ts] = conv_id
 
-            case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
-                icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
+            case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session", "error"):
+                icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨", "error": "❌"}.get(event.action, "❓")
                 text = f"{icon} *Sentinel {event.action.upper()}* ({event.event_count} events reviewed)"
                 if event.summary:
                     text += f"\n*Summary:* {event.summary[:300]}"

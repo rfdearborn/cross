@@ -2,8 +2,9 @@
 
 Supports provider/model naming (e.g. "google/gemini-3-flash-preview", "openai/gpt-4o").
 Provider prefix determines API format:
-  - cli/*              → CLI subprocess (e.g. cli/claude uses `claude -p`, no API key needed)
-  - anthropic/*        → Anthropic Messages API
+  - anthropic/claude-code/* → Claude Code CLI (`claude -p`, uses Claude subscription)
+  - openai/codex/*          → Codex CLI (`codex exec`, uses Codex/ChatGPT subscription)
+  - anthropic/*             → Anthropic Messages API
   - openai/*           → OpenAI Chat Completions API
   - google/*           → Google Gemini (OpenAI-compatible endpoint)
   - ollama/*           → Ollama (OpenAI-compatible endpoint, no API key needed)
@@ -37,11 +38,18 @@ _PROVIDER_KEY_ENV_VARS: dict[str, list[str]] = {
     "openai": ["OPENAI_API_KEY"],
     "google": ["GOOGLE_API_KEY"],
     "ollama": [],  # no key needed
-    "cli": [],  # CLI handles its own auth
+    "claude-code": [],  # Uses Claude subscription via `claude -p`
+    "codex": [],  # Uses Codex/ChatGPT subscription via `codex exec`
 }
 
 # Providers that use the OpenAI Chat Completions API format
 _OPENAI_COMPATIBLE_PROVIDERS: set[str] = {"openai", "google", "ollama"}
+
+# Providers that use CLI subprocess (no API key needed)
+CLI_PROVIDERS: set[str] = {"claude-code", "codex"}
+
+# Providers that don't require an API key
+KEYLESS_PROVIDERS: set[str] = CLI_PROVIDERS | {"ollama"}
 
 # Lazy singleton httpx client
 _client: httpx.AsyncClient | None = None
@@ -89,10 +97,14 @@ def parse_model_ref(model: str) -> tuple[str, str]:
     """
     if not model:
         return ("", "")
-    # anthropic/claude-code/model → cli provider with model spec
+    # anthropic/claude-code/model → claude-code provider
     if model.lower().startswith("anthropic/claude-code/"):
         model_name = model.split("/", 2)[2].strip()
-        return ("cli", model_name)
+        return ("claude-code", model_name)
+    # openai/codex/model → codex provider
+    if model.lower().startswith("openai/codex/"):
+        model_name = model.split("/", 2)[2].strip()
+        return ("codex", model_name)
     parts = model.split("/", 1)
     if len(parts) == 2 and parts[0].strip() and parts[1].strip():
         return (parts[0].strip().lower(), parts[1].strip())
@@ -144,9 +156,11 @@ async def complete(
     timeout_s: float = 30.0,
 ) -> str | None:
     """Send a completion request. Returns the text response, or None on error."""
-    # CLI provider uses subprocess — no API key or base URL needed
-    if config.provider == "cli":
+    # CLI providers use subprocess — no API key or base URL needed
+    if config.provider == "claude-code":
         return await _complete_cli(config, system, messages, timeout_s)
+    if config.provider == "codex":
+        return await _complete_cli_codex(config, system, messages, timeout_s)
 
     api_key = resolve_api_key(config)
     if not api_key:
@@ -397,4 +411,74 @@ async def _complete_cli(
         return None
     except Exception as e:
         logger.warning(f"CLI '{cmd}' failed: {e}")
+        return None
+
+
+async def _complete_cli_codex(
+    config: LLMConfig,
+    system: str,
+    messages: list[dict],
+    timeout_s: float,
+) -> str | None:
+    """Run ``codex exec`` as a subprocess and return its stdout.
+
+    Uses the user's Codex/ChatGPT Pro subscription — no API key needed.
+    Runs in read-only sandbox with ephemeral session to prevent side effects.
+    """
+    prompt = _build_cli_prompt(system, messages)
+
+    model_id = config.model_id
+    cmd = "codex"
+
+    # Build a clean env: strip CROSS_* vars, unset OPENAI_BASE_URL to avoid proxying
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CROSS_")}
+    env.pop("OPENAI_BASE_URL", None)
+    env["CROSS_INTERNAL"] = "1"
+
+    model_desc = f" -m {model_id}" if model_id else ""
+    logger.debug(f"Codex CLI invoke: {cmd} exec{model_desc} (prompt length {len(prompt)})")
+
+    cli_args = [cmd, "exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check"]
+    if model_id:
+        cli_args.extend(["-m", model_id])
+    cli_args.append(prompt)
+
+    from cross.config import settings as cross_settings
+
+    cross_dir = os.path.expanduser(cross_settings.config_dir)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cli_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=cross_dir,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+
+        if proc.returncode != 0:
+            err_text = stderr.decode(errors="replace").strip()[:200] if stderr else "(no stderr)"
+            logger.warning(f"Codex CLI exited with code {proc.returncode}: {err_text}")
+            return None
+
+        text = stdout.decode(errors="replace").strip() if stdout else ""
+        if not text:
+            logger.warning("Codex CLI returned empty output")
+            return None
+
+        return text
+
+    except FileNotFoundError:
+        logger.warning(f"CLI command not found: '{cmd}'")
+        return None
+    except asyncio.TimeoutError:
+        logger.warning(f"Codex CLI timed out after {timeout_s}s")
+        try:
+            proc.kill()  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+        return None
+    except Exception as e:
+        logger.warning(f"Codex CLI failed: {e}")
         return None

@@ -332,12 +332,36 @@ class LLMSentinel(Sentinel):
 
         if text is None:
             logger.warning("Sentinel review: LLM returned no response")
+            agent, session_id = _dominant_agent(events)
+            await self.event_bus.publish(
+                SentinelReviewEvent(
+                    action="error",
+                    summary="LLM returned no response",
+                    concerns="Sentinel LLM call failed — check model config and connectivity",
+                    event_count=len(events),
+                    evaluator=self.name,
+                    agent=agent,
+                    session_id=session_id,
+                )
+            )
             return None
 
         action, summary, concerns = _parse_sentinel_response(text)
 
         if action == Action.ABSTAIN:
             logger.warning(f"Sentinel review: could not parse response: {text[:200]}")
+            agent, session_id = _dominant_agent(events)
+            await self.event_bus.publish(
+                SentinelReviewEvent(
+                    action="error",
+                    summary="Could not parse LLM response",
+                    concerns=f"Unparseable response: {text[:200]}",
+                    event_count=len(events),
+                    evaluator=self.name,
+                    agent=agent,
+                    session_id=session_id,
+                )
+            )
             return None
 
         review_id = uuid.uuid4().hex[:12]

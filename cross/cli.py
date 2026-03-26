@@ -631,6 +631,12 @@ def _run_wrap(argv: list[str], log: logging.Logger) -> int:
         "ANTHROPIC_BASE_URL": f"http://localhost:{settings.listen_port}/s/{info.session_id}",
     }
 
+    # Codex: route OpenAI API traffic through the proxy.
+    # Codex with ChatGPT OAuth hits chatgpt.com/backend-api/codex (not api.openai.com).
+    # The proxy detects JWT auth and forwards to the correct upstream.
+    if agent_name == "codex":
+        env["OPENAI_BASE_URL"] = f"http://localhost:{settings.listen_port}/s/{info.session_id}/v1"
+
     # OpenClaw: inject tool hook via --import (ESM)
     if agent_name == "openclaw":
         hook_path = Path(__file__).parent / "patches" / "openclaw_hook.mjs"

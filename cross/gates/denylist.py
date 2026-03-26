@@ -234,16 +234,32 @@ class DenylistGate(Gate):
             logger.info("Rules directory changed, reloading...")
             self._load_rules()
 
+    # Codex uses different tool names and field names than Claude Code.
+    # Map them so denylist rules written for [Bash, exec] with field: command
+    # also match Codex's exec_command with field: cmd.
+    _TOOL_ALIASES: dict[str, list[str]] = {
+        "bash": ["exec_command", "shell", "local_shell", "shell_command"],
+        "exec": ["exec_command", "shell", "local_shell", "shell_command"],
+    }
+    _FIELD_ALIASES: dict[str, list[str]] = {
+        "command": ["cmd"],
+    }
+
     async def evaluate(self, request: GateRequest) -> EvaluationResponse:
         """Check a tool call against all rules. Returns the highest-severity match."""
         self._maybe_reload()
         best_match: EvaluationResponse | None = None
 
         for rule in self.rules:
-            # Check if rule applies to this tool
+            # Check if rule applies to this tool (with alias support)
             tool_name_lower = request.tool_name.lower()
-            if "*" not in rule.tools and not any(t.lower() == tool_name_lower for t in rule.tools):
-                continue
+            if "*" not in rule.tools:
+                matched_tool = any(t.lower() == tool_name_lower for t in rule.tools)
+                if not matched_tool:
+                    # Check aliases: does any rule tool alias to the request tool?
+                    matched_tool = any(tool_name_lower in self._TOOL_ALIASES.get(t.lower(), []) for t in rule.tools)
+                if not matched_tool:
+                    continue
 
             # Get the text to match against
             text = self._get_match_text(request, rule.field)
@@ -291,9 +307,16 @@ class DenylistGate(Gate):
                 return json.dumps(request.tool_input)
             return str(request.tool_input) if request.tool_input else ""
 
-        # Match against a specific field
+        # Match against a specific field (with alias support)
         if isinstance(request.tool_input, dict):
-            value = str(request.tool_input.get(field, ""))
+            value = request.tool_input.get(field, "")
+            # Try field aliases if primary field not found
+            if not value:
+                for alias in self._FIELD_ALIASES.get(field, []):
+                    value = request.tool_input.get(alias, "")
+                    if value:
+                        break
+            value = str(value)
             # Normalize file paths to catch traversal and macOS /private/ bypasses
             if "path" in field.lower() and value:
                 value = _normalize_path(value)

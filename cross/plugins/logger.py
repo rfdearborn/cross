@@ -154,7 +154,7 @@ class LoggerPlugin:
                         "evaluator": event.evaluator,
                     }
                 )
-                if event.action in ("alert", "escalate", "halt_session"):
+                if event.action in ("alert", "escalate", "halt_session", "error"):
                     logger.warning(f"  sentinel {event.action}: {event.concerns[:200]}")
                 else:
                     logger.info(f"  sentinel {event.action}: {event.summary[:200]}")

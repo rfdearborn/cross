@@ -39,6 +39,9 @@ from cross.events import (
 from cross.proxy import (
     _BLOCKED_TOOL_TTL,
     _MAX_BUFFER_LINES,
+    API_FORMAT_ANTHROPIC,
+    API_FORMAT_OPENAI,
+    API_FORMAT_RESPONSES,
     _blocked_tool_ids,
     _blocked_tool_info,
     _blocked_tool_timestamps,
@@ -48,10 +51,13 @@ from cross.proxy import (
     _extract_user_intent,
     _gate_non_streaming_response,
     _inject_blocked_tool_feedback,
+    _is_openai_tool_call_start,
     _is_tool_use_block_start,
     _proxy_streaming,
     _recent_tools,
     _rewrite_content_block_index,
+    _synthetic_openai_stop_sse,
+    detect_api_format,
     get_client,
     handle_proxy_request,
     resolve_gate_approval,
@@ -3348,3 +3354,327 @@ class TestBlockRetryStreaming:
         assert "toolu_1" in _blocked_tool_ids
         # No retry attempt
         assert mock_client.send.call_count == 1
+
+
+# =====================================================================
+# OpenAI format support tests
+# =====================================================================
+
+
+class TestDetectApiFormat:
+    def test_anthropic_messages(self):
+        assert detect_api_format("/v1/messages") == API_FORMAT_ANTHROPIC
+
+    def test_anthropic_messages_with_query(self):
+        assert detect_api_format("/v1/messages?beta=true") == API_FORMAT_ANTHROPIC
+
+    def test_openai_chat_completions(self):
+        assert detect_api_format("/v1/chat/completions") == API_FORMAT_OPENAI
+
+    def test_openai_chat_completions_with_query(self):
+        assert detect_api_format("/v1/chat/completions?foo=bar") == API_FORMAT_OPENAI
+
+    def test_unknown_defaults_to_anthropic(self):
+        assert detect_api_format("/v1/something") == API_FORMAT_ANTHROPIC
+
+    def test_root_defaults_to_anthropic(self):
+        assert detect_api_format("/") == API_FORMAT_ANTHROPIC
+
+
+class TestIsOpenAIToolCallStart:
+    def test_detects_tool_call_start(self):
+        line = json.dumps(
+            {
+                "id": "chatcmpl-x",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_abc",
+                                    "type": "function",
+                                    "function": {"name": "bash", "arguments": ""},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        )
+        assert _is_openai_tool_call_start(f"data: {line}") is True
+
+    def test_rejects_argument_delta(self):
+        """Subsequent deltas (no id field) should not trigger start."""
+        line = json.dumps(
+            {
+                "id": "chatcmpl-x",
+                "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "abc"}}]}}],
+            }
+        )
+        assert _is_openai_tool_call_start(f"data: {line}") is False
+
+    def test_rejects_text_delta(self):
+        line = json.dumps({"id": "chatcmpl-x", "choices": [{"index": 0, "delta": {"content": "hello"}}]})
+        assert _is_openai_tool_call_start(f"data: {line}") is False
+
+    def test_rejects_non_data_line(self):
+        assert _is_openai_tool_call_start("event: message") is False
+
+
+class TestSyntheticOpenAIStopSSE:
+    def test_generates_valid_sse(self):
+        lines = _synthetic_openai_stop_sse("chatcmpl-test", "gpt-4o")
+        assert len(lines) == 4
+        # First line should be a valid JSON chunk with finish_reason: stop
+        chunk = json.loads(lines[0].removeprefix("data: "))
+        assert chunk["choices"][0]["finish_reason"] == "stop"
+        assert chunk["id"] == "chatcmpl-test"
+        # Last data line should be [DONE]
+        assert lines[2] == "data: [DONE]"
+
+
+class TestBuildRetryRequestBodyOpenAI:
+    def test_openai_format(self):
+        original = json.dumps(
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": True,
+            }
+        ).encode()
+        blocked = [
+            {
+                "tool_use_id": "call_1",
+                "name": "bash",
+                "input": {"command": "rm -rf /"},
+                "reason": "dangerous",
+            }
+        ]
+        result = _build_retry_request_body(original, blocked, api_format=API_FORMAT_OPENAI)
+        data = json.loads(result)
+
+        assert len(data["messages"]) == 3
+        # Assistant message with tool_calls
+        assistant_msg = data["messages"][1]
+        assert assistant_msg["role"] == "assistant"
+        assert assistant_msg["tool_calls"][0]["id"] == "call_1"
+        assert assistant_msg["tool_calls"][0]["function"]["name"] == "bash"
+        # Tool message with error
+        tool_msg = data["messages"][2]
+        assert tool_msg["role"] == "tool"
+        assert tool_msg["tool_call_id"] == "call_1"
+        assert "Cross blocked" in tool_msg["content"]
+
+    def test_multiple_blocked_tools_openai(self):
+        original = json.dumps({"model": "gpt-4o", "messages": [{"role": "user", "content": "test"}]}).encode()
+        blocked = [
+            {"tool_use_id": "c1", "name": "bash", "input": {}, "reason": "r1"},
+            {"tool_use_id": "c2", "name": "write", "input": {}, "reason": "r2"},
+        ]
+        result = _build_retry_request_body(original, blocked, api_format=API_FORMAT_OPENAI)
+        data = json.loads(result)
+
+        # 1 user + 1 assistant + 2 tool messages
+        assert len(data["messages"]) == 4
+        assert len(data["messages"][1]["tool_calls"]) == 2
+        assert data["messages"][2]["role"] == "tool"
+        assert data["messages"][3]["role"] == "tool"
+
+
+class TestInjectBlockedToolFeedbackOpenAI:
+    def setup_method(self):
+        _blocked_tool_ids.clear()
+        _blocked_tool_info.clear()
+        _blocked_tool_timestamps.clear()
+
+    def test_openai_format_injection(self):
+        import time
+
+        _blocked_tool_ids["call_1"] = "dangerous"
+        _blocked_tool_info["call_1"] = {"name": "bash", "input": {"command": "rm"}}
+        _blocked_tool_timestamps["call_1"] = time.time()
+
+        body = json.dumps(
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "do it again"}],
+            }
+        ).encode()
+
+        result = _inject_blocked_tool_feedback(body, api_format=API_FORMAT_OPENAI)
+        data = json.loads(result)
+
+        # Should have: user + assistant (tool_calls) + tool
+        assert len(data["messages"]) == 3
+        assert data["messages"][1]["role"] == "assistant"
+        assert data["messages"][1]["tool_calls"][0]["id"] == "call_1"
+        assert data["messages"][2]["role"] == "tool"
+        assert data["messages"][2]["tool_call_id"] == "call_1"
+
+    def test_no_injection_when_empty(self):
+        body = json.dumps({"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}).encode()
+        result = _inject_blocked_tool_feedback(body, api_format=API_FORMAT_OPENAI)
+        assert result == body
+
+
+class TestExtractRequestEventOpenAI:
+    def test_openai_tool_names(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "test"}],
+                "tools": [
+                    {"type": "function", "function": {"name": "bash"}},
+                    {"type": "function", "function": {"name": "read_file"}},
+                ],
+            }
+        ).encode()
+        event = _extract_request_event("POST", "/v1/chat/completions", body)
+        assert event.tool_names == ["bash", "read_file"]
+
+
+# =====================================================================
+# Responses API format support tests
+# =====================================================================
+
+
+class TestDetectApiFormatResponses:
+    def test_responses_path(self):
+        assert detect_api_format("/v1/responses") == API_FORMAT_RESPONSES
+
+    def test_responses_path_with_query(self):
+        assert detect_api_format("/v1/responses?stream=true") == API_FORMAT_RESPONSES
+
+    def test_chat_completions_still_openai(self):
+        assert detect_api_format("/v1/chat/completions") == API_FORMAT_OPENAI
+
+    def test_messages_still_anthropic(self):
+        assert detect_api_format("/v1/messages") == API_FORMAT_ANTHROPIC
+
+
+class TestGetClientResponses:
+    def test_responses_uses_openai_client(self):
+        """Responses API should use the same OpenAI client."""
+        import cross.proxy as pm
+
+        pm._openai_client = None
+        client1 = get_client(API_FORMAT_OPENAI)
+        client2 = get_client(API_FORMAT_RESPONSES)
+        assert client1 is client2
+        pm._openai_client = None
+
+
+class TestBuildRetryRequestBodyResponses:
+    def test_responses_format(self):
+        original = json.dumps(
+            {
+                "model": "gpt-5.4",
+                "input": [{"role": "user", "content": "test"}],
+                "stream": True,
+            }
+        ).encode()
+        blocked = [
+            {
+                "tool_use_id": "call_1",
+                "name": "shell",
+                "input": {"command": "rm -rf /"},
+                "reason": "dangerous",
+            }
+        ]
+        result = _build_retry_request_body(original, blocked, api_format=API_FORMAT_RESPONSES)
+        data = json.loads(result)
+
+        # Should have: original user input + function_call + function_call_output
+        assert len(data["input"]) == 3
+        assert data["input"][0]["role"] == "user"
+        assert data["input"][1]["type"] == "function_call"
+        assert data["input"][1]["call_id"] == "call_1"
+        assert data["input"][1]["name"] == "shell"
+        assert data["input"][2]["type"] == "function_call_output"
+        assert data["input"][2]["call_id"] == "call_1"
+        assert "Cross blocked" in data["input"][2]["output"]
+
+    def test_responses_format_multiple_blocked(self):
+        original = json.dumps(
+            {
+                "model": "gpt-5.4",
+                "input": [{"role": "user", "content": "test"}],
+            }
+        ).encode()
+        blocked = [
+            {"tool_use_id": "c1", "name": "shell", "input": {}, "reason": "r1"},
+            {"tool_use_id": "c2", "name": "write", "input": {}, "reason": "r2"},
+        ]
+        result = _build_retry_request_body(original, blocked, api_format=API_FORMAT_RESPONSES)
+        data = json.loads(result)
+
+        # user + fc1 + fco1 + fc2 + fco2
+        assert len(data["input"]) == 5
+        assert data["input"][1]["type"] == "function_call"
+        assert data["input"][2]["type"] == "function_call_output"
+        assert data["input"][3]["type"] == "function_call"
+        assert data["input"][4]["type"] == "function_call_output"
+
+    def test_responses_format_string_input(self):
+        """When input is a simple string, it should be converted to a list."""
+        original = json.dumps({"model": "gpt-5.4", "input": "do something"}).encode()
+        blocked = [
+            {
+                "tool_use_id": "c1",
+                "name": "shell",
+                "input": {"command": "ls"},
+                "reason": "blocked",
+            }
+        ]
+        result = _build_retry_request_body(original, blocked, api_format=API_FORMAT_RESPONSES)
+        data = json.loads(result)
+
+        assert isinstance(data["input"], list)
+        assert data["input"][0] == {"role": "user", "content": "do something"}
+        assert data["input"][1]["type"] == "function_call"
+        assert data["input"][2]["type"] == "function_call_output"
+
+
+class TestInjectBlockedToolFeedbackResponses:
+    def setup_method(self):
+        _blocked_tool_ids.clear()
+        _blocked_tool_info.clear()
+        _blocked_tool_timestamps.clear()
+
+    def test_responses_format_injection(self):
+        _blocked_tool_ids["call_1"] = "dangerous"
+        _blocked_tool_info["call_1"] = {
+            "name": "shell",
+            "input": {"command": "rm"},
+        }
+        _blocked_tool_timestamps["call_1"] = time.time()
+
+        body = json.dumps(
+            {
+                "model": "gpt-5.4",
+                "input": [{"role": "user", "content": "do it again"}],
+            }
+        ).encode()
+
+        result = _inject_blocked_tool_feedback(body, api_format=API_FORMAT_RESPONSES)
+        data = json.loads(result)
+
+        # Should have: user + function_call + function_call_output
+        assert len(data["input"]) == 3
+        assert data["input"][1]["type"] == "function_call"
+        assert data["input"][1]["call_id"] == "call_1"
+        assert data["input"][2]["type"] == "function_call_output"
+        assert data["input"][2]["call_id"] == "call_1"
+        assert "Cross blocked" in data["input"][2]["output"]
+
+    def test_no_injection_when_empty(self):
+        body = json.dumps(
+            {
+                "model": "gpt-5.4",
+                "input": [{"role": "user", "content": "hi"}],
+            }
+        ).encode()
+        result = _inject_blocked_tool_feedback(body, api_format=API_FORMAT_RESPONSES)
+        assert result == body

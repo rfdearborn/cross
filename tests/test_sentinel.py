@@ -323,32 +323,44 @@ class TestSentinelReview:
         assert "exfiltrating credentials" in halt_mock.call_args[0][0]
 
     @pytest.mark.anyio
-    async def test_no_response_does_not_publish(self):
+    async def test_no_response_publishes_error(self):
         sentinel, bus = self._make_sentinel()
         events = [{"type": "tool_use", "name": "Read", "input": {}, "ts": time.time()}]
 
         published = []
-        bus.subscribe(lambda e: published.append(e))
+
+        async def _collect(e):
+            published.append(e)
+
+        bus.subscribe(_collect)
 
         with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = None
             await sentinel._do_review(events)
 
-        assert len(published) == 0
+        assert len(published) == 1
+        assert published[0].action == "error"
+        assert "no response" in published[0].summary.lower()
 
     @pytest.mark.anyio
-    async def test_unparseable_response_does_not_publish(self):
+    async def test_unparseable_response_publishes_error(self):
         sentinel, bus = self._make_sentinel()
         events = [{"type": "tool_use", "name": "Read", "input": {}, "ts": time.time()}]
 
         published = []
-        bus.subscribe(lambda e: published.append(e))
+
+        async def _collect(e):
+            published.append(e)
+
+        bus.subscribe(_collect)
 
         with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "I don't know what to say about this."
             await sentinel._do_review(events)
 
-        assert len(published) == 0
+        assert len(published) == 1
+        assert published[0].action == "error"
+        assert "parse" in published[0].summary.lower()
 
 
 # --- LLMSentinel start/stop ---

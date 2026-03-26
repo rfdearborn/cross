@@ -246,8 +246,8 @@ class EmailPlugin:
                         with self._lock:
                             self._conv_threads[msg_id] = f"gate:{event.tool_use_id}"
 
-            case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session"):
-                icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨"}.get(event.action, "❓")
+            case SentinelReviewEvent() if event.action in ("alert", "escalate", "halt_session", "error"):
+                icon = {"alert": "🔔", "escalate": "⚠️", "halt_session": "🚨", "error": "❌"}.get(event.action, "❓")
                 body = f"{icon} Sentinel {event.action.upper()} ({event.event_count} events reviewed)"
                 if event.summary:
                     body += f"\nSummary: {event.summary[:300]}"

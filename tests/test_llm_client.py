@@ -53,8 +53,11 @@ class TestParseModelRef:
     def test_ollama_model(self):
         assert parse_model_ref("ollama/llama3") == ("ollama", "llama3")
 
-    def test_cli_model(self):
-        assert parse_model_ref("cli/claude") == ("cli", "claude")
+    def test_claude_code_model(self):
+        assert parse_model_ref("anthropic/claude-code/claude-sonnet-4-6") == ("claude-code", "claude-sonnet-4-6")
+
+    def test_codex_model(self):
+        assert parse_model_ref("openai/codex/gpt-5.4") == ("codex", "gpt-5.4")
 
     def test_multiple_slashes_splits_on_first(self):
         assert parse_model_ref("openrouter/anthropic/claude-sonnet-4-6") == (
@@ -120,7 +123,7 @@ class TestResolveApiKey:
 
     def test_cli_no_key_returns_none(self):
         """CLI provider has no env vars — resolve_api_key returns None."""
-        cfg = LLMConfig(model="cli/claude")
+        cfg = LLMConfig(model="anthropic/claude-code/claude-sonnet-4-6")
         assert resolve_api_key(cfg) is None
 
 
@@ -390,15 +393,26 @@ class TestComplete:
         assert result is None
 
     @pytest.mark.anyio
-    async def test_cli_routes_to_complete_cli(self):
-        """CLI provider should route to _complete_cli, not HTTP providers."""
-        cfg = LLMConfig(model="cli/claude")
+    async def test_claude_code_routes_to_complete_cli(self):
+        """claude-code provider should route to _complete_cli."""
+        cfg = LLMConfig(model="anthropic/claude-code/claude-sonnet-4-6")
 
         with patch("cross.llm._complete_cli", new_callable=AsyncMock, return_value="VERDICT: ALLOW") as mock_cli:
             result = await complete(cfg, system="Review this", messages=[{"role": "user", "content": "test"}])
 
         assert result == "VERDICT: ALLOW"
         mock_cli.assert_awaited_once_with(cfg, "Review this", [{"role": "user", "content": "test"}], 30.0)
+
+    @pytest.mark.anyio
+    async def test_codex_routes_to_complete_cli_codex(self):
+        """codex provider should route to _complete_cli_codex."""
+        cfg = LLMConfig(model="openai/codex/gpt-5.4")
+
+        with patch("cross.llm._complete_cli_codex", new_callable=AsyncMock, return_value="VERDICT: ALLOW") as mock:
+            result = await complete(cfg, system="Review this", messages=[{"role": "user", "content": "test"}])
+
+        assert result == "VERDICT: ALLOW"
+        mock.assert_awaited_once_with(cfg, "Review this", [{"role": "user", "content": "test"}], 30.0)
 
 
 # --- _build_cli_prompt ---
@@ -442,7 +456,7 @@ class TestCompleteCli:
     @pytest.mark.anyio
     async def test_cli_success(self):
         """CLI subprocess returns stdout text."""
-        cfg = LLMConfig(model="cli/claude")
+        cfg = LLMConfig(model="anthropic/claude-code/claude-sonnet-4-6")
 
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(return_value=(b"VERDICT: ALLOW\nLooks safe.", b""))
@@ -455,12 +469,13 @@ class TestCompleteCli:
         # Verify the command invocation
         call_args = mock_exec.call_args
         assert call_args[0][0] == "claude"
-        assert call_args[0][1] == "-p"
+        assert "--model" in call_args[0]
+        assert "-p" in call_args[0]
 
     @pytest.mark.anyio
     async def test_cli_env_cleaned(self):
         """CLI subprocess env should strip CROSS_* vars and set ANTHROPIC_BASE_URL."""
-        cfg = LLMConfig(model="cli/claude")
+        cfg = LLMConfig(model="anthropic/claude-code/claude-sonnet-4-6")
 
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
@@ -480,7 +495,7 @@ class TestCompleteCli:
     @pytest.mark.anyio
     async def test_cli_nonzero_exit(self):
         """Non-zero exit code should return None."""
-        cfg = LLMConfig(model="cli/claude")
+        cfg = LLMConfig(model="anthropic/claude-code/claude-sonnet-4-6")
 
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(return_value=(b"", b"error message"))
@@ -504,7 +519,7 @@ class TestCompleteCli:
     @pytest.mark.anyio
     async def test_cli_timeout(self):
         """Timeout should return None."""
-        cfg = LLMConfig(model="cli/claude")
+        cfg = LLMConfig(model="anthropic/claude-code/claude-sonnet-4-6")
 
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
@@ -520,7 +535,7 @@ class TestCompleteCli:
     @pytest.mark.anyio
     async def test_cli_empty_output(self):
         """Empty stdout should return None."""
-        cfg = LLMConfig(model="cli/claude")
+        cfg = LLMConfig(model="anthropic/claude-code/claude-sonnet-4-6")
 
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(return_value=(b"", b""))
