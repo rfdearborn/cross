@@ -244,7 +244,8 @@ class TestRunSetupDefaultModel:
         shell_rc.write_text("# existing content\n")
         mock_shell_rc.return_value = shell_rc
 
-        # "" gate, "none" gate backup, "" sentinel, "" interval, "none" sentinel backup, N email, N slack, Y wrappers, Y perm hook
+        # "" gate, "none" gate backup, "" sentinel, "" interval,
+        # "none" sentinel backup, N email, N slack, Y wrappers, Y perm hook
         inputs = iter(["", "none", "", "", "none", "N", "N", "Y", "Y", "Y"])
 
         output = []
@@ -381,7 +382,8 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # cli/claude gate, "none" gate backup, google sentinel (different provider, asks for key), 120s, "none" sentinel backup, N email, N slack
+        # cli/claude gate, "none" gate backup, google sentinel (different provider),
+        # 120s, "none" sentinel backup, N email, N slack
         inputs = iter(["", "none", "google/gemini-2.5-flash", "120", "none", "N", "N", "Y"])
         secrets = iter(["google-key"])
 
@@ -407,7 +409,8 @@ class TestRunSetupSeparateSentinel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # cli/claude gate, "none" gate backup, anthropic sentinel (different provider, asks for key), "" interval, "none" sentinel backup, N email, N slack
+        # cli/claude gate, "none" gate backup, anthropic sentinel (different provider),
+        # "" interval, "none" sentinel backup, N email, N slack
         inputs = iter(["", "none", "anthropic/claude-haiku-4-5", "", "none", "N", "N", "Y"])
         secrets = iter(["ant-key"])
 
@@ -432,7 +435,8 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # default gate (cli/claude, no key prompt), "none" gate backup, "" sentinel (same), 300s interval, "none" sentinel backup, N email, N slack
+        # default gate (cli/claude), "none" gate backup, "" sentinel (same),
+        # 300s interval, "none" sentinel backup, N email, N slack
         inputs = iter(["", "none", "", "300", "none", "N", "N", "Y"])
 
         output = []
@@ -452,7 +456,8 @@ class TestRunSetupCustomInterval:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # default gate (cli/claude, no key prompt), "none" gate backup, "" sentinel (same), "abc" interval, "none" sentinel backup, N email, N slack
+        # default gate (cli/claude), "none" gate backup, "" sentinel (same),
+        # "abc" interval, "none" sentinel backup, N email, N slack
         inputs = iter(["", "none", "", "abc", "none", "N", "N", "Y"])
 
         output = []
@@ -526,7 +531,8 @@ class TestRunSetupEmptyApiKey:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # Explicit google model, empty key (env fallback), "none" gate backup, "" sentinel, "" interval, "none" sentinel backup, N email, N slack
+        # Explicit google model, empty key (env fallback), "none" gate backup,
+        # "" sentinel, "" interval, "none" sentinel backup, N email, N slack
         inputs = iter(["google/gemini-3-flash-preview", "none", "", "", "none", "N", "N", "Y"])
         secrets = iter([""])  # empty key
 
@@ -815,7 +821,8 @@ class TestRunSetupClaudeModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "claude" gate model → cli/claude, no key prompt, "none" gate backup, "" sentinel (same), "" interval, "none" sentinel backup, N email, N slack
+        # "claude" → cli/claude, "none" gate backup, "" sentinel (same),
+        # "" interval, "none" sentinel backup, N email, N slack
         inputs = iter(["claude", "none", "", "", "none", "N", "N", "Y"])
 
         output = []
@@ -839,7 +846,8 @@ class TestRunSetupClaudeModel:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "cli/claude" gate model, no key prompt, "none" gate backup, "" sentinel (same), "" interval, "none" sentinel backup, N email, N slack
+        # "cli/claude" gate, "none" gate backup, "" sentinel (same),
+        # "" interval, "none" sentinel backup, N email, N slack
         inputs = iter(["cli/claude", "none", "", "", "none", "N", "N", "Y"])
 
         output = []
