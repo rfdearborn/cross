@@ -54,7 +54,7 @@ class GateChain:
                 logger.warning("LLM review unavailable for REVIEW-level result, promoting to ESCALATE")
                 return EvaluationResponse(
                     action=Action.ESCALATE,
-                    reason=stage1_result.reason,
+                    reason=f"{stage1_result.reason} (LLM gate unavailable — escalating to human)",
                     rule_id=stage1_result.rule_id,
                     evaluator=stage1_result.evaluator,
                     confidence=stage1_result.confidence,

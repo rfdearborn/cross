@@ -151,7 +151,8 @@ class TestTwoStageChain:
         )
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
         assert result.action == Action.ESCALATE
-        assert result.reason == "original reason"
+        assert "original reason" in result.reason
+        assert "LLM gate unavailable" in result.reason
         assert result.metadata["promoted_from"] == "REVIEW"
 
     @pytest.mark.anyio
@@ -196,7 +197,7 @@ class TestTwoStageChain:
         )
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
         assert result.action == Action.ESCALATE
-        assert result.reason == "original"
+        assert "original" in result.reason
         assert result.metadata["promoted_from"] == "REVIEW"
 
     @pytest.mark.anyio
@@ -208,7 +209,7 @@ class TestTwoStageChain:
         )
         result = await chain.evaluate(GateRequest(tool_name="Bash"))
         assert result.action == Action.ESCALATE
-        assert result.reason == "original"
+        assert "original" in result.reason
         assert result.metadata["promoted_from"] == "REVIEW"
 
     @pytest.mark.anyio
