@@ -32,7 +32,7 @@ from cross.events import (
     TextEvent,
     ToolUseEvent,
 )
-from cross.llm import LLMConfig, complete
+from cross.llm import LLMConfig, complete_with_fallback
 
 logger = logging.getLogger("cross.sentinels.llm_reviewer")
 
@@ -197,10 +197,12 @@ class LLMSentinel(Sentinel):
         interval_seconds: int = 60,
         max_events: int = 100,
         get_custom_instructions: callable | None = None,
+        backup_config: LLMConfig | None = None,
         seed_events: list[dict[str, Any]] | None = None,
     ):
         super().__init__(name="llm_sentinel")
         self.config = config
+        self.backup_config = backup_config
         self.event_bus = event_bus
         self.interval_seconds = interval_seconds
         self._get_custom_instructions = get_custom_instructions
@@ -324,7 +326,9 @@ class LLMSentinel(Sentinel):
         if self._get_custom_instructions:
             system += format_instructions_block(self._get_custom_instructions())
 
-        text = await complete(self.config, system=system, messages=messages, timeout_s=60.0)
+        text = await complete_with_fallback(
+            self.config, self.backup_config, system=system, messages=messages, timeout_s=60.0
+        )
 
         if text is None:
             logger.warning("Sentinel review: LLM returned no response")

@@ -924,14 +924,31 @@ async def on_startup():
                 reasoning=settings.llm_gate_reasoning,
             )
             if resolve_api_key(llm_config) or llm_config.provider == "cli":
+                # Build backup config if configured
+                gate_backup = None
+                if settings.llm_gate_backup_model:
+                    gate_backup = LLMConfig(
+                        model=settings.llm_gate_backup_model,
+                        api_key=settings.llm_gate_backup_api_key,
+                        base_url=settings.llm_gate_backup_base_url,
+                        temperature=settings.llm_gate_temperature,
+                        max_tokens=settings.llm_gate_max_tokens,
+                        reasoning=settings.llm_gate_reasoning,
+                    )
+                    if not (resolve_api_key(gate_backup) or gate_backup.provider == "cli"):
+                        logger.info("Gate backup model configured but no API key — backup disabled")
+                        gate_backup = None
+
                 review_gate = LLMReviewGate(
                     config=llm_config,
                     timeout_ms=settings.llm_gate_timeout_ms,
                     justification=settings.llm_gate_justification,
                     get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
+                    backup_config=gate_backup,
                 )
                 model_name = settings.llm_gate_model
-                logger.info(f"LLM review gate active (model={model_name})")
+                backup_desc = f", backup={settings.llm_gate_backup_model}" if gate_backup else ""
+                logger.info(f"LLM review gate active (model={model_name}{backup_desc})")
             else:
                 logger.info("LLM gate enabled but no API key available — denylist operates standalone")
 
@@ -952,17 +969,34 @@ async def on_startup():
             reasoning=settings.llm_sentinel_reasoning,
         )
         if resolve_api_key(sentinel_config) or sentinel_config.provider == "cli":
+            # Build backup config if configured
+            sentinel_backup = None
+            if settings.llm_sentinel_backup_model:
+                sentinel_backup = LLMConfig(
+                    model=settings.llm_sentinel_backup_model,
+                    api_key=settings.llm_sentinel_backup_api_key,
+                    base_url=settings.llm_sentinel_backup_base_url,
+                    temperature=settings.llm_sentinel_temperature,
+                    max_tokens=settings.llm_sentinel_max_tokens,
+                    reasoning=settings.llm_sentinel_reasoning,
+                )
+                if not (resolve_api_key(sentinel_backup) or sentinel_backup.provider == "cli"):
+                    logger.info("Sentinel backup model configured but no API key — backup disabled")
+                    sentinel_backup = None
+
             _sentinel = LLMSentinel(
                 config=sentinel_config,
                 event_bus=event_bus,
                 interval_seconds=settings.llm_sentinel_interval_seconds,
                 get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
+                backup_config=sentinel_backup,
                 seed_events=_restored_sentinel_events,
             )
             event_bus.subscribe(_sentinel.observe)
             _sentinel.start()
+            backup_desc = f", backup={settings.llm_sentinel_backup_model}" if sentinel_backup else ""
             logger.info(
-                f"LLM sentinel active (model={settings.llm_sentinel_model}, "
+                f"LLM sentinel active (model={settings.llm_sentinel_model}{backup_desc}, "
                 f"interval={settings.llm_sentinel_interval_seconds}s)"
             )
         else:

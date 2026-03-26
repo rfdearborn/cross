@@ -158,7 +158,7 @@ class TestLLMReviewGate:
         gate = self._make_gate()
         req = self._make_request()
 
-        with patch("cross.gates.llm_review.complete", new_callable=AsyncMock) as mock_complete:
+        with patch("cross.gates.llm_review.complete_with_fallback", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = "VERDICT: ALLOW\nThis rm -rf / is in a container, safe to proceed."
             resp = await gate.evaluate(req)
 
@@ -171,7 +171,7 @@ class TestLLMReviewGate:
         gate = self._make_gate()
         req = self._make_request()
 
-        with patch("cross.gates.llm_review.complete", new_callable=AsyncMock) as mock_complete:
+        with patch("cross.gates.llm_review.complete_with_fallback", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = "VERDICT: BLOCK\nThis would destroy the root filesystem."
             resp = await gate.evaluate(req)
 
@@ -183,7 +183,7 @@ class TestLLMReviewGate:
         gate = self._make_gate()
         req = self._make_request()
 
-        with patch("cross.gates.llm_review.complete", new_callable=AsyncMock) as mock_complete:
+        with patch("cross.gates.llm_review.complete_with_fallback", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = "VERDICT: ESCALATE\nNeed human to verify this is intentional."
             resp = await gate.evaluate(req)
 
@@ -194,7 +194,7 @@ class TestLLMReviewGate:
         gate = self._make_gate()
         req = self._make_request()
 
-        with patch("cross.gates.llm_review.complete", new_callable=AsyncMock) as mock_complete:
+        with patch("cross.gates.llm_review.complete_with_fallback", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = None
             resp = await gate.evaluate(req)
 
@@ -206,7 +206,7 @@ class TestLLMReviewGate:
         gate = self._make_gate()
         req = self._make_request()
 
-        with patch("cross.gates.llm_review.complete", new_callable=AsyncMock) as mock_complete:
+        with patch("cross.gates.llm_review.complete_with_fallback", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = "I'm not sure what to do about this tool call."
             resp = await gate.evaluate(req)
 
@@ -218,7 +218,7 @@ class TestLLMReviewGate:
         gate = self._make_gate()
         req = self._make_request()
 
-        with patch("cross.gates.llm_review.complete", new_callable=AsyncMock) as mock_complete:
+        with patch("cross.gates.llm_review.complete_with_fallback", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = "VERDICT: ALLOW\nFine."
             await gate.evaluate(req)
 
@@ -230,7 +230,7 @@ class TestLLMReviewGate:
         gate = self._make_gate()
         req = self._make_request()
 
-        with patch("cross.gates.llm_review.complete", new_callable=AsyncMock) as mock_complete:
+        with patch("cross.gates.llm_review.complete_with_fallback", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = "VERDICT: BLOCK\nConfirmed dangerous."
             resp = await gate.evaluate(req)
 

@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     gate_approval_timeout: int = 300  # seconds to wait for human approval on escalation
     gate_max_retries: int = 3  # max retry attempts when a gate blocks a tool call
 
+    # LLM gate backup — fallback model if primary gate model is unavailable
+    llm_gate_backup_model: str = ""  # e.g. "openai/gpt-5.4-mini"
+    llm_gate_backup_api_key: str = ""
+    llm_gate_backup_base_url: str = ""
+
     # LLM sentinel — async periodic review of all activity
     llm_sentinel_enabled: bool = True
     llm_sentinel_model: str = "anthropic/claude-code/claude-opus-4-6"
@@ -73,6 +78,11 @@ class Settings(BaseSettings):
     llm_sentinel_max_tokens: int = 1024
     llm_sentinel_reasoning: str = "medium"  # extended thinking level (sentinel benefits from deeper reasoning)
     llm_sentinel_interval_seconds: int = 60  # how often the sentinel reviews recent activity
+
+    # LLM sentinel backup — fallback model if primary sentinel model is unavailable
+    llm_sentinel_backup_model: str = ""  # e.g. "openai/gpt-5.4"
+    llm_sentinel_backup_api_key: str = ""
+    llm_sentinel_backup_base_url: str = ""
 
     # Env file load order (earlier files take precedence)
     model_config = {

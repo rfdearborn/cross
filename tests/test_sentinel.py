@@ -281,7 +281,7 @@ class TestSentinelReview:
         published = []
         bus.subscribe(lambda e: published.append(e))
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "VERDICT: OK\nSUMMARY: Normal operations.\nCONCERNS: None"
             await sentinel._do_review(events)
 
@@ -298,7 +298,7 @@ class TestSentinelReview:
         published = []
         bus.subscribe(lambda e: published.append(e))
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "VERDICT: ALERT\nSUMMARY: Sensitive file read.\nCONCERNS: Agent read /etc/shadow."
             await sentinel._do_review(events)
 
@@ -313,7 +313,7 @@ class TestSentinelReview:
         published = []
         bus.subscribe(lambda e: published.append(e))
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "VERDICT: HALT\nSUMMARY: Data exfil.\nCONCERNS: Agent exfiltrating credentials."
             with patch("cross.proxy.set_sentinel_halt") as halt_mock:
                 await sentinel._do_review(events)
@@ -330,7 +330,7 @@ class TestSentinelReview:
         published = []
         bus.subscribe(lambda e: published.append(e))
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = None
             await sentinel._do_review(events)
 
@@ -344,7 +344,7 @@ class TestSentinelReview:
         published = []
         bus.subscribe(lambda e: published.append(e))
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "I don't know what to say about this."
             await sentinel._do_review(events)
 
@@ -387,7 +387,7 @@ class TestSentinelLifecycle:
         bus = EventBus()
         sentinel = LLMSentinel(config=config, event_bus=bus, interval_seconds=0.1)
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "VERDICT: OK\nSUMMARY: Fine.\nCONCERNS: None"
             sentinel.start()
             await asyncio.sleep(0.3)
@@ -408,7 +408,7 @@ class TestSentinelLifecycle:
         # Add an event before starting
         await sentinel.observe(ToolUseEvent(name="Bash", tool_use_id="tu_1", input={"command": "ls"}))
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "VERDICT: OK\nSUMMARY: Normal.\nCONCERNS: None"
             sentinel.start()
             await asyncio.sleep(0.3)
@@ -438,7 +438,7 @@ class TestSentinelLifecycle:
                 raise RuntimeError("LLM down")
             return "VERDICT: OK\nSUMMARY: Fine.\nCONCERNS: None"
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.side_effect = failing_then_succeeding
             sentinel.start()
             await asyncio.sleep(0.35)
@@ -453,7 +453,7 @@ class TestSentinelLifecycle:
         bus = EventBus()
         sentinel = LLMSentinel(config=config, event_bus=bus, interval_seconds=0.1)
 
-        with patch("cross.sentinels.llm_reviewer.complete", new_callable=AsyncMock) as mock:
+        with patch("cross.sentinels.llm_reviewer.complete_with_fallback", new_callable=AsyncMock) as mock:
             mock.return_value = "VERDICT: OK\nSUMMARY: Fine.\nCONCERNS: None"
 
             # Add event and start
