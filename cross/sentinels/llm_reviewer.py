@@ -32,7 +32,7 @@ from cross.events import (
     TextEvent,
     ToolUseEvent,
 )
-from cross.llm import LLMConfig, complete, complete_with_fallback
+from cross.llm import LLMConfig, complete_with_fallback
 
 logger = logging.getLogger("cross.sentinels.llm_reviewer")
 

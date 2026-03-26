@@ -19,7 +19,7 @@ import re
 
 from cross.custom_instructions import format_instructions_block
 from cross.evaluator import Action, EvaluationResponse, Gate, GateRequest
-from cross.llm import LLMConfig, complete, complete_with_fallback
+from cross.llm import LLMConfig, complete_with_fallback
 
 logger = logging.getLogger("cross.gates.llm_review")
 
