@@ -74,25 +74,28 @@ def _strip_ansi(s: str) -> str:
 
 
 def _parse_provider(model: str) -> str:
-    """Extract provider from a provider/model string.
-
-    Bare "claude" and "anthropic/claude-code/*" are treated as cli provider.
-    """
+    """Extract provider from a provider/model string."""
     if model.lower().startswith("anthropic/claude-code/"):
-        return "cli"
+        return "claude-code"
+    if model.lower().startswith("openai/codex/"):
+        return "codex"
     if "/" in model:
         return model.split("/", 1)[0].lower()
     if model.lower() == "claude":
-        return "cli"
+        return "claude-code"
     return "anthropic"
+
+
+# Providers that don't require an API key
+_KEYLESS_PROVIDERS = {"claude-code", "codex", "ollama"}
 
 
 def _resolve_model_key(model: str, getpass_fn, print_fn) -> str | None:
     """Prompt for an API key for the given model. Returns the key, or None."""
     provider = _parse_provider(model)
 
-    if provider == "cli":
-        # CLI provider handles its own auth (e.g. Claude Code subscription)
+    if provider in ("claude-code", "codex"):
+        # CLI providers handle their own auth (subscription-based)
         return "cli"  # non-None sentinel so LLM is treated as enabled
 
     if provider == "ollama":
@@ -656,13 +659,13 @@ def run_setup(
         sentinel_interval = None
         print_fn("LLM review disabled. Deterministic denylist rules only.")
     else:
-        if not model_input or model_input.lower() in ("claude", "cli/claude"):
+        if not model_input or model_input.lower() in ("claude", "claude-code"):
             gate_model = DEFAULT_GATE_MODEL
         else:
             gate_model = model_input
         llm_enabled = True
         gate_api_key = _resolve_model_key(gate_model, getpass_fn, print_fn)
-        if gate_api_key is None and _parse_provider(gate_model) not in ("ollama", "cli"):
+        if gate_api_key is None and _parse_provider(gate_model) not in _KEYLESS_PROVIDERS:
             print_fn("No API key provided. LLM features will be disabled.")
             llm_enabled = False
             gate_model = None
@@ -681,7 +684,7 @@ def run_setup(
             else:
                 gate_backup_model = gate_backup_input
             gate_backup_api_key = _resolve_model_key(gate_backup_model, getpass_fn, print_fn)
-            if gate_backup_api_key is None and _parse_provider(gate_backup_model) not in ("ollama", "cli"):
+            if gate_backup_api_key is None and _parse_provider(gate_backup_model) not in _KEYLESS_PROVIDERS:
                 print_fn("No API key for backup model — backup disabled.")
                 gate_backup_model = None
 
@@ -699,14 +702,14 @@ def run_setup(
         if sentinel_input.lower() == "none":
             sentinel_model = "none"  # signals disabled
         else:
-            if not sentinel_input or sentinel_input.lower() in ("claude", "cli/claude"):
+            if not sentinel_input or sentinel_input.lower() in ("claude", "claude-code"):
                 sentinel_model = DEFAULT_SENTINEL_MODEL
             else:
                 sentinel_model = sentinel_input
             sentinel_provider = _parse_provider(sentinel_model)
             gate_provider = _parse_provider(gate_model)
             # Only ask for a key if it's a different provider
-            if sentinel_provider != gate_provider and sentinel_provider not in ("ollama", "cli"):
+            if sentinel_provider != gate_provider and sentinel_provider not in _KEYLESS_PROVIDERS:
                 sentinel_api_key = _resolve_model_key(sentinel_model, getpass_fn, print_fn)
 
         if sentinel_model != "none":
@@ -736,7 +739,7 @@ def run_setup(
                 gate_backup_provider = _parse_provider(gate_backup_model) if gate_backup_model else ""
                 if sentinel_provider == gate_backup_provider and gate_backup_api_key:
                     sentinel_backup_api_key = gate_backup_api_key
-                elif sentinel_provider not in ("ollama", "cli"):
+                elif sentinel_provider not in _KEYLESS_PROVIDERS:
                     sentinel_backup_api_key = _resolve_model_key(sentinel_backup_model, getpass_fn, print_fn)
                     if sentinel_backup_api_key is None:
                         print_fn("No API key for backup model — backup disabled.")

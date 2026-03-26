@@ -45,11 +45,14 @@ class TestParseProvider:
     def test_ollama(self):
         assert _parse_provider("ollama/llama3.1:8b") == "ollama"
 
-    def test_cli(self):
-        assert _parse_provider("cli/claude") == "cli"
+    def test_claude_code(self):
+        assert _parse_provider("anthropic/claude-code/claude-sonnet-4-6") == "claude-code"
 
-    def test_bare_claude_is_cli(self):
-        assert _parse_provider("claude") == "cli"
+    def test_codex(self):
+        assert _parse_provider("openai/codex/gpt-5.4") == "codex"
+
+    def test_bare_claude_is_claude_code(self):
+        assert _parse_provider("claude") == "claude-code"
 
     def test_no_slash_defaults_to_anthropic(self):
         assert _parse_provider("claude-haiku-4-5") == "anthropic"
@@ -845,13 +848,13 @@ class TestRunSetupClaudeModel:
         assert "API_KEY" not in env_content
 
     @patch("cross.setup._detect_agents", return_value=[])
-    def test_explicit_cli_claude(self, mock_agents, mock_sys, tmp_path):
+    def test_explicit_claude_code(self, mock_agents, mock_sys, tmp_path):
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        # "cli/claude" gate, "none" gate backup, "" sentinel (same),
+        # "claude" gate, "none" gate backup, "" sentinel (same),
         # "" interval, "none" sentinel backup, N email, N slack
-        inputs = iter(["cli/claude", "none", "", "", "none", "N", "N", "Y"])
+        inputs = iter(["claude", "none", "", "", "none", "N", "N", "Y"])
 
         output = []
         result = run_setup(

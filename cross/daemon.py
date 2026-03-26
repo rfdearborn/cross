@@ -32,6 +32,7 @@ from cross.events import (
     TextEvent,
     ToolUseEvent,
 )
+from cross.llm import CLI_PROVIDERS as _CLI_PROVIDERS
 from cross.plugins.dashboard import DASHBOARD_HTML, SETTINGS_HTML, DashboardPlugin
 from cross.plugins.logger import LoggerPlugin
 from cross.plugins.notifier import handle_event as notify_event
@@ -961,7 +962,7 @@ async def on_startup():
                 max_tokens=settings.llm_gate_max_tokens,
                 reasoning=settings.llm_gate_reasoning,
             )
-            if resolve_api_key(llm_config) or llm_config.provider == "cli":
+            if resolve_api_key(llm_config) or llm_config.provider in _CLI_PROVIDERS:
                 # Build backup config if configured
                 gate_backup = None
                 if settings.llm_gate_backup_model:
@@ -973,7 +974,7 @@ async def on_startup():
                         max_tokens=settings.llm_gate_max_tokens,
                         reasoning=settings.llm_gate_reasoning,
                     )
-                    if not (resolve_api_key(gate_backup) or gate_backup.provider == "cli"):
+                    if not (resolve_api_key(gate_backup) or gate_backup.provider in _CLI_PROVIDERS):
                         logger.info("Gate backup model configured but no API key — backup disabled")
                         gate_backup = None
 
@@ -1006,7 +1007,7 @@ async def on_startup():
             max_tokens=settings.llm_sentinel_max_tokens,
             reasoning=settings.llm_sentinel_reasoning,
         )
-        if resolve_api_key(sentinel_config) or sentinel_config.provider == "cli":
+        if resolve_api_key(sentinel_config) or sentinel_config.provider in _CLI_PROVIDERS:
             # Build backup config if configured
             sentinel_backup = None
             if settings.llm_sentinel_backup_model:
@@ -1018,7 +1019,7 @@ async def on_startup():
                     max_tokens=settings.llm_sentinel_max_tokens,
                     reasoning=settings.llm_sentinel_reasoning,
                 )
-                if not (resolve_api_key(sentinel_backup) or sentinel_backup.provider == "cli"):
+                if not (resolve_api_key(sentinel_backup) or sentinel_backup.provider in _CLI_PROVIDERS):
                     logger.info("Sentinel backup model configured but no API key — backup disabled")
                     sentinel_backup = None
 

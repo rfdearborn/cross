@@ -131,9 +131,10 @@ cross uses LLMs for the gate reviewer and sentinel. The default routes through C
 |----------|-------------|-----------------|-------|
 | Claude Code | `anthropic/claude-code/claude-sonnet-4-6` | (none needed) | Default for gate. Uses your Claude subscription via `claude -p` |
 | Claude Code | `anthropic/claude-code/claude-opus-4-6` | (none needed) | Default for sentinel |
+| Codex | `openai/codex/gpt-5.4` | (none needed) | Uses your Codex/ChatGPT Pro subscription via `codex exec` |
 | Google Gemini | `google/gemini-3-flash-preview` | `GOOGLE_API_KEY` | Free tier available |
 | Anthropic API | `anthropic/claude-haiku-4-5` | `ANTHROPIC_API_KEY` | Direct API (pay-per-token) |
-| OpenAI | `openai/gpt-4o` | `OPENAI_API_KEY` | |
+| OpenAI | `openai/gpt-5.4-mini` | `OPENAI_API_KEY` | Direct API |
 | Ollama | `ollama/llama3` | (none needed) | Local models |
 
 Configure via environment variables (all prefixed `CROSS_`):
