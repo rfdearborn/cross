@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from cross.state import _SESSION_MAX_AGE_SECONDS, _SENTINEL_EVENT_MAX_AGE_SECONDS, clear_state, load_state, save_state
+from cross.state import _SENTINEL_EVENT_MAX_AGE_SECONDS, _SESSION_MAX_AGE_SECONDS, clear_state, load_state, save_state
 
 
 @pytest.fixture
