@@ -1201,6 +1201,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
           "block-" + ev.tool_use_id
         );
+      } else if (ev.action === "alert") {
+        showNotification(
+          "cross — alert",
+          (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
+          "alert-" + ev.tool_use_id
+        );
       }
       if (ev.action !== "escalate" && pendingMap[ev.tool_use_id]) {
         delete pendingMap[ev.tool_use_id];
@@ -1212,6 +1218,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         "cross — sentinel " + ev.action,
         ev.summary || ev.concerns || "",
         "sentinel-" + (ev.ts || "")
+      );
+    }
+    if (ev.event_type === "ErrorEvent") {
+      showNotification(
+        "cross — error",
+        ev.message || ev.error || "",
+        "error-" + (ev.ts || "")
       );
     }
   }

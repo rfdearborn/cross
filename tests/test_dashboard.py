@@ -378,6 +378,72 @@ class TestDashboardRoutes:
         assert response.status_code == 500
 
 
+class TestNotificationParity:
+    """Ensure browser notifications cover the same events as Slack/Email."""
+
+    def _extract_slack_notified_events(self) -> set[tuple[str, str]]:
+        """Parse the Slack plugin to find event_type+action pairs that trigger messages."""
+        import inspect
+
+        from cross.plugins.slack import SlackPlugin
+
+        source = inspect.getsource(SlackPlugin.handle_event)
+        events = set()
+        # GateDecisionEvent actions that post new messages (not just updates)
+        for action in ("block", "escalate", "alert", "halt_session"):
+            if f'"{action}"' in source:
+                events.add(("GateDecisionEvent", action))
+        # SentinelReviewEvent actions
+        for action in ("alert", "escalate", "halt_session", "error"):
+            if f'"{action}"' in source:
+                events.add(("SentinelReviewEvent", action))
+        if "PermissionPromptEvent" in source:
+            events.add(("PermissionPromptEvent", "*"))
+        if "ErrorEvent" in source:
+            events.add(("ErrorEvent", "*"))
+        return events
+
+    def _extract_browser_notified_events(self) -> set[tuple[str, str]]:
+        """Parse dashboard JS to find event_type+action pairs that call showNotification."""
+        import re
+
+        from cross.plugins.dashboard import DASHBOARD_HTML
+
+        html = DASHBOARD_HTML
+        # Find the handleEvent function
+        match = re.search(r"function handleEvent\(ev\)(.*?)^\s{2}\}", html, re.DOTALL | re.MULTILINE)
+        assert match, "Could not find handleEvent function in dashboard JS"
+        handler = match.group(1)
+
+        events = set()
+        # GateDecisionEvent actions with showNotification
+        for action in ("block", "escalate", "alert", "halt_session"):
+            # Pattern: action check followed by showNotification within a few lines
+            pattern = rf'ev\.action === "{action}".*?showNotification'
+            if re.search(pattern, handler, re.DOTALL):
+                events.add(("GateDecisionEvent", action))
+        # SentinelReviewEvent
+        if "SentinelReviewEvent" in handler and "showNotification" in handler:
+            # The handler fires for all non-allow actions
+            for action in ("alert", "escalate", "halt_session", "error"):
+                events.add(("SentinelReviewEvent", action))
+        if "PermissionPromptEvent" in handler and "showNotification" in handler:
+            events.add(("PermissionPromptEvent", "*"))
+        if "ErrorEvent" in handler and "showNotification" in handler:
+            events.add(("ErrorEvent", "*"))
+        return events
+
+    def test_browser_covers_all_slack_notification_events(self):
+        """Browser notifications should fire for every event that Slack notifies on."""
+        slack_events = self._extract_slack_notified_events()
+        browser_events = self._extract_browser_notified_events()
+        missing = slack_events - browser_events
+        assert not missing, (
+            f"Slack sends notifications for these events but the dashboard does not: {missing}. "
+            "Add showNotification() calls in handleEvent() in dashboard.py."
+        )
+
+
 class TestDashboardRouteRegistration:
     """Test that dashboard routes are registered in the Starlette app."""
 
