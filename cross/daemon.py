@@ -197,8 +197,21 @@ def get_agent_status() -> dict[str, Any]:
     running = _detect_running_agents()
     running_agent_names = set(running.keys())
 
-    # Clean up stale sessions (process no longer running)
+    # Clean up stale sessions: drop if agent process no longer running,
+    # then deduplicate by agent+project (keep newest per group).
     stale = [sid for sid, s in _sessions.items() if s.get("agent") not in running_agent_names]
+    # Deduplicate: for each agent+project, keep only the newest session
+    groups: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    for sid, s in _sessions.items():
+        if sid in stale:
+            continue
+        key = (s.get("agent", ""), s.get("project", ""))
+        groups.setdefault(key, []).append((sid, s.get("started_at", 0)))
+    for entries in groups.values():
+        if len(entries) > 1:
+            entries.sort(key=lambda x: x[1], reverse=True)
+            for sid, _ in entries[1:]:
+                stale.append(sid)
     for sid in stale:
         del _sessions[sid]
 
@@ -233,7 +246,8 @@ def get_agent_status() -> dict[str, Any]:
             # Gate-only agents: check if any gate request was recent
             gate_active = any(
                 (now - _session_last_activity.get(sid, 0)) < _ACTIVITY_THRESHOLD_SECONDS
-                for sid, s in _sessions.items() if s.get("agent") == agent
+                for sid, s in _sessions.items()
+                if s.get("agent") == agent
             )
             monitored.append({"agent": agent, "project": "", "label": agent, "active": gate_active})
 
