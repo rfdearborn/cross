@@ -506,6 +506,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .badge-tool_use { background: #2d333b; color: var(--text); }
   .badge-gate_allow { background: #1a3a2a; color: var(--green); }
   .badge-gate_block { background: #3d1f1f; color: var(--red); }
+  .badge-gate_halt_session { background: #3d1f1f; color: var(--red); }
   .badge-gate_alert { background: #3d2f1f; color: var(--orange); }
   .badge-gate_escalate { background: #3d2f1f; color: var(--yellow); }
   .badge-sentinel { background: #2a1f3d; color: #bc8cff; }
@@ -777,6 +778,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let pendingMap = {};
   let permissionMap = {};
   let haltedMap = {};
+  let blockedToolIds = {};  // tool_use_id -> action (block/halt_session)
   let ws = null;
   const haltedSection = document.getElementById("halted-section");
   const haltedList = document.getElementById("halted-list");
@@ -888,7 +890,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function badgeClass(ev) {
     const t = ev.event_type;
-    if (t === "ToolUseEvent") return "badge-tool_use";
+    if (t === "ToolUseEvent") {
+      var blocked = blockedToolIds[ev.tool_use_id];
+      if (blocked) return "badge-gate_" + blocked;
+      return "badge-tool_use";
+    }
     if (t === "GateDecisionEvent") return "badge-gate_" + (ev.action || "allow");
     if (t === "SentinelReviewEvent") return "badge-sentinel";
     if (t === "RequestEvent") return "badge-request";
@@ -898,7 +904,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function badgeLabel(ev) {
     const t = ev.event_type;
-    if (t === "ToolUseEvent") return "tool call";
+    if (t === "ToolUseEvent") {
+      if (blockedToolIds[ev.tool_use_id]) return "blocked";
+      return "tool call";
+    }
     if (t === "GateDecisionEvent") return "gate:" + (ev.action || "?");
     if (t === "SentinelReviewEvent") return "sentinel";
     if (t === "RequestEvent") return "request";
@@ -1166,6 +1175,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return;
     }
 
+    if (ev.event_type === "GateDecisionEvent" && ev.tool_use_id && ev.action && ev.action !== "allow" && ev.action !== "alert") {
+      blockedToolIds[ev.tool_use_id] = ev.action;
+    }
     if (shouldHide(ev)) return;
     addEventRow(ev);
     if (ev.event_type === "GateDecisionEvent") {
@@ -1493,6 +1505,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // Initial load: fetch existing events and pending
   fetch("/cross/api/events").then(function(r) { return r.json(); }).then(function(events) {
+    // First pass: collect blocked tool IDs so ToolUseEvents render correctly
+    for (const ev of events) {
+      if (ev.event_type === "GateDecisionEvent" && ev.tool_use_id && ev.action && ev.action !== "allow" && ev.action !== "alert") {
+        blockedToolIds[ev.tool_use_id] = ev.action;
+      }
+    }
     for (const ev of events) {
       if (!shouldHide(ev)) addEventRow(ev);
     }
