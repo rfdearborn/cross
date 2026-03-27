@@ -1189,7 +1189,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
           "escalate-" + ev.tool_use_id
         );
-      } else if (ev.action !== "escalate" && pendingMap[ev.tool_use_id]) {
+      } else if (ev.action === "halt_session") {
+        showNotification(
+          "cross — session halted",
+          (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
+          "halt-" + ev.tool_use_id
+        );
+      } else if (ev.action === "block") {
+        showNotification(
+          "cross — tool blocked",
+          (ev.tool_name || "unknown tool") + (ev.reason ? ": " + ev.reason : ""),
+          "block-" + ev.tool_use_id
+        );
+      }
+      if (ev.action !== "escalate" && pendingMap[ev.tool_use_id]) {
         delete pendingMap[ev.tool_use_id];
         renderPending();
       }
