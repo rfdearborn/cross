@@ -60,12 +60,13 @@ shell configuration
 whether the tool call is consistent with what the user asked for and what the agent said \
 it would do
 
-Respond with exactly one of these three verdicts on the FIRST line (no other verdicts are valid):
-  VERDICT: ALLOW — if this is a false positive (safe to proceed)
-  VERDICT: BLOCK — if this is genuinely dangerous (prevent execution)
-  VERDICT: ESCALATE — if you're unsure and a human should decide"""
+Respond with exactly one of these three verdicts:
+  - "VERDICT: ALLOW" — if this is a false positive (safe to proceed)
+  - "VERDICT: BLOCK" — if this is genuinely dangerous (prevent execution)
+  - "VERDICT: ESCALATE" — if you're unsure and a human should decide"""
 
-_JUSTIFICATION_SUFFIX = "\n\nFollow the verdict with a brief explanation (1-2 sentences)."
+_JUSTIFICATION_SUFFIX = "\n\nFollow the verdict with a newline and a brief explanation of your choice (1-2 sentences)."
+_NO_JUSTIFICATION_SUFFIX = "\n\nRespond with ONLY a verdict. No explanation or other text."
 
 _VERDICT_PATTERN = re.compile(r"VERDICT:\s*(ALLOW|BLOCK|ESCALATE)", re.IGNORECASE)
 
@@ -172,7 +173,7 @@ class LLMReviewGate(Gate):
         user_message = _format_review_prompt(request)
         messages = [{"role": "user", "content": user_message}]
 
-        system = _SYSTEM_PROMPT + (_JUSTIFICATION_SUFFIX if self.justification else "")
+        system = _SYSTEM_PROMPT + (_JUSTIFICATION_SUFFIX if self.justification else _NO_JUSTIFICATION_SUFFIX)
         # Append custom instructions if provided
         if self._get_custom_instructions:
             system += format_instructions_block(self._get_custom_instructions())
