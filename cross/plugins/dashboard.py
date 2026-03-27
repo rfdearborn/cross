@@ -752,10 +752,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     return s.length > n ? s.slice(0, n) + "..." : s;
   }
 
+  const BASE_TITLE = "cross dashboard";
+
+  function updateTabBadge(count) {
+    document.title = count > 0 ? "(" + count + ") " + BASE_TITLE : BASE_TITLE;
+    // Update or create a favicon badge
+    updateFaviconBadge(count);
+  }
+
+  function updateFaviconBadge(count) {
+    var canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 32;
+    var ctx = canvas.getContext("2d");
+    // Base icon: filled circle
+    ctx.fillStyle = "#30363d";
+    ctx.beginPath();
+    ctx.arc(16, 16, 15, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = "#3fb950";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (count > 0) {
+      // Red badge circle
+      ctx.fillStyle = "#f85149";
+      ctx.beginPath();
+      ctx.arc(24, 8, 8, 0, 2 * Math.PI);
+      ctx.fill();
+      // Badge number
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(count > 9 ? "9+" : String(count), 24, 8);
+    }
+    var link = document.querySelector("link[rel='icon']");
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+    }
+    link.href = canvas.toDataURL("image/png");
+  }
+
   function renderPending() {
     const gateKeys = Object.keys(pendingMap);
     const permKeys = Object.keys(permissionMap);
-    if (gateKeys.length === 0 && permKeys.length === 0) {
+    const totalPending = gateKeys.length + permKeys.length;
+    updateTabBadge(totalPending);
+    if (totalPending === 0) {
       pendingList.innerHTML = '<p class="empty">No pending approvals</p>';
       return;
     }
