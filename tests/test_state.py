@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from cross.state import _SENTINEL_EVENT_MAX_AGE_SECONDS, _SESSION_MAX_AGE_SECONDS, clear_state, load_state, save_state
+from cross.state import _SENTINEL_MAX_EVENTS, clear_state, load_state, save_state
 
 
 @pytest.fixture
@@ -52,31 +52,16 @@ class TestSaveLoad:
         assert len(restored["sentinel_events"]) == 2
         assert restored["sentinel_events"][0]["name"] == "bash"
 
-    def test_stale_sessions_filtered(self, state_path):
-        old_time = time.time() - _SESSION_MAX_AGE_SECONDS - 100
-        sessions = {
-            "old": {"agent": "claude", "started_at": old_time},
-            "new": {"agent": "claude", "started_at": time.time()},
-        }
-
-        save_state(sessions=sessions, project_cwds={}, gate_agents=set(), path=state_path)
-
-        restored = load_state(path=state_path)
-        assert "old" not in restored["sessions"]
-        assert "new" in restored["sessions"]
-
-    def test_stale_sentinel_events_filtered(self, state_path):
-        old_ts = time.time() - _SENTINEL_EVENT_MAX_AGE_SECONDS - 100
-        events = [
-            {"type": "tool_use", "name": "old", "ts": old_ts},
-            {"type": "tool_use", "name": "new", "ts": time.time()},
-        ]
+    def test_sentinel_events_capped_by_count(self, state_path):
+        events = [{"type": "tool_use", "name": f"ev{i}", "ts": time.time()} for i in range(_SENTINEL_MAX_EVENTS + 10)]
 
         save_state(sessions={}, project_cwds={}, gate_agents=set(), sentinel_events=events, path=state_path)
 
         restored = load_state(path=state_path)
-        assert len(restored["sentinel_events"]) == 1
-        assert restored["sentinel_events"][0]["name"] == "new"
+        assert len(restored["sentinel_events"]) == _SENTINEL_MAX_EVENTS
+        # Should keep the most recent (last N)
+        assert restored["sentinel_events"][0]["name"] == "ev10"
+        assert restored["sentinel_events"][-1]["name"] == f"ev{_SENTINEL_MAX_EVENTS + 9}"
 
     def test_missing_file_returns_empty(self, state_path):
         restored = load_state(path=state_path)

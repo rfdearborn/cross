@@ -16,10 +16,8 @@ from typing import Any
 logger = logging.getLogger("cross.state")
 
 _STATE_VERSION = 1
-# Sessions older than this are discarded on load (stale from previous runs)
-_SESSION_MAX_AGE_SECONDS = 24 * 60 * 60  # 24 hours
-# Sentinel events older than this are discarded
-_SENTINEL_EVENT_MAX_AGE_SECONDS = 2 * 60 * 60  # 2 hours
+# Keep at most this many sentinel events on load (matches deque maxlen)
+_SENTINEL_MAX_EVENTS = 100
 
 
 def _default_path() -> str:
@@ -93,17 +91,11 @@ def load_state(path: str | None = None) -> dict[str, Any]:
         logger.warning(f"Ignoring state file with unknown version: {raw.get('version')}")
         return empty
 
-    now = time.time()
-
-    # Restore sessions — filter out stale ones
+    # Restore sessions
     sessions: dict[str, dict[str, Any]] = {}
     for sid, sdata in raw.get("sessions", {}).items():
-        if not isinstance(sdata, dict):
-            continue
-        started = sdata.get("started_at", 0)
-        if now - started > _SESSION_MAX_AGE_SECONDS:
-            continue
-        sessions[sid] = sdata
+        if isinstance(sdata, dict):
+            sessions[sid] = sdata
 
     # Restore project CWDs
     project_cwds = raw.get("project_cwds", {})
@@ -114,14 +106,9 @@ def load_state(path: str | None = None) -> dict[str, Any]:
     gate_agents_raw = raw.get("gate_agents", [])
     gate_agents = set(gate_agents_raw) if isinstance(gate_agents_raw, list) else set()
 
-    # Restore sentinel events — filter out old ones
-    sentinel_events: list[dict[str, Any]] = []
-    for ev in raw.get("sentinel_events", []):
-        if not isinstance(ev, dict):
-            continue
-        if now - ev.get("ts", 0) > _SENTINEL_EVENT_MAX_AGE_SECONDS:
-            continue
-        sentinel_events.append(ev)
+    # Restore sentinel events — keep only the most recent N
+    raw_events = [ev for ev in raw.get("sentinel_events", []) if isinstance(ev, dict)]
+    sentinel_events = raw_events[-_SENTINEL_MAX_EVENTS:]
 
     restored = {
         "sessions": sessions,
