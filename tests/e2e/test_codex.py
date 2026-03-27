@@ -90,6 +90,8 @@ class TestCodexGating:
         resp = await send_openai_message(base, content="Run echo", stream=True)
         assert resp.status_code == 200
         assert "call_safe_codex" in resp.text
+        # Safe tool should NOT have triggered LLM gate review
+        assert len(gate_llm.requests) == 0
 
 
 class TestCodexHookGateAPI:

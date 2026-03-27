@@ -59,7 +59,8 @@ class TestDashboardAPIs:
             resp = await client.get(f"{base}/cross/api/status", timeout=5)
         assert resp.status_code == 200
         data = resp.json()
-        assert "monitored" in data or "agents" in data or "status" in data
+        assert "monitored" in data
+        assert "unmonitored" in data
 
     @pytest.mark.anyio
     async def test_events_endpoint(self, cross_daemon):
@@ -79,6 +80,9 @@ class TestDashboardAPIs:
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
+        # We generated traffic, so there should be at least one event
+        assert len(data) >= 1
+        assert any(e.get("event_type") == "RequestEvent" for e in data)
 
     @pytest.mark.anyio
     async def test_pending_endpoint_empty(self, cross_daemon):
@@ -88,14 +92,18 @@ class TestDashboardAPIs:
             resp = await client.get(f"{base}/cross/api/pending", timeout=5)
         assert resp.status_code == 200
         data = resp.json()
-        assert isinstance(data, (list, dict))
+        # No escalations pending — should be an empty list
+        assert data == [] or data == {}
 
     @pytest.mark.anyio
     async def test_pending_permissions_endpoint_empty(self, cross_daemon):
+        """No pending permission prompts initially."""
         base = cross_daemon["base_url"]
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{base}/cross/api/pending-permissions", timeout=5)
         assert resp.status_code == 200
+        data = resp.json()
+        assert data == [] or data == {}
 
     @pytest.mark.anyio
     async def test_instructions_get_and_put(self, cross_daemon):
@@ -115,9 +123,11 @@ class TestDashboardAPIs:
             )
             assert resp.status_code == 200
 
-            # GET updated
+            # GET updated — should reflect the content we just set
             resp = await client.get(f"{base}/cross/api/instructions", timeout=5)
             assert resp.status_code == 200
+            data = resp.json()
+            assert "Be extra careful with file deletions." in data.get("content", "")
 
 
 class TestDashboardWebSocket:

@@ -365,7 +365,7 @@ class TestEmailNotifications:
                 # Email should have been sent for the gate event
                 # (block events trigger email notification)
                 total_sent = len(mock_smtp_instance.sent)
-                assert total_sent >= initial_count
+                assert total_sent > initial_count
 
 
 # ---------------------------------------------------------------------------

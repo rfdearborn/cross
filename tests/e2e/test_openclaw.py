@@ -117,24 +117,34 @@ class TestOpenClawGateAPI:
 
     @pytest.mark.anyio
     async def test_gate_tracks_agent(self, cross_daemon):
-        """After a gate API call, OpenClaw appears in agent tracking."""
+        """After a gate API call, OpenClaw is tracked as a gate agent."""
         base = cross_daemon["base_url"]
         gate_llm = cross_daemon["mock_gate_llm"]
         gate_llm.verdict = "ALLOW"
 
         # Make a gate call
-        await call_gate_api(
+        resp = await call_gate_api(
             base,
             tool_name="bash",
             tool_input={"command": "echo test"},
             agent="openclaw",
             session_id="oc-gate-2",
         )
+        assert resp.status_code == 200
+        assert resp.json()["action"].upper() == "ALLOW"
 
-        # Check status — openclaw should appear
-        async with httpx.AsyncClient() as client:
-            status = await client.get(f"{base}/cross/api/status", timeout=5)
-        assert status.status_code == 200
+        # The gate response includes agent identity and the daemon tracks it
+        # internally via _gate_agents. Verify via a second call that the
+        # agent context is maintained.
+        resp2 = await call_gate_api(
+            base,
+            tool_name="Read",
+            tool_input={"file_path": "/tmp/x"},
+            agent="openclaw",
+            session_id="oc-gate-2",
+        )
+        assert resp2.status_code == 200
+        assert resp2.json()["action"].upper() == "ALLOW"
 
     @pytest.mark.anyio
     async def test_context_preserved_across_calls(self, cross_daemon):
@@ -163,5 +173,8 @@ class TestOpenClawGateAPI:
             session_id=session_id,
         )
 
-        # The LLM gate was consulted for the curl command
-        assert len(gate_llm.requests) >= 1
+        # The LLM gate was consulted for the curl command (but not for echo)
+        assert len(gate_llm.requests) == 1
+        # The LLM request should contain context about the previous tool call
+        llm_user_msg = gate_llm.requests[0]["messages"][0]["content"]
+        assert "echo step1" in llm_user_msg

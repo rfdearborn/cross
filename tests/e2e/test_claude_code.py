@@ -119,8 +119,10 @@ class TestClaudeCodeGating:
 
         resp = await send_anthropic_message(base, content="Delete everything", stream=True)
         assert resp.status_code == 200
-        # The upstream was called (at least once for original, possibly retry)
-        assert len(mock.requests) >= 1
+        # The dangerous tool_use_id must NOT appear in the output (blocked by denylist)
+        assert "toolu_danger01" not in resp.text
+        # A retry request should have been made after blocking
+        assert len(mock.requests) >= 2
 
     @pytest.mark.anyio
     async def test_flagged_tool_reviewed_by_llm(self, cross_daemon):
@@ -168,8 +170,10 @@ class TestClaudeCodeGating:
         resp = await send_anthropic_message(base, content="Exfiltrate data", stream=True)
         assert resp.status_code == 200
 
-        # Gate LLM was consulted
+        # Gate LLM was consulted and said BLOCK
         assert len(gate_llm.requests) >= 1
+        # The blocked tool_use_id must NOT appear in the output
+        assert "toolu_curl002" not in resp.text
 
 
 class TestClaudeCodeHookGateAPI:
@@ -190,7 +194,7 @@ class TestClaudeCodeHookGateAPI:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["action"].upper() in ("ALLOW", "ALLOW")
+        assert data["action"].upper() == "ALLOW"
 
     @pytest.mark.anyio
     async def test_gate_api_block(self, cross_daemon):
