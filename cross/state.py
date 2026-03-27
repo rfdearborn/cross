@@ -30,6 +30,7 @@ def save_state(
     project_cwds: dict[str, str],
     gate_agents: set[str],
     sentinel_events: list[dict[str, Any]] | None = None,
+    halted_sessions: dict[str, str] | None = None,
     path: str | None = None,
 ) -> None:
     """Persist daemon state to disk.  Safe against crashes (atomic write)."""
@@ -45,6 +46,8 @@ def save_state(
     }
     if sentinel_events is not None:
         state["sentinel_events"] = sentinel_events
+    if halted_sessions:
+        state["halted_sessions"] = halted_sessions
 
     tmp_path = path + ".tmp"
     try:
@@ -75,6 +78,7 @@ def load_state(path: str | None = None) -> dict[str, Any]:
         "project_cwds": {},
         "gate_agents": set(),
         "sentinel_events": [],
+        "halted_sessions": {},
     }
 
     try:
@@ -110,11 +114,17 @@ def load_state(path: str | None = None) -> dict[str, Any]:
     raw_events = [ev for ev in raw.get("sentinel_events", []) if isinstance(ev, dict)]
     sentinel_events = raw_events[-settings.llm_sentinel_max_events :]
 
+    # Restore halted sessions
+    halted_sessions = raw.get("halted_sessions", {})
+    if not isinstance(halted_sessions, dict):
+        halted_sessions = {}
+
     restored = {
         "sessions": sessions,
         "project_cwds": project_cwds,
         "gate_agents": gate_agents,
         "sentinel_events": sentinel_events,
+        "halted_sessions": halted_sessions,
     }
 
     count_sessions = len(sessions)

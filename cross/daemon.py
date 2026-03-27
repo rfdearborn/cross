@@ -809,8 +809,28 @@ async def api_unhalt_session(request: Request) -> JSONResponse:
     session_id = request.path_params["session_id"]
     cleared = clear_sentinel_halt(session_id)
     if cleared:
+        _persist_state()
         return JSONResponse({"status": "ok", "session_id": session_id})
     return JSONResponse({"status": "not_found", "message": "Session not halted"}, status_code=404)
+
+
+async def api_unhalt_and_continue(request: Request) -> JSONResponse:
+    """POST /cross/api/halted-sessions/{session_id}/continue — un-halt and resume agent."""
+    from cross.proxy import clear_sentinel_halt, get_halted_sessions
+
+    session_id = request.path_params["session_id"]
+    reason = get_halted_sessions().get(session_id, "")
+    cleared = clear_sentinel_halt(session_id)
+    if not cleared:
+        return JSONResponse({"status": "not_found", "message": "Session not halted"}, status_code=404)
+    _persist_state()
+    msg = (
+        f"Your session was halted by cross because: {reason}. "
+        "The halt has been removed by the human operator. "
+        "Do not retry the command that was blocked. Continue with a different approach."
+    )
+    await _inject_to_session(session_id, msg + "\r")
+    return JSONResponse({"status": "ok", "session_id": session_id, "continued": True})
 
 
 async def api_get_instructions(request: Request) -> JSONResponse:
@@ -936,12 +956,15 @@ def _persist_state() -> None:
         except Exception:
             pass
 
+    from cross.proxy import get_halted_sessions
+
     try:
         save_state(
             sessions=_sessions,
             project_cwds=_project_cwds,
             gate_agents=_gate_agents,
             sentinel_events=sentinel_events,
+            halted_sessions=get_halted_sessions(),
         )
     except Exception as e:
         logger.warning(f"Failed to persist state: {e}")
@@ -990,6 +1013,14 @@ async def on_startup():
     _restored_sentinel_events = _restored_state["sentinel_events"]
     if _sessions:
         logger.info(f"Restored {len(_sessions)} sessions from previous run")
+
+    # Restore halted sessions
+    from cross.proxy import set_sentinel_halt
+
+    for sid, reason in _restored_state.get("halted_sessions", {}).items():
+        set_sentinel_halt(reason, session_id=sid)
+    if _restored_state.get("halted_sessions"):
+        logger.info(f"Restored {len(_restored_state['halted_sessions'])} halted sessions")
 
     # Register native desktop notifications (macOS)
     if native_notifications_available():
@@ -1236,6 +1267,7 @@ _dashboard_routes = [
     Route("/cross/api/permission/{session_id}/resolve", api_resolve_permission, methods=["POST"]),
     Route("/cross/api/halted-sessions", api_halted_sessions, methods=["GET"]),
     Route("/cross/api/halted-sessions/{session_id}/resolve", api_unhalt_session, methods=["POST"]),
+    Route("/cross/api/halted-sessions/{session_id}/continue", api_unhalt_and_continue, methods=["POST"]),
     Route("/cross/api/instructions", api_get_instructions, methods=["GET"]),
     Route("/cross/api/instructions", api_put_instructions, methods=["PUT"]),
     Route("/cross/api/conversations/{conversation_id:path}/message", api_conversation_message, methods=["POST"]),

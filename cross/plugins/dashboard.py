@@ -426,7 +426,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     gap: 8px;
     margin-top: 12px;
   }
+  .btn-ack { background: var(--surface-light); color: var(--text-dim); border: 1px solid var(--border); }
   .btn-unhalt { background: var(--green); color: #fff; }
+  .btn-continue { background: var(--blue, #4a9eff); color: #fff; }
 
   /* Agent status bar */
   .agent-status {
@@ -1250,12 +1252,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         + (sid !== "__global__" ? '<div class="session-id">' + safeSid + '</div>' : '')
         + '<div class="reason">' + escHtml(reason) + '</div>'
         + '<div class="actions">'
+        + '<button class="btn btn-ack" onclick="ackHalt(&apos;'
+        + safeSid + '&apos;)">Acknowledge</button>'
         + '<button class="btn btn-unhalt" onclick="unhaltSession(&apos;'
-        + safeSid + '&apos;)">Un-halt</button>'
+        + safeSid + '&apos;)">Remove halt</button>'
+        + '<button class="btn btn-continue" onclick="unhaltAndContinue(&apos;'
+        + safeSid + '&apos;)">Remove halt and continue</button>'
         + '</div></div>';
     }
     haltedList.innerHTML = html;
   }
+
+  var ackedHalts = {};
+  window.ackHalt = function(sessionId) {
+    ackedHalts[sessionId] = true;
+    delete haltedMap[sessionId];
+    renderHalted();
+  };
 
   window.unhaltSession = function(sessionId) {
     var card = document.querySelector('.halted-card[data-sid="' + sessionId + '"]');
@@ -1275,9 +1288,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
   };
 
+  window.unhaltAndContinue = function(sessionId) {
+    var card = document.querySelector('.halted-card[data-sid="' + sessionId + '"]');
+    if (card) card.querySelectorAll("button").forEach(function(b) { b.disabled = true; });
+    fetch("/cross/api/halted-sessions/" + encodeURIComponent(sessionId) + "/continue", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username: "dashboard"})
+    }).then(function(r) {
+      if (r.ok) {
+        delete haltedMap[sessionId];
+        renderHalted();
+      }
+    }).catch(function(e) {
+      console.error("Failed to continue session:", e);
+      if (card) card.querySelectorAll("button").forEach(function(b) { b.disabled = false; });
+    });
+  };
+
   function refreshHalted() {
     fetch("/cross/api/halted-sessions").then(function(r) { return r.json(); }).then(function(data) {
-      haltedMap = data;
+      // Filter out acknowledged halts (client-side dismiss)
+      for (var sid in data) {
+        if (!ackedHalts[sid]) haltedMap[sid] = data[sid];
+      }
+      // Clear acks for halts that no longer exist server-side
+      for (var aSid in ackedHalts) {
+        if (!(aSid in data)) delete ackedHalts[aSid];
+      }
       renderHalted();
     }).catch(function() {});
   }

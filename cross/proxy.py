@@ -672,6 +672,7 @@ async def handle_proxy_request(
 
     # Record session activity for status tracking
     from cross.daemon import record_session_activity
+
     record_session_activity(session_id)
 
     # Publish request event (use decompressed body for parsing)
@@ -802,6 +803,7 @@ async def _process_gate_result(
     _publish,
     any_halted: bool,
     cascade_on_block: bool = False,
+    session_id: str = "",
 ) -> tuple[bool, bool, str]:
     """Shared gate result processing for SSE, non-streaming, and streaming paths.
 
@@ -856,6 +858,8 @@ async def _process_gate_result(
             halted = True
         else:
             halted = any_halted or result.action == Action.HALT_SESSION
+        if result.action == Action.HALT_SESSION:
+            set_sentinel_halt(reason, session_id=session_id)
         logger.warning(f"BLOCKED tool {tool_event.name} (id={tool_event.tool_use_id}): {reason}")
         return True, halted, reason
 
@@ -873,6 +877,7 @@ async def _gate_tool_events(
     model: str,
     conversation_context: list,
     cascade_on_block: bool = True,
+    session_id: str = "",
 ) -> set[str]:
     """Gate a batch of tool events, returning the set of blocked tool_use_ids.
 
@@ -895,7 +900,7 @@ async def _gate_tool_events(
             i,
         )
         blocked, any_halted, _reason = await _process_gate_result(
-            result, tool_event, _publish, any_halted, cascade_on_block=cascade_on_block
+            result, tool_event, _publish, any_halted, cascade_on_block=cascade_on_block, session_id=session_id
         )
         if blocked:
             blocked_ids.add(tool_event.tool_use_id)
@@ -1039,6 +1044,7 @@ async def _gate_sse_response(
         user_intent,
         model,
         conversation_context,
+        session_id=session_id,
     )
 
     if not blocked_ids:
@@ -1164,7 +1170,7 @@ async def _gate_non_streaming_response(
         )
 
         blocked, any_halted, _reason = await _process_gate_result(
-            result, tool_event, _publish, any_halted, cascade_on_block=True
+            result, tool_event, _publish, any_halted, cascade_on_block=True, session_id=session_id
         )
         if blocked:
             halted_indices.append(i)
@@ -1525,6 +1531,8 @@ async def _proxy_streaming(
                                         "input": tool_event.input,
                                     }
                                     _blocked_tool_timestamps[tool_event.tool_use_id] = time.time()
+                                    if result.action == Action.HALT_SESSION:
+                                        set_sentinel_halt(reason, session_id=session_id)
                                     logger.warning(
                                         f"HALTED tool {tool_event.name} (id={tool_event.tool_use_id}): {reason}"
                                     )
