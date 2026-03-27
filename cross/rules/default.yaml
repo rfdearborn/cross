@@ -240,7 +240,15 @@ rules:
       - 'cat\b.*(\.aws/credentials|\.docker/config|\.npmrc|\.netrc|\.config/gh/).*\|\s*(curl|wget|nc|ncat)\b'
       # scp/rsync/nc exfiltration
       - '(scp|rsync|nc|ncat)\b.*{{secret_ext}}\b'
-      # Pipe to interpreter (remote code execution)
+
+  # ── Pipe to interpreter (remote code execution) ──
+
+  - name: pipe-to-interpreter
+    tools: [Bash, exec]
+    field: command
+    action: review
+    description: Piping network content to an interpreter — LLM reviews context
+    patterns:
       - 'curl\b.*\|\s*(ba)?sh\b'
       - 'curl\b.*\|\s*(z|fi|c|da|a|tc|k)?sh\b'
       - 'curl\b.*\|\s*(python[23]?|perl|ruby|node)\b'
