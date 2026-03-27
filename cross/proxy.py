@@ -110,6 +110,37 @@ def is_sentinel_halted(session_id: str = "") -> bool:
     return session_id in _halted_sessions if session_id else False
 
 
+def get_halted_sessions() -> dict[str, str]:
+    """Return a snapshot of halted sessions (session_id -> reason).
+
+    If a global halt is active, it appears under the key ``"__global__"``.
+    """
+    result = dict(_halted_sessions)
+    if _sentinel_halted_global:
+        result["__global__"] = _sentinel_halt_reason_global
+    return result
+
+
+def clear_sentinel_halt(session_id: str = "") -> bool:
+    """Un-halt a specific session or clear the global halt.
+
+    Returns True if something was actually cleared.
+    """
+    if session_id == "__global__" or (not session_id):
+        global _sentinel_halted_global, _sentinel_halt_reason_global
+        if _sentinel_halted_global:
+            _sentinel_halted_global = False
+            _sentinel_halt_reason_global = ""
+            logger.info("Global sentinel halt cleared")
+            return True
+        return False
+    if session_id in _halted_sessions:
+        del _halted_sessions[session_id]
+        logger.info(f"Sentinel halt cleared for session {session_id}")
+        return True
+    return False
+
+
 # Gate approval infrastructure (for ESCALATE → human review)
 _pending_approvals: dict[str, asyncio.Event] = {}
 _approval_results: dict[str, tuple[bool, str]] = {}  # tool_use_id -> (approved, username)

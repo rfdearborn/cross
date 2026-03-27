@@ -397,6 +397,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     margin-top: 12px;
   }
 
+  /* Halted session cards */
+  .halted-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--red);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .halted-card .halted-label {
+    font-weight: 600;
+    color: var(--red);
+    font-size: 15px;
+  }
+  .halted-card .session-id {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .halted-card .reason {
+    color: var(--text-dim);
+    margin: 6px 0;
+    font-size: 13px;
+  }
+  .halted-card .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .btn-unhalt { background: var(--green); color: #fff; }
+
   /* Agent status bar */
   .agent-status {
     display: flex;
@@ -709,6 +740,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <h2>Agents</h2>
     <div id="agent-status" class="agent-status"></div>
   </section>
+  <section id="halted-section" style="display:none">
+    <h2>Halted Sessions</h2>
+    <div id="halted-list"></div>
+  </section>
   <section id="pending-section">
     <h2>Pending Approvals</h2>
     <div id="pending-list"><p class="empty">No pending approvals</p></div>
@@ -739,7 +774,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   const MAX_FEED = 200;
   let pendingMap = {};
   let permissionMap = {};
+  let haltedMap = {};
   let ws = null;
+  const haltedSection = document.getElementById("halted-section");
+  const haltedList = document.getElementById("halted-list");
 
   function formatTime(ts) {
     const d = new Date(ts * 1000);
@@ -1193,6 +1231,57 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
   };
 
+  // --- Halted Sessions ---
+  function renderHalted() {
+    var keys = Object.keys(haltedMap);
+    if (keys.length === 0) {
+      haltedSection.style.display = "none";
+      return;
+    }
+    haltedSection.style.display = "";
+    var html = "";
+    for (var i = 0; i < keys.length; i++) {
+      var sid = keys[i];
+      var reason = haltedMap[sid];
+      var safeSid = escHtml(sid);
+      var label = sid === "__global__" ? "Global halt" : "Session " + safeSid;
+      html += '<div class="halted-card" data-sid="' + safeSid + '">'
+        + '<div class="halted-label">' + escHtml(label) + '</div>'
+        + (sid !== "__global__" ? '<div class="session-id">' + safeSid + '</div>' : '')
+        + '<div class="reason">' + escHtml(reason) + '</div>'
+        + '<div class="actions">'
+        + '<button class="btn btn-unhalt" onclick="unhaltSession(&apos;'
+        + safeSid + '&apos;)">Un-halt</button>'
+        + '</div></div>';
+    }
+    haltedList.innerHTML = html;
+  }
+
+  window.unhaltSession = function(sessionId) {
+    var card = document.querySelector('.halted-card[data-sid="' + sessionId + '"]');
+    if (card) card.querySelectorAll("button").forEach(function(b) { b.disabled = true; });
+    fetch("/cross/api/halted-sessions/" + encodeURIComponent(sessionId) + "/resolve", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username: "dashboard"})
+    }).then(function(r) {
+      if (r.ok) {
+        delete haltedMap[sessionId];
+        renderHalted();
+      }
+    }).catch(function(e) {
+      console.error("Failed to un-halt session:", e);
+      if (card) card.querySelectorAll("button").forEach(function(b) { b.disabled = false; });
+    });
+  };
+
+  function refreshHalted() {
+    fetch("/cross/api/halted-sessions").then(function(r) { return r.json(); }).then(function(data) {
+      haltedMap = data;
+      renderHalted();
+    }).catch(function() {});
+  }
+
   // --- Conversations ---
   function openConversation(convId, row, evData) {
     var chat = document.createElement("div");
@@ -1380,6 +1469,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     for (const p of perms) { permissionMap[p.session_id] = p; }
     renderPending();
   }).catch(function() {});
+
+  refreshHalted();
+  setInterval(refreshHalted, 10000);
 
   connect();
 })();

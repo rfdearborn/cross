@@ -796,6 +796,26 @@ async def api_resolve_permission(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "session_id": session_id, "action": action})
 
 
+async def api_halted_sessions(request: Request) -> JSONResponse:
+    """GET /cross/api/halted-sessions — list halted sessions."""
+    from cross.proxy import get_halted_sessions
+
+    return JSONResponse(get_halted_sessions())
+
+
+async def api_unhalt_session(request: Request) -> JSONResponse:
+    """POST /cross/api/halted-sessions/{session_id}/resolve — un-halt a session."""
+    from cross.proxy import clear_sentinel_halt
+
+    session_id = request.path_params["session_id"]
+    cleared = clear_sentinel_halt(session_id)
+    if cleared:
+        return JSONResponse({"status": "ok", "session_id": session_id})
+    return JSONResponse(
+        {"status": "not_found", "message": "Session not halted"}, status_code=404
+    )
+
+
 async def api_get_instructions(request: Request) -> JSONResponse:
     """GET /cross/api/instructions — return current custom instructions."""
     content = _custom_instructions.content if _custom_instructions else ""
@@ -1216,6 +1236,8 @@ _dashboard_routes = [
     Route("/cross/api/pending/{tool_use_id}/resolve", api_resolve_pending, methods=["POST"]),
     Route("/cross/api/pending-permissions", api_pending_permissions, methods=["GET"]),
     Route("/cross/api/permission/{session_id}/resolve", api_resolve_permission, methods=["POST"]),
+    Route("/cross/api/halted-sessions", api_halted_sessions, methods=["GET"]),
+    Route("/cross/api/halted-sessions/{session_id}/resolve", api_unhalt_session, methods=["POST"]),
     Route("/cross/api/instructions", api_get_instructions, methods=["GET"]),
     Route("/cross/api/instructions", api_put_instructions, methods=["PUT"]),
     Route("/cross/api/conversations/{conversation_id:path}/message", api_conversation_message, methods=["POST"]),
