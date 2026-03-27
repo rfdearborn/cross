@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     auto_update_enabled: bool = True
     auto_update_interval_hours: int = 24
 
+    # Dashboard — agent activity and permission notification thresholds
+    activity_threshold_seconds: float = 30.0  # seconds before agent pill shows as stopped
+    permission_notify_delay: float = 10.0  # seconds before notifying about pending permission prompt
+
     # Native desktop notifications (macOS, via terminal-notifier)
     native_notifications_enabled: bool = False
 
@@ -80,6 +84,7 @@ class Settings(BaseSettings):
     llm_sentinel_max_tokens: int = 1024
     llm_sentinel_reasoning: str = "medium"  # extended thinking level (sentinel benefits from deeper reasoning)
     llm_sentinel_interval_seconds: int = 60  # how often the sentinel reviews recent activity
+    llm_sentinel_max_events: int = 100  # max events in the sentinel review window
 
     # LLM sentinel backup — fallback model if primary sentinel model is unavailable
     llm_sentinel_backup_model: str = ""  # e.g. "openai/gpt-5.4"

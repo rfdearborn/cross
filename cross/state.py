@@ -16,8 +16,6 @@ from typing import Any
 logger = logging.getLogger("cross.state")
 
 _STATE_VERSION = 1
-# Keep at most this many sentinel events on load (matches deque maxlen)
-_SENTINEL_MAX_EVENTS = 100
 
 
 def _default_path() -> str:
@@ -107,8 +105,10 @@ def load_state(path: str | None = None) -> dict[str, Any]:
     gate_agents = set(gate_agents_raw) if isinstance(gate_agents_raw, list) else set()
 
     # Restore sentinel events — keep only the most recent N
+    from cross.config import settings
+
     raw_events = [ev for ev in raw.get("sentinel_events", []) if isinstance(ev, dict)]
-    sentinel_events = raw_events[-_SENTINEL_MAX_EVENTS:]
+    sentinel_events = raw_events[-settings.llm_sentinel_max_events :]
 
     restored = {
         "sessions": sessions,

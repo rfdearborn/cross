@@ -64,12 +64,9 @@ _gate_agents: set[str] = set()
 _gate_recent_tools: dict[str, deque] = {}
 # Per-session last activity timestamp (updated on proxy/gate requests)
 _session_last_activity: dict[str, float] = {}
-# Threshold in seconds — sessions with activity within this window are "active"
-_ACTIVITY_THRESHOLD_SECONDS = 30.0
 # Permission prompt tracking (hook-based — PermissionRequest hook notifies daemon)
 _permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, ts}
 _permission_notify_tasks: dict[str, asyncio.Task] = {}  # session_id -> delayed notify task
-_PERMISSION_NOTIFY_DELAY = 10.0  # Seconds to wait before notifying (gives user time to approve)
 # Event loop reference (for thread-safe callbacks)
 _event_loop: asyncio.AbstractEventLoop | None = None
 
@@ -233,7 +230,7 @@ def get_agent_status() -> dict[str, Any]:
         label = f"{agent} - {project}" if project else agent
         pid = session.get("pid")
         last_activity = _session_last_activity.get(sid, 0)
-        active = (now - last_activity) < _ACTIVITY_THRESHOLD_SECONDS if last_activity else False
+        active = (now - last_activity) < settings.activity_threshold_seconds if last_activity else False
         monitored.append({"agent": agent, "project": project, "label": label, "active": active})
         if pid:
             monitored_pids.add(int(pid))
@@ -245,7 +242,7 @@ def get_agent_status() -> dict[str, Any]:
         if agent not in {s.get("agent") for s in _sessions.values()}:
             # Gate-only agents: check if any gate request was recent
             gate_active = any(
-                (now - _session_last_activity.get(sid, 0)) < _ACTIVITY_THRESHOLD_SECONDS
+                (now - _session_last_activity.get(sid, 0)) < settings.activity_threshold_seconds
                 for sid, s in _sessions.items()
                 if s.get("agent") == agent
             )
@@ -411,7 +408,7 @@ async def _delayed_inject(session_id: str, text: str):
 
 async def _delayed_permission_notify(session_id: str, tool_desc: str):
     """Wait, then publish the permission notification if still pending."""
-    await asyncio.sleep(_PERMISSION_NOTIFY_DELAY)
+    await asyncio.sleep(settings.permission_notify_delay)
 
     if session_id not in _permission_pending:
         logger.debug(f"Permission prompt for {session_id} resolved before delay elapsed")
@@ -421,7 +418,9 @@ async def _delayed_permission_notify(session_id: str, tool_desc: str):
     # Keep the entry but mark as notified so resolve_permission can still find it
     # and _clear_permission_on_activity won't clear it prematurely
     _permission_pending[session_id]["notified"] = True
-    logger.info(f"Permission prompt still pending for {session_id} after {_PERMISSION_NOTIFY_DELAY}s, notifying")
+    logger.info(
+        f"Permission prompt still pending for {session_id} after {settings.permission_notify_delay}s, notifying"
+    )
     await event_bus.publish(
         PermissionPromptEvent(
             session_id=session_id,
@@ -811,9 +810,7 @@ async def api_unhalt_session(request: Request) -> JSONResponse:
     cleared = clear_sentinel_halt(session_id)
     if cleared:
         return JSONResponse({"status": "ok", "session_id": session_id})
-    return JSONResponse(
-        {"status": "not_found", "message": "Session not halted"}, status_code=404
-    )
+    return JSONResponse({"status": "not_found", "message": "Session not halted"}, status_code=404)
 
 
 async def api_get_instructions(request: Request) -> JSONResponse:
@@ -1088,6 +1085,7 @@ async def on_startup():
                 config=sentinel_config,
                 event_bus=event_bus,
                 interval_seconds=settings.llm_sentinel_interval_seconds,
+                max_events=settings.llm_sentinel_max_events,
                 get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
                 backup_config=sentinel_backup,
                 seed_events=_restored_sentinel_events,

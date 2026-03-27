@@ -8,7 +8,8 @@ import time
 
 import pytest
 
-from cross.state import _SENTINEL_MAX_EVENTS, clear_state, load_state, save_state
+from cross.config import settings
+from cross.state import clear_state, load_state, save_state
 
 
 @pytest.fixture
@@ -53,15 +54,18 @@ class TestSaveLoad:
         assert restored["sentinel_events"][0]["name"] == "bash"
 
     def test_sentinel_events_capped_by_count(self, state_path):
-        events = [{"type": "tool_use", "name": f"ev{i}", "ts": time.time()} for i in range(_SENTINEL_MAX_EVENTS + 10)]
+        events = [
+            {"type": "tool_use", "name": f"ev{i}", "ts": time.time()}
+            for i in range(settings.llm_sentinel_max_events + 10)
+        ]
 
         save_state(sessions={}, project_cwds={}, gate_agents=set(), sentinel_events=events, path=state_path)
 
         restored = load_state(path=state_path)
-        assert len(restored["sentinel_events"]) == _SENTINEL_MAX_EVENTS
+        assert len(restored["sentinel_events"]) == settings.llm_sentinel_max_events
         # Should keep the most recent (last N)
         assert restored["sentinel_events"][0]["name"] == "ev10"
-        assert restored["sentinel_events"][-1]["name"] == f"ev{_SENTINEL_MAX_EVENTS + 9}"
+        assert restored["sentinel_events"][-1]["name"] == f"ev{settings.llm_sentinel_max_events + 9}"
 
     def test_missing_file_returns_empty(self, state_path):
         restored = load_state(path=state_path)
