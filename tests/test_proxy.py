@@ -75,15 +75,17 @@ def _reset_proxy_globals():
     _blocked_tool_timestamps.clear()
     _recent_tools.clear()
     # Reset sentinel halt state
-    proxy_module._sentinel_halted = False
-    proxy_module._sentinel_halt_reason = ""
+    proxy_module._halted_sessions.clear()
+    proxy_module._sentinel_halted_global = False
+    proxy_module._sentinel_halt_reason_global = ""
     # Reset the singleton client
     old_client = proxy_module._client
     proxy_module._client = None
     yield
     # Restore after test
-    proxy_module._sentinel_halted = False
-    proxy_module._sentinel_halt_reason = ""
+    proxy_module._halted_sessions.clear()
+    proxy_module._sentinel_halted_global = False
+    proxy_module._sentinel_halt_reason_global = ""
     proxy_module._client = old_client
 
 
@@ -927,8 +929,8 @@ class TestHandleProxyRequest:
         req = _make_mock_request(body)
         event_bus = EventBus()
 
-        proxy_module._sentinel_halted = True
-        proxy_module._sentinel_halt_reason = "Agent exfiltrating credentials"
+        proxy_module._sentinel_halted_global = True
+        proxy_module._sentinel_halt_reason_global = "Agent exfiltrating credentials"
 
         resp = await handle_proxy_request(req, event_bus)
 
@@ -936,6 +938,26 @@ class TestHandleProxyRequest:
         resp_data = json.loads(resp.body)
         assert "sentinel" in resp_data["error"]["message"].lower()
         assert "exfiltrating credentials" in resp_data["error"]["message"]
+
+    @pytest.mark.anyio
+    async def test_sentinel_halt_per_session(self):
+        """Per-session halt should only block the halted session, not others."""
+        body = {"model": "claude-3", "stream": False, "messages": [{"role": "user", "content": "hi"}]}
+        event_bus = EventBus()
+
+        # Halt session "abc123"
+        proxy_module._halted_sessions["abc123"] = "Agent exfiltrating credentials"
+
+        # Request from halted session should be blocked
+        req1 = _make_mock_request(body)
+        resp1 = await handle_proxy_request(req1, event_bus, session_id="abc123")
+        assert resp1.status_code == 403
+        assert "exfiltrating credentials" in json.loads(resp1.body)["error"]["message"]
+
+        # Request from a different session should NOT be blocked
+        req2 = _make_mock_request(body)
+        resp2 = await handle_proxy_request(req2, event_bus, session_id="other456")
+        assert resp2.status_code != 403
 
     @pytest.mark.anyio
     async def test_routes_streaming_request(self):

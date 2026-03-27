@@ -79,22 +79,35 @@ _recent_tools: deque[dict[str, Any]] = deque(maxlen=max(settings.llm_gate_contex
 _MAX_BUFFER_LINES = 500  # Flush buffer if it exceeds this many lines
 _BLOCKED_TOOL_TTL = 300.0  # Seconds before stale blocked tool entries are cleaned up
 
-# Sentinel halt flag — when set, proxy rejects all requests
-_sentinel_halted = False
-_sentinel_halt_reason = ""
+# Sentinel halt state — per-session halt tracking.
+# When a session_id is known, only that session is halted.
+# When session_id is unknown, a global halt is set affecting all sessions.
+_halted_sessions: dict[str, str] = {}  # session_id -> reason
+_sentinel_halted_global = False  # fallback when session_id is unknown
+_sentinel_halt_reason_global = ""
 
 
-def set_sentinel_halt(reason: str) -> None:
-    """Called by the sentinel when it issues a HALT verdict."""
-    global _sentinel_halted, _sentinel_halt_reason
-    _sentinel_halted = True
-    _sentinel_halt_reason = reason
-    logger.critical(f"Proxy halted by sentinel: {reason}")
+def set_sentinel_halt(reason: str, session_id: str = "") -> None:
+    """Called by the sentinel when it issues a HALT verdict.
+
+    If *session_id* is provided, only that session is halted.
+    Otherwise a global halt is set (legacy fallback).
+    """
+    if session_id:
+        _halted_sessions[session_id] = reason
+        logger.critical(f"Session {session_id} halted by sentinel: {reason}")
+    else:
+        global _sentinel_halted_global, _sentinel_halt_reason_global
+        _sentinel_halted_global = True
+        _sentinel_halt_reason_global = reason
+        logger.critical(f"Proxy halted by sentinel (global): {reason}")
 
 
-def is_sentinel_halted() -> bool:
-    """Check if the sentinel has halted the proxy."""
-    return _sentinel_halted
+def is_sentinel_halted(session_id: str = "") -> bool:
+    """Check if the given session (or globally) has been halted."""
+    if _sentinel_halted_global:
+        return True
+    return session_id in _halted_sessions if session_id else False
 
 
 # Gate approval infrastructure (for ESCALATE → human review)
@@ -563,14 +576,19 @@ async def handle_proxy_request(
             headers={"content-type": "application/json"},
         )
 
-    if _sentinel_halted:
+    if is_sentinel_halted(session_id):
+        halt_reason = (
+            _halted_sessions.get(session_id, "")
+            if session_id and session_id in _halted_sessions
+            else _sentinel_halt_reason_global
+        )
         return Response(
             content=json.dumps(
                 {
                     "type": "error",
                     "error": {
                         "type": "request_blocked",
-                        "message": f"Session halted by sentinel: {_sentinel_halt_reason}",
+                        "message": f"Session halted by sentinel: {halt_reason}",
                     },
                 }
             ).encode(),
