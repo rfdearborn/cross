@@ -234,42 +234,19 @@ class SlackPlugin:
 
     # --- EventBus handler (proxy events) ---
 
-    def _resolve_thread(self, event_agent: str, event_session: str, create_daily: bool = False):
+    def _resolve_thread(self, event_agent: str, event_session: str):
         """Resolve (session_id, thread_info) for an event.
 
-        Args:
-            event_agent: Agent label from the event.
-            event_session: Session ID from the event.
-            create_daily: If True and no session thread exists, create a daily
-                thread header for the agent.  Only pass True when the caller
-                will actually post a Slack message, to avoid spurious top-level
-                messages from events that only update internal state.
+        Returns the session thread if the event's session_id matches a
+        registered session.  Otherwise returns (key, None) so the caller
+        can post at the top level.
         """
         with self._lock:
             if event_session and event_session in self._threads:
                 return event_session, self._threads[event_session]
 
             if event_agent and event_agent not in ("", "unknown"):
-                from datetime import date
-
-                today = date.today().isoformat()
-                agent_key = f"ext-{event_agent}-{today}"
-                thread_info = self._threads.get(agent_key)
-                if thread_info:
-                    return agent_key, thread_info
-                if create_daily:
-                    try:
-                        channel_id = self._ensure_channel(event_agent)
-                        resp = self._web.chat_postMessage(
-                            channel=channel_id,
-                            text=f"🔌 *{event_agent}* — {today} — gate & sentinel activity thread",
-                        )
-                        thread_info = (channel_id, resp["ts"])
-                        self._threads[agent_key] = thread_info
-                        return agent_key, thread_info
-                    except Exception as e:
-                        logger.warning(f"Failed to create thread for {event_agent}: {e}")
-                return agent_key, None
+                return event_agent, None
 
             if self._threads:
                 session_id = list(self._threads.keys())[-1]
@@ -287,23 +264,21 @@ class SlackPlugin:
         event_agent = getattr(event, "agent", "")
         event_session = getattr(event, "session_id", "")
 
-        # Events that only update internal state — resolve thread without
-        # creating a daily header (no Slack message will be posted).
-        will_post = isinstance(
-            event, (GateDecisionEvent, SentinelReviewEvent, ErrorEvent, PermissionPromptEvent, PermissionResolvedEvent)
-        )
-        session_id, thread_info = self._resolve_thread(event_agent, event_session, create_daily=will_post)
+        session_id, thread_info = self._resolve_thread(event_agent, event_session)
 
         if thread_info:
             channel_id, thread_ts = thread_info
+            _unthreaded_note = ""
         else:
-            # No active session — post to a default channel (no thread)
+            # No session thread — post at top level in the agent's channel
+            agent_for_channel = event_agent if event_agent and event_agent not in ("", "unknown") else "proxy"
             try:
-                channel_id = self._ensure_channel("proxy")
+                channel_id = self._ensure_channel(agent_for_channel)
             except Exception as e:
-                logger.warning(f"Failed to get fallback channel for proxy event: {e}")
+                logger.warning(f"Failed to get channel for {agent_for_channel}: {e}")
                 return
             thread_ts = None
+            _unthreaded_note = "\n_⚠️ Could not match to a session thread_"
 
         match event:
             case ToolUseEvent() if session_id:
@@ -359,6 +334,7 @@ class SlackPlugin:
                     text = f"{icon} *Gate {event.action.upper()}*: `{event.tool_name}`"
                     if event.reason:
                         text += f"\n>{event.reason[:300]}"
+                    text += _unthreaded_note
                     if event.tool_input:
                         input_str = json.dumps(event.tool_input, indent=2)
                         if len(input_str) > 500:
@@ -419,6 +395,7 @@ class SlackPlugin:
                     text += f"\n*Summary:* {event.summary[:300]}"
                 if event.concerns and event.concerns.lower() != "none":
                     text += f"\n*Concerns:* {event.concerns[:500]}"
+                text += _unthreaded_note
                 resp = self._web.chat_postMessage(
                     channel=channel_id,
                     thread_ts=thread_ts,
@@ -463,10 +440,12 @@ class SlackPlugin:
                         logger.warning(f"Failed to update permission message: {e}")
 
             case ErrorEvent():
+                text = f"*Error {event.status_code}*\n```\n{event.body[:500]}\n```"
+                text += _unthreaded_note
                 self._web.chat_postMessage(
                     channel=channel_id,
                     thread_ts=thread_ts,
-                    text=f"*Error {event.status_code}*\n```\n{event.body[:500]}\n```",
+                    text=text,
                 )
 
     # --- Incoming Slack messages ---
