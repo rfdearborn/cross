@@ -236,10 +236,82 @@ class DashboardPlugin:
 
 
 # ---------------------------------------------------------------------------
+# Theme constants (must be defined before DASHBOARD_HTML)
+# ---------------------------------------------------------------------------
+
+# Theme initialization script — runs before body to prevent flash of wrong theme.
+# Reads preference from localStorage, falls back to system preference.
+_THEME_INIT_JS = """
+<script>
+(function(){
+  var s = localStorage.getItem("cross-theme") || "system";
+  var t = s;
+  if (s === "system") {
+    t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+"""
+
+# Light theme CSS variables — overrides :root when data-theme="light"
+_LIGHT_THEME_CSS = """
+  [data-theme="light"] {
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #cf222e;
+    --orange: #9a6700;
+    --yellow: #7d6608;
+    --badge-tool: #eaeef2;
+    --badge-tool-text: var(--text);
+    --badge-gate-allow-bg: #dafbe1;
+    --badge-gate-allow-text: #1a7f37;
+    --badge-gate-block-bg: #ffebe9;
+    --badge-gate-block-text: #cf222e;
+    --badge-gate-alert-bg: #fff8c5;
+    --badge-gate-alert-text: #9a6700;
+    --badge-gate-escalate-bg: #fff8c5;
+    --badge-gate-escalate-text: #7d6608;
+    --badge-sentinel-bg: #fbefff;
+    --badge-sentinel-text: #8250df;
+    --badge-request-bg: #ddf4ff;
+    --badge-request-text: #0969da;
+    --conv-user-bg: #ddf4ff;
+    --overlay-bg: rgba(0,0,0,0.3);
+    --logo-color: #1f2328;
+  }
+  [data-theme="dark"] {
+    --badge-tool: #2d333b;
+    --badge-tool-text: var(--text);
+    --badge-gate-allow-bg: #1a3a2a;
+    --badge-gate-allow-text: var(--green);
+    --badge-gate-block-bg: #3d1f1f;
+    --badge-gate-block-text: var(--red);
+    --badge-gate-alert-bg: #3d2f1f;
+    --badge-gate-alert-text: var(--orange);
+    --badge-gate-escalate-bg: #3d2f1f;
+    --badge-gate-escalate-text: var(--yellow);
+    --badge-sentinel-bg: #2a1f3d;
+    --badge-sentinel-text: #bc8cff;
+    --badge-request-bg: #1f2a3d;
+    --badge-request-text: var(--accent);
+    --conv-user-bg: #1f3d5c;
+    --overlay-bg: rgba(0,0,0,0.6);
+    --logo-color: white;
+  }
+"""
+
+# ---------------------------------------------------------------------------
 # Dashboard HTML (inline single-page app)
 # ---------------------------------------------------------------------------
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+DASHBOARD_HTML = (
+    """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -249,7 +321,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'
   viewBox='0 0 24 24'><path d='M12 2v20M2 12h20'
   stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
-""" + _THEME_INIT_JS + """
+"""
+    + _THEME_INIT_JS
+    + """
 <style>
   :root {
     --bg: #0d1117;
@@ -264,7 +338,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     --yellow: #e3b341;
     --logo-color: white;
   }
-""" + _LIGHT_THEME_CSS + """
+"""
+    + _LIGHT_THEME_CSS
+    + """
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -1571,6 +1647,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </script>
 </body>
 </html>"""
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1582,73 +1659,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 # ---------------------------------------------------------------------------
 
 _GEAR_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
-
-# Theme initialization script — runs before body to prevent flash of wrong theme.
-# Reads preference from localStorage, falls back to system preference.
-_THEME_INIT_JS = """
-<script>
-(function(){
-  var s = localStorage.getItem("cross-theme") || "system";
-  var t = s;
-  if (s === "system") {
-    t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  }
-  document.documentElement.setAttribute("data-theme", t);
-})();
-</script>
-"""
-
-# Light theme CSS variables — overrides :root when data-theme="light"
-_LIGHT_THEME_CSS = """
-  [data-theme="light"] {
-    --bg: #ffffff;
-    --surface: #f6f8fa;
-    --border: #d0d7de;
-    --text: #1f2328;
-    --text-dim: #656d76;
-    --accent: #0969da;
-    --green: #1a7f37;
-    --red: #cf222e;
-    --orange: #9a6700;
-    --yellow: #7d6608;
-    --badge-tool: #eaeef2;
-    --badge-tool-text: var(--text);
-    --badge-gate-allow-bg: #dafbe1;
-    --badge-gate-allow-text: #1a7f37;
-    --badge-gate-block-bg: #ffebe9;
-    --badge-gate-block-text: #cf222e;
-    --badge-gate-alert-bg: #fff8c5;
-    --badge-gate-alert-text: #9a6700;
-    --badge-gate-escalate-bg: #fff8c5;
-    --badge-gate-escalate-text: #7d6608;
-    --badge-sentinel-bg: #fbefff;
-    --badge-sentinel-text: #8250df;
-    --badge-request-bg: #ddf4ff;
-    --badge-request-text: #0969da;
-    --conv-user-bg: #ddf4ff;
-    --overlay-bg: rgba(0,0,0,0.3);
-    --logo-color: #1f2328;
-  }
-  [data-theme="dark"] {
-    --badge-tool: #2d333b;
-    --badge-tool-text: var(--text);
-    --badge-gate-allow-bg: #1a3a2a;
-    --badge-gate-allow-text: var(--green);
-    --badge-gate-block-bg: #3d1f1f;
-    --badge-gate-block-text: var(--red);
-    --badge-gate-alert-bg: #3d2f1f;
-    --badge-gate-alert-text: var(--orange);
-    --badge-gate-escalate-bg: #3d2f1f;
-    --badge-gate-escalate-text: var(--yellow);
-    --badge-sentinel-bg: #2a1f3d;
-    --badge-sentinel-text: #bc8cff;
-    --badge-request-bg: #1f2a3d;
-    --badge-request-text: var(--accent);
-    --conv-user-bg: #1f3d5c;
-    --overlay-bg: rgba(0,0,0,0.6);
-    --logo-color: white;
-  }
-"""
 
 _SHARED_HEADER_CSS = """
   header {
