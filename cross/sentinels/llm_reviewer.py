@@ -222,14 +222,17 @@ class LLMSentinel(Sentinel):
         if isinstance(event, RequestEvent):
             # Only record requests with user intent (skip empty/system messages)
             if event.last_message_preview and event.last_message_role == "user":
-                self._events.append(
-                    {
-                        "type": "user_request",
-                        "intent": event.last_message_preview,
-                        "model": event.model or "?",
-                        "ts": time.time(),
-                    }
-                )
+                entry: dict[str, Any] = {
+                    "type": "user_request",
+                    "intent": event.last_message_preview,
+                    "model": event.model or "?",
+                    "ts": time.time(),
+                }
+                if event.agent:
+                    entry["agent"] = event.agent
+                if event.session_id:
+                    entry["session_id"] = event.session_id
+                self._events.append(entry)
         elif isinstance(event, ToolUseEvent):
             entry: dict[str, Any] = {
                 "type": "tool_use",
@@ -248,13 +251,16 @@ class LLMSentinel(Sentinel):
         elif isinstance(event, TextEvent):
             text = event.text
             if text and text.strip():
-                self._events.append(
-                    {
-                        "type": "agent_text",
-                        "text": text[:300],
-                        "ts": time.time(),
-                    }
-                )
+                text_entry: dict[str, Any] = {
+                    "type": "agent_text",
+                    "text": text[:300],
+                    "ts": time.time(),
+                }
+                if event.agent:
+                    text_entry["agent"] = event.agent
+                if event.session_id:
+                    text_entry["session_id"] = event.session_id
+                self._events.append(text_entry)
         elif isinstance(event, GateDecisionEvent):
             gate_entry: dict[str, Any] = {
                 "type": "gate_decision",
