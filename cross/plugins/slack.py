@@ -262,7 +262,7 @@ class SlackPlugin:
                         channel_id = self._ensure_channel(event_agent)
                         resp = self._web.chat_postMessage(
                             channel=channel_id,
-                            text=f"🔌 *{event_agent}* — {today}",
+                            text=f"🔌 *{event_agent}* — {today} — gate & sentinel activity thread",
                         )
                         thread_info = (channel_id, resp["ts"])
                         self._threads[agent_key] = thread_info
