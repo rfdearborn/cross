@@ -490,17 +490,23 @@ async def _clear_permission_on_activity(event):
     session_id = getattr(event, "session_id", "")
     if not session_id or session_id not in _permission_pending:
         return
-    # Don't auto-clear if notification already sent — user may be clicking Approve
-    info = _permission_pending.get(session_id, {})
-    if info.get("notified"):
-        return
     # A new request or tool use means the user approved the permission in terminal
     if isinstance(event, (RequestEvent, ToolUseEvent)):
-        logger.debug(f"Clearing pending permission for {session_id} — new activity detected")
-        _permission_pending.pop(session_id, None)
+        info = _permission_pending.pop(session_id, {})
         task = _permission_notify_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
+        logger.debug(f"Clearing pending permission for {session_id} — new activity detected")
+        # If we already notified Slack/dashboard, publish a resolved event
+        # so they can clear the pending card
+        if info.get("notified"):
+            await event_bus.publish(
+                PermissionResolvedEvent(
+                    session_id=session_id,
+                    action="approve",
+                    resolver="terminal",
+                )
+            )
 
 
 def resolve_permission(session_id: str, action: str, resolver: str):
