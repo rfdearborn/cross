@@ -297,7 +297,7 @@ class LLMSentinel(Sentinel):
         return list(self._events)
 
     async def _review_loop(self) -> None:
-        """Periodically review accumulated events."""
+        """Periodically review accumulated events, grouped by session."""
         while self._running:
             await asyncio.sleep(self.interval_seconds)
             if not self._running:
@@ -310,12 +310,22 @@ class LLMSentinel(Sentinel):
             if not events_in_window:
                 continue
 
-            try:
-                await self._do_review(events_in_window)
+            # Group events by session so each review is scoped correctly
+            by_session: dict[str, list[dict[str, Any]]] = {}
+            for ev in events_in_window:
+                sid = ev.get("session_id", "") or "_global"
+                by_session.setdefault(sid, []).append(ev)
+
+            all_succeeded = True
+            for session_events in by_session.values():
+                try:
+                    await self._do_review(session_events)
+                except Exception as e:
+                    logger.warning(f"Sentinel review failed: {e}")
+                    all_succeeded = False
+            if all_succeeded:
                 self._last_review_time = time.time()
-            except Exception as e:
-                logger.warning(f"Sentinel review failed: {e}")
-                # Don't update _last_review_time — retry these events next cycle
+            # If any failed, don't update — retry all events next cycle
 
     async def _do_review(self, events: list[dict[str, Any]]) -> EvaluationResponse | None:
         """Run a single review cycle. Returns the response, or None on failure."""
