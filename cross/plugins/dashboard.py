@@ -1984,6 +1984,15 @@ SETTINGS_HTML = f"""<!DOCTYPE html>
   }}
   .theme-option:hover {{ border-color: var(--text-dim); }}
   .theme-option.active {{ border-color: var(--accent); color: var(--accent); }}
+  [data-theme="light"] .theme-option[data-theme="dark"] {{
+    background: #24292e;
+    color: #e6edf3;
+    border-color: #444c56;
+  }}
+  [data-theme="light"] .theme-option[data-theme="dark"].active {{
+    border-color: var(--accent);
+    color: #e6edf3;
+  }}
 </style>
 </head>
 <body>
