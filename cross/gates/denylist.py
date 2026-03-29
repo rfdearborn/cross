@@ -3,6 +3,12 @@
 Loads rules from YAML data files:
   - Default rules: cross/rules/default.yaml (shipped with Cross)
   - User rules:    ~/.cross/rules.d/*.yaml (add, modify, or disable)
+  - Project rules: <cwd>/.cross/rules.d/*.yaml (per-project, additive)
+
+Project rules are additive — they add new rules alongside globals.
+When a project rule has the same name as a global user rule, the global
+version takes precedence.  Project ``disable`` lists can suppress default
+(shipped) rules but not global user rules.
 
 Rules support two match types:
   - patterns:  regex (case-insensitive, any match triggers)
@@ -187,6 +193,7 @@ class DenylistGate(Gate):
     """Pattern-matching gate evaluator. Loads rules from YAML data files.
 
     Hot-reloads user rules when files in rules_dir change.
+    Supports per-project rules loaded from ``<cwd>/.cross/rules.d/``.
     """
 
     def __init__(
@@ -199,6 +206,8 @@ class DenylistGate(Gate):
         self._include_defaults = include_defaults
         self._last_mtime: float = 0.0
         self.rules: list[DenylistRule] = []
+        # Cache for project rules: project_rules_dir_str -> (mtime, rules, disabled)
+        self._project_cache: dict[str, tuple[float, list[DenylistRule], set[str]]] = {}
         self._load_rules()
 
     def _load_rules(self):
@@ -234,6 +243,58 @@ class DenylistGate(Gate):
             logger.info("Rules directory changed, reloading...")
             self._load_rules()
 
+    def _get_project_rules(self, cwd: str) -> list[DenylistRule]:
+        """Load project rules from ``<cwd>/.cross/rules.d/``, with caching.
+
+        Project rules are additive to global rules.  When a project rule has
+        the same name as a global user rule, the global version wins and the
+        project rule is skipped.  Project ``disable`` lists can suppress
+        default (shipped) rules but not global user rules.
+        """
+        if not cwd:
+            return []
+
+        project_rules_dir = Path(cwd) / ".cross" / "rules.d"
+        if not project_rules_dir.exists():
+            return []
+
+        dir_key = str(project_rules_dir)
+        current_mtime = _dir_mtime(project_rules_dir)
+        cached = self._project_cache.get(dir_key)
+
+        if cached and cached[0] == current_mtime:
+            return cached[1]
+
+        # Load project rules
+        project_rules, project_disabled = _load_user_rules(project_rules_dir)
+
+        # Filter out project rules that conflict with global user rules
+        global_user_names = {r.name for r in self.rules if r.name != "unnamed"}
+        filtered: list[DenylistRule] = []
+        for rule in project_rules:
+            if rule.name in global_user_names:
+                logger.info(
+                    f"Project rule '{rule.name}' skipped — overridden by global rule"
+                )
+            else:
+                filtered.append(rule)
+
+        # Project disable lists only affect default rules, not global user rules
+        # (defaults that are already disabled by global config stay disabled)
+        if project_disabled:
+            default_names = {r.name for r in _load_default_rules()}
+            valid_disables = project_disabled & default_names
+            if valid_disables:
+                filtered = [r for r in filtered if r.name not in valid_disables]
+                logger.info(f"Project disabled default rules: {valid_disables}")
+
+        self._project_cache[dir_key] = (current_mtime, filtered, project_disabled)
+        if filtered:
+            logger.info(
+                f"Loaded {len(filtered)} project rules from {project_rules_dir}"
+            )
+        return filtered
+
     # Codex uses different tool names and field names than Claude Code.
     # Map them so denylist rules written for [Bash, exec] with field: command
     # also match Codex's exec_command with field: cmd.
@@ -250,7 +311,13 @@ class DenylistGate(Gate):
         self._maybe_reload()
         best_match: EvaluationResponse | None = None
 
-        for rule in self.rules:
+        # Combine global rules with project-specific rules
+        all_rules = self.rules
+        project_rules = self._get_project_rules(request.cwd)
+        if project_rules:
+            all_rules = self.rules + project_rules
+
+        for rule in all_rules:
             # Check if rule applies to this tool (with alias support)
             tool_name_lower = request.tool_name.lower()
             if "*" not in rule.tools:

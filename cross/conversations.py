@@ -151,7 +151,7 @@ class ConversationStore:
         self,
         gate_llm_config: LLMConfig | None = None,
         sentinel_llm_config: LLMConfig | None = None,
-        get_custom_instructions: Callable[[], str] | None = None,
+        get_custom_instructions: Callable[..., str] | None = None,
     ):
         self._gate_config = gate_llm_config
         self._sentinel_config = sentinel_llm_config
@@ -270,7 +270,7 @@ class ConversationStore:
             if ctx.get("seeded"):
                 system = ctx["system_prompt"]
             else:
-                custom = self._get_custom_instructions() if self._get_custom_instructions else ""
+                custom = self._get_custom_instructions(cwd="") if self._get_custom_instructions else ""
                 system = _build_gate_system_prompt(ctx, custom)
 
             # Build messages for LLM

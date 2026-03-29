@@ -340,7 +340,9 @@ class LLMSentinel(Sentinel):
 
         system = _SYSTEM_PROMPT
         if self._get_custom_instructions:
-            system += format_instructions_block(self._get_custom_instructions())
+            # Sentinel reviews cross-session activity; pass cwd="" for global-only instructions.
+            # Per-project instructions are applied at the gate level where cwd is available.
+            system += format_instructions_block(self._get_custom_instructions(cwd=""))
 
         text = await complete_with_fallback(
             self.config, self.backup_config, system=system, messages=messages, timeout_s=60.0

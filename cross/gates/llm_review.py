@@ -174,9 +174,9 @@ class LLMReviewGate(Gate):
         messages = [{"role": "user", "content": user_message}]
 
         system = _SYSTEM_PROMPT + (_JUSTIFICATION_SUFFIX if self.justification else _NO_JUSTIFICATION_SUFFIX)
-        # Append custom instructions if provided
+        # Append custom instructions if provided (pass cwd for project-level instructions)
         if self._get_custom_instructions:
-            system += format_instructions_block(self._get_custom_instructions())
+            system += format_instructions_block(self._get_custom_instructions(cwd=request.cwd))
         timeout_s = self.timeout_ms / 1000.0
         text = await complete_with_fallback(
             self.config, self.backup_config, system=system, messages=messages, timeout_s=timeout_s

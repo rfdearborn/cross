@@ -35,7 +35,7 @@ def store(gate_config, sentinel_config):
     return ConversationStore(
         gate_llm_config=gate_config,
         sentinel_llm_config=sentinel_config,
-        get_custom_instructions=lambda: "",
+        get_custom_instructions=lambda cwd="": "",
     )
 
 

@@ -20,7 +20,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from cross.chain import GateChain
 from cross.config import settings
-from cross.custom_instructions import CustomInstructions
+from cross.custom_instructions import CustomInstructions, ProjectInstructionsCache, merge_instructions
 from cross.evaluator import Action, GateRequest
 from cross.event_store import EventStore
 from cross.events import (
@@ -48,6 +48,7 @@ _slack = None  # SlackPlugin instance, if configured
 _email = None  # EmailPlugin instance, if configured
 _dashboard: DashboardPlugin | None = None  # always active
 _custom_instructions: CustomInstructions | None = None
+_project_instructions: ProjectInstructionsCache | None = None
 _conversation_store = None  # ConversationStore instance
 
 # Session tracking: session_id -> session metadata
@@ -1033,13 +1034,21 @@ def _persist_state() -> None:
         logger.warning(f"Failed to persist state: {e}")
 
 
+def _get_merged_instructions(cwd: str = "") -> str:
+    """Return merged global + project instructions.  Global takes precedence."""
+    global_content = _custom_instructions.content if _custom_instructions else ""
+    project_content = _project_instructions.get(cwd) if _project_instructions and cwd else ""
+    return merge_instructions(global_content, project_content)
+
+
 async def on_startup():
-    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions, _conversation_store
+    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions, _project_instructions, _conversation_store
 
     _event_loop = asyncio.get_running_loop()
 
     # Initialize custom instructions (hot-reloads on each access)
     _custom_instructions = CustomInstructions(path=settings.custom_instructions_file)
+    _project_instructions = ProjectInstructionsCache()
     if _custom_instructions.content:
         logger.info(f"Custom instructions loaded ({len(_custom_instructions.content)} chars)")
 
@@ -1151,7 +1160,7 @@ async def on_startup():
                     config=llm_config,
                     timeout_ms=settings.llm_gate_timeout_ms,
                     justification=settings.llm_gate_justification,
-                    get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
+                    get_custom_instructions=lambda cwd="": _get_merged_instructions(cwd),
                     backup_config=gate_backup,
                 )
                 model_name = settings.llm_gate_model
@@ -1197,7 +1206,7 @@ async def on_startup():
                 event_bus=event_bus,
                 interval_seconds=settings.llm_sentinel_interval_seconds,
                 max_events=settings.llm_sentinel_max_events,
-                get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
+                get_custom_instructions=lambda cwd="": _get_merged_instructions(cwd),
                 backup_config=sentinel_backup,
                 seed_events=_restored_sentinel_events,
             )
@@ -1241,7 +1250,7 @@ async def on_startup():
     _conversation_store = ConversationStore(
         gate_llm_config=gate_llm_cfg,
         sentinel_llm_config=sentinel_llm_cfg,
-        get_custom_instructions=lambda: _custom_instructions.content if _custom_instructions else "",
+        get_custom_instructions=lambda cwd="": _get_merged_instructions(cwd),
     )
     _dashboard.set_conversation_store(_conversation_store)
 
