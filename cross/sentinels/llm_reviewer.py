@@ -222,14 +222,17 @@ class LLMSentinel(Sentinel):
         if isinstance(event, RequestEvent):
             # Only record requests with user intent (skip empty/system messages)
             if event.last_message_preview and event.last_message_role == "user":
-                self._events.append(
-                    {
-                        "type": "user_request",
-                        "intent": event.last_message_preview,
-                        "model": event.model or "?",
-                        "ts": time.time(),
-                    }
-                )
+                entry: dict[str, Any] = {
+                    "type": "user_request",
+                    "intent": event.last_message_preview,
+                    "model": event.model or "?",
+                    "ts": time.time(),
+                }
+                if event.agent:
+                    entry["agent"] = event.agent
+                if event.session_id:
+                    entry["session_id"] = event.session_id
+                self._events.append(entry)
         elif isinstance(event, ToolUseEvent):
             entry: dict[str, Any] = {
                 "type": "tool_use",
@@ -248,13 +251,16 @@ class LLMSentinel(Sentinel):
         elif isinstance(event, TextEvent):
             text = event.text
             if text and text.strip():
-                self._events.append(
-                    {
-                        "type": "agent_text",
-                        "text": text[:300],
-                        "ts": time.time(),
-                    }
-                )
+                text_entry: dict[str, Any] = {
+                    "type": "agent_text",
+                    "text": text[:300],
+                    "ts": time.time(),
+                }
+                if event.agent:
+                    text_entry["agent"] = event.agent
+                if event.session_id:
+                    text_entry["session_id"] = event.session_id
+                self._events.append(text_entry)
         elif isinstance(event, GateDecisionEvent):
             gate_entry: dict[str, Any] = {
                 "type": "gate_decision",
@@ -297,7 +303,7 @@ class LLMSentinel(Sentinel):
         return list(self._events)
 
     async def _review_loop(self) -> None:
-        """Periodically review accumulated events."""
+        """Periodically review accumulated events, grouped by session."""
         while self._running:
             await asyncio.sleep(self.interval_seconds)
             if not self._running:
@@ -310,12 +316,22 @@ class LLMSentinel(Sentinel):
             if not events_in_window:
                 continue
 
-            try:
-                await self._do_review(events_in_window)
+            # Group events by session so each review is scoped correctly
+            by_session: dict[str, list[dict[str, Any]]] = {}
+            for ev in events_in_window:
+                sid = ev.get("session_id", "") or "_global"
+                by_session.setdefault(sid, []).append(ev)
+
+            all_succeeded = True
+            for session_events in by_session.values():
+                try:
+                    await self._do_review(session_events)
+                except Exception as e:
+                    logger.warning(f"Sentinel review failed: {e}")
+                    all_succeeded = False
+            if all_succeeded:
                 self._last_review_time = time.time()
-            except Exception as e:
-                logger.warning(f"Sentinel review failed: {e}")
-                # Don't update _last_review_time — retry these events next cycle
+            # If any failed, don't update — retry all events next cycle
 
     async def _do_review(self, events: list[dict[str, Any]]) -> EvaluationResponse | None:
         """Run a single review cycle. Returns the response, or None on failure."""
