@@ -1262,8 +1262,12 @@ DASHBOARD_HTML = (
       return;
     }
 
-    if (ev.event_type === "GateDecisionEvent" && ev.tool_use_id && ev.action && ev.action !== "allow" && ev.action !== "alert") {
-      blockedToolIds[ev.tool_use_id] = ev.action;
+    if (ev.event_type === "GateDecisionEvent" && ev.tool_use_id && ev.action) {
+      if (ev.action === "allow") {
+        delete blockedToolIds[ev.tool_use_id];
+      } else if (ev.action !== "alert") {
+        blockedToolIds[ev.tool_use_id] = ev.action;
+      }
     }
     if (shouldHide(ev)) return;
     addEventRow(ev);
@@ -1620,8 +1624,9 @@ DASHBOARD_HTML = (
   fetch("/cross/api/events").then(function(r) { return r.json(); }).then(function(events) {
     // First pass: collect blocked tool IDs so ToolUseEvents render correctly
     for (const ev of events) {
-      if (ev.event_type === "GateDecisionEvent" && ev.tool_use_id && ev.action && ev.action !== "allow" && ev.action !== "alert") {
-        blockedToolIds[ev.tool_use_id] = ev.action;
+      if (ev.event_type === "GateDecisionEvent" && ev.tool_use_id && ev.action) {
+        if (ev.action === "allow") delete blockedToolIds[ev.tool_use_id];
+        else if (ev.action !== "alert") blockedToolIds[ev.tool_use_id] = ev.action;
       }
     }
     for (const ev of events) {
