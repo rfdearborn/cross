@@ -236,10 +236,82 @@ class DashboardPlugin:
 
 
 # ---------------------------------------------------------------------------
+# Theme constants (must be defined before DASHBOARD_HTML)
+# ---------------------------------------------------------------------------
+
+# Theme initialization script — runs before body to prevent flash of wrong theme.
+# Reads preference from localStorage, falls back to system preference.
+_THEME_INIT_JS = """
+<script>
+(function(){
+  var s = localStorage.getItem("cross-theme") || "system";
+  var t = s;
+  if (s === "system") {
+    t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+"""
+
+# Light theme CSS variables — overrides :root when data-theme="light"
+_LIGHT_THEME_CSS = """
+  [data-theme="light"] {
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #cf222e;
+    --orange: #9a6700;
+    --yellow: #7d6608;
+    --badge-tool: #eaeef2;
+    --badge-tool-text: var(--text);
+    --badge-gate-allow-bg: #dafbe1;
+    --badge-gate-allow-text: #1a7f37;
+    --badge-gate-block-bg: #ffebe9;
+    --badge-gate-block-text: #cf222e;
+    --badge-gate-alert-bg: #fff8c5;
+    --badge-gate-alert-text: #9a6700;
+    --badge-gate-escalate-bg: #fff8c5;
+    --badge-gate-escalate-text: #7d6608;
+    --badge-sentinel-bg: #fbefff;
+    --badge-sentinel-text: #8250df;
+    --badge-request-bg: #ddf4ff;
+    --badge-request-text: #0969da;
+    --conv-user-bg: #ddf4ff;
+    --overlay-bg: rgba(0,0,0,0.3);
+    --logo-color: #1f2328;
+  }
+  [data-theme="dark"] {
+    --badge-tool: #2d333b;
+    --badge-tool-text: var(--text);
+    --badge-gate-allow-bg: #1a3a2a;
+    --badge-gate-allow-text: var(--green);
+    --badge-gate-block-bg: #3d1f1f;
+    --badge-gate-block-text: var(--red);
+    --badge-gate-alert-bg: #3d2f1f;
+    --badge-gate-alert-text: var(--orange);
+    --badge-gate-escalate-bg: #3d2f1f;
+    --badge-gate-escalate-text: var(--yellow);
+    --badge-sentinel-bg: #2a1f3d;
+    --badge-sentinel-text: #bc8cff;
+    --badge-request-bg: #1f2a3d;
+    --badge-request-text: var(--accent);
+    --conv-user-bg: #1f3d5c;
+    --overlay-bg: rgba(0,0,0,0.6);
+    --logo-color: white;
+  }
+"""
+
+# ---------------------------------------------------------------------------
 # Dashboard HTML (inline single-page app)
 # ---------------------------------------------------------------------------
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+DASHBOARD_HTML = (
+    """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -249,6 +321,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'
   viewBox='0 0 24 24'><path d='M12 2v20M2 12h20'
   stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
+"""
+    + _THEME_INIT_JS
+    + """
 <style>
   :root {
     --bg: #0d1117;
@@ -261,7 +336,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     --red: #f85149;
     --orange: #d29922;
     --yellow: #e3b341;
+    --logo-color: white;
   }
+"""
+    + _LIGHT_THEME_CSS
+    + """
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -503,15 +582,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     min-width: 80px;
     text-align: center;
   }
-  .badge-tool_use { background: #2d333b; color: var(--text); }
-  .badge-gate_allow { background: #1a3a2a; color: var(--green); }
-  .badge-gate_block { background: #3d1f1f; color: var(--red); }
-  .badge-gate_halt_session { background: #3d1f1f; color: var(--red); }
-  .badge-gate_alert { background: #3d2f1f; color: var(--orange); }
-  .badge-gate_escalate { background: #3d2f1f; color: var(--yellow); }
-  .badge-sentinel { background: #2a1f3d; color: #bc8cff; }
-  .badge-request { background: #1f2a3d; color: var(--accent); }
-  .badge-text { background: #2d333b; color: var(--text); }
+  .badge-tool_use { background: var(--badge-tool); color: var(--badge-tool-text); }
+  .badge-gate_allow { background: var(--badge-gate-allow-bg); color: var(--badge-gate-allow-text); }
+  .badge-gate_block { background: var(--badge-gate-block-bg); color: var(--badge-gate-block-text); }
+  .badge-gate_halt_session { background: var(--badge-gate-block-bg); color: var(--badge-gate-block-text); }
+  .badge-gate_alert { background: var(--badge-gate-alert-bg); color: var(--badge-gate-alert-text); }
+  .badge-gate_escalate { background: var(--badge-gate-escalate-bg); color: var(--badge-gate-escalate-text); }
+  .badge-sentinel { background: var(--badge-sentinel-bg); color: var(--badge-sentinel-text); }
+  .badge-request { background: var(--badge-request-bg); color: var(--badge-request-text); }
+  .badge-text { background: var(--badge-tool); color: var(--badge-tool-text); }
   .event-row .agent {
     color: var(--text-dim);
     font-size: 12px;
@@ -564,7 +643,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     word-break: break-word;
   }
   .conv-msg.user {
-    background: #1f3d5c;
+    background: var(--conv-user-bg);
     align-self: flex-end;
   }
   .conv-msg.assistant {
@@ -656,7 +735,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .notif-modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.6);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -731,7 +810,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <header>
   <h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none"
     style="display:block"><path d="M12 2v20M2 12h20"
-    stroke="white" stroke-width="3" stroke-linecap="round"/></svg></h1>
+    stroke="var(--logo-color)" stroke-width="3" stroke-linecap="round"/></svg></h1>
   <div class="header-right">
     <button class="notif-btn" id="notif-btn" style="display:none"
       onclick="requestNotifPermission()">Enable notifications</button>
@@ -773,6 +852,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   const pendingList = document.getElementById("pending-list");
   const eventFeed = document.getElementById("event-feed");
   const feedEmpty = document.getElementById("feed-empty");
+
+  // Live system theme tracking
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", function() {
+    if ((localStorage.getItem("cross-theme") || "system") === "system") {
+      var t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", t);
+    }
+  });
 
   const MAX_FEED = 200;
   let pendingMap = {};
@@ -1560,6 +1647,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </script>
 </body>
 </html>"""
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1614,7 +1702,7 @@ _NOTIF_MODAL_CSS = """
   .notif-modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.6);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1676,7 +1764,7 @@ _HEADER_HTML = f"""
 <header>
   <h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none"
     style="display:block"><path d="M12 2v20M2 12h20"
-    stroke="white" stroke-width="3" stroke-linecap="round"/></svg></h1>
+    stroke="var(--logo-color)" stroke-width="3" stroke-linecap="round"/></svg></h1>
   <div class="header-right">
     <button class="notif-btn" id="notif-btn" style="display:none"
       onclick="requestNotifPermission()">Enable notifications</button>
@@ -1755,6 +1843,7 @@ SETTINGS_HTML = f"""<!DOCTYPE html>
   href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'
   viewBox='0 0 24 24'><path d='M12 2v20M2 12h20'
   stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
+{_THEME_INIT_JS}
 <style>
   :root {{
     --bg: #0d1117;
@@ -1765,6 +1854,20 @@ SETTINGS_HTML = f"""<!DOCTYPE html>
     --accent: #58a6ff;
     --green: #3fb950;
     --red: #f85149;
+    --logo-color: white;
+    --overlay-bg: rgba(0,0,0,0.6);
+  }}
+  [data-theme="light"] {{
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --red: #cf222e;
+    --logo-color: #1f2328;
+    --overlay-bg: rgba(0,0,0,0.3);
   }}
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{
@@ -1856,6 +1959,40 @@ SETTINGS_HTML = f"""<!DOCTYPE html>
     color: var(--text-dim);
     margin-bottom: 8px;
   }}
+  .theme-picker {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+  }}
+  .theme-options {{
+    display: flex;
+    gap: 8px;
+  }}
+  .theme-option {{
+    flex: 1;
+    background: var(--bg);
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 0.15s;
+  }}
+  .theme-option:hover {{ border-color: var(--text-dim); }}
+  .theme-option.active {{ border-color: var(--accent); color: var(--accent); }}
+  [data-theme="light"] .theme-option[data-theme="dark"] {{
+    background: #24292e;
+    color: #e6edf3;
+    border-color: #444c56;
+  }}
+  [data-theme="light"] .theme-option[data-theme="dark"].active {{
+    border-color: var(--accent);
+    color: #e6edf3;
+  }}
 </style>
 </head>
 <body>
@@ -1864,6 +2001,16 @@ SETTINGS_HTML = f"""<!DOCTYPE html>
 <main>
   <div class="breadcrumb"><a href="/cross/dashboard">&larr; Dashboard</a></div>
   <h1 class="page-title">Settings</h1>
+  <section>
+    <h2>Appearance</h2>
+    <div class="theme-picker">
+      <div class="theme-options">
+        <button class="theme-option" data-theme="light">Light</button>
+        <button class="theme-option" data-theme="dark">Dark</button>
+        <button class="theme-option" data-theme="system">System</button>
+      </div>
+    </div>
+  </section>
   <section>
     <h2>Custom Instructions</h2>
     <div class="instructions-editor">
@@ -1880,6 +2027,44 @@ SETTINGS_HTML = f"""<!DOCTYPE html>
 <script>
 (function() {{
   {_NOTIF_JS}
+
+  // --- Theme picker ---
+  (function() {{
+    var stored = localStorage.getItem("cross-theme") || "system";
+    var btns = document.querySelectorAll(".theme-option");
+
+    function applyTheme(pref) {{
+      var resolved = pref;
+      if (pref === "system") {{
+        resolved = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }}
+      document.documentElement.setAttribute("data-theme", resolved);
+    }}
+
+    function setActive(pref) {{
+      btns.forEach(function(b) {{
+        b.classList.toggle("active", b.getAttribute("data-theme") === pref);
+      }});
+    }}
+
+    setActive(stored);
+
+    btns.forEach(function(btn) {{
+      btn.addEventListener("click", function() {{
+        var pref = btn.getAttribute("data-theme");
+        localStorage.setItem("cross-theme", pref);
+        applyTheme(pref);
+        setActive(pref);
+      }});
+    }});
+
+    // Listen for system theme changes when set to "system"
+    window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", function() {{
+      if ((localStorage.getItem("cross-theme") || "system") === "system") {{
+        applyTheme("system");
+      }}
+    }});
+  }})();
 
   var instrText = document.getElementById("instructions-text");
   var instrStatus = document.getElementById("instructions-status");
