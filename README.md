@@ -169,6 +169,10 @@ You can provide custom instructions that are automatically included in gate and 
 
 Edit instructions from the dashboard (Ctrl/Cmd+S to save) or directly in the file. Use this to tailor gate/sentinel behavior to your project, e.g. "allow database migrations" or "flag any network calls in test files".
 
+#### Per-Project Instructions
+
+You can also define project-specific instructions in `<project>/.cross/instructions.md`. These are merged with your global instructions automatically -- global instructions appear first and take precedence on conflict. This lets teams share project-specific guidance (e.g. "allow database migrations in this repo") without affecting other projects.
+
 ### Denylist Rules
 
 Default rules ship with cross and escalate to LLM review. They cover destructive commands, dangerous git operations (force push, reset --hard, push to main), credential exfiltration, reverse shells, system path writes, process termination, privilege escalation (sudo), mutating HTTP requests, Docker destruction, package management, and shell config edits. Customize with YAML files in `~/.cross/rules.d/`:
@@ -190,6 +194,15 @@ disable:
 ```
 
 Rules support `patterns` (regex, case-insensitive) and `contains` (substring matching), and can target specific tools and input fields. Actions: `escalate` (LLM review), `block` (immediate block), `alert` (log only), `halt_session` (freeze session).
+
+#### Per-Project Rules
+
+You can add project-specific denylist rules in `<project>/.cross/rules.d/*.yaml`. Per-project rules are strictly **additive** -- they can only add new rules alongside your global ones. Key safety properties:
+
+- If a project rule has the same name as a global or default rule, the global version takes precedence and the project rule is skipped
+- Project `disable` lists are ignored -- a cloned repo cannot weaken your global protections
+
+This lets teams commit shared rules (e.g. "escalate production database access") to version control without risk of overriding personal security policies.
 
 ### Updating
 
