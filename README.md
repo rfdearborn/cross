@@ -110,6 +110,17 @@ cross pending approve <tool_use_id>    # approve
 cross pending deny <tool_use_id>       # deny
 ```
 
+### Claude Code Permissions
+
+`cross setup` offers to apply a recommended Claude Code permission config that allows core tools and safe read-only commands, denies only catastrophic operations, and asks before destructive git ops. Your original settings are backed up to `~/.claude/settings.pre-cross.json`.
+
+```bash
+cross permissions claude                # show current Claude Code permissions
+cross permissions claude recommended    # apply recommended permissions (backs up first)
+cross permissions claude restore        # restore original pre-cross settings
+cross permissions claude show           # show the recommended permission set
+```
+
 ## Notifications
 
 cross delivers notifications through two layers:
