@@ -206,8 +206,8 @@ class DenylistGate(Gate):
         self._include_defaults = include_defaults
         self._last_mtime: float = 0.0
         self.rules: list[DenylistRule] = []
-        # Cache for project rules: project_rules_dir_str -> (mtime, rules, disabled)
-        self._project_cache: dict[str, tuple[float, list[DenylistRule], set[str]]] = {}
+        # Cache for project rules: project_rules_dir_str -> (mtime, rules)
+        self._project_cache: dict[str, tuple[float, list[DenylistRule]]] = {}
         self._load_rules()
 
     def _load_rules(self):
