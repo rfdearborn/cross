@@ -6,15 +6,21 @@ import os
 from unittest.mock import MagicMock, patch
 
 from cross.setup import (
+    _RECOMMENDED_PERMISSIONS,
     KNOWN_AGENTS,
     SHELL_WRAPPER_HEADER,
+    _apply_recommended_permissions,
+    _backup_claude_settings,
     _build_env_lines,
     _build_shell_wrappers,
     _check_ollama,
     _detect_agents,
     _detect_shell_rc,
+    _display_claude_permissions,
+    _get_claude_permissions,
     _install_codex_hook,
     _parse_provider,
+    _restore_claude_settings,
     _strip_ansi,
     _uninstall_codex_hook,
     run_setup,
@@ -250,8 +256,8 @@ class TestRunSetupDefaultModel:
         mock_shell_rc.return_value = shell_rc
 
         # "" gate, "none" gate backup, "" sentinel, "" interval,
-        # "none" sentinel backup, N email, N slack, Y wrappers, Y perm hook
-        inputs = iter(["", "none", "", "", "none", "N", "N", "Y", "Y", "Y"])
+        # "none" sentinel backup, N email, N slack, Y wrappers, Y perm hook, n perms
+        inputs = iter(["", "none", "", "", "none", "N", "N", "Y", "Y", "n", "Y"])
 
         output = []
         result = run_setup(
@@ -664,8 +670,8 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        # none LLM, N email, N slack, Y wrappers, Y codex hook, Y auto-update
-        inputs = iter(["none", "N", "N", "Y", "Y", "Y", "Y"])
+        # none LLM, N email, N slack, Y wrappers, Y perm hook, n perms, Y codex hook, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "n", "Y", "Y"])
 
         output = []
         result = run_setup(
@@ -689,7 +695,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text(f'# existing\n{SHELL_WRAPPER_HEADER}\nclaude() {{ cross wrap -- claude "$@"; }}\n')
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y", "n", "Y"])
 
         output = []
         result = run_setup(
@@ -712,7 +718,7 @@ class TestRunSetupShellWrappers:
         shell_rc.write_text("# existing\n")
         mock_shell_rc.return_value = shell_rc
 
-        inputs = iter(["none", "N", "N", "n", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "n", "Y", "n", "Y"])
 
         output = []
         result = run_setup(
@@ -731,7 +737,7 @@ class TestRunSetupShellWrappers:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "Y", "Y", "n", "Y"])
 
         output = []
         result = run_setup(
@@ -878,7 +884,7 @@ class TestRunSetupSummaryOutput:
         mock_sys.platform = "linux"
         cross_dir = tmp_path / ".cross"
 
-        inputs = iter(["none", "N", "N", "n", "Y", "Y"])
+        inputs = iter(["none", "N", "N", "n", "Y", "n", "Y"])
 
         output = []
         run_setup(
@@ -1361,3 +1367,441 @@ class TestCodexHookSetupStep:
         assert result.get("codex_hook_installed") is True
         full_output = "\n".join(str(o) for o in output)
         assert "Codex" in full_output
+
+
+class TestGetClaudePermissions:
+    def test_extracts_all_fields(self):
+        settings = {
+            "permissions": {
+                "allow": ["Read", "Glob"],
+                "deny": ["Bash(rm -rf *)"],
+                "ask": ["Bash", "Write"],
+                "defaultMode": "default",
+            }
+        }
+        perms = _get_claude_permissions(settings)
+        assert perms["allow"] == ["Read", "Glob"]
+        assert perms["deny"] == ["Bash(rm -rf *)"]
+        assert perms["ask"] == ["Bash", "Write"]
+        assert perms["defaultMode"] == "default"
+
+    def test_empty_settings(self):
+        perms = _get_claude_permissions({})
+        assert perms["allow"] == []
+        assert perms["deny"] == []
+        assert perms["ask"] == []
+        assert perms["defaultMode"] is None
+
+    def test_partial_permissions(self):
+        settings = {"permissions": {"deny": ["WebFetch"]}}
+        perms = _get_claude_permissions(settings)
+        assert perms["deny"] == ["WebFetch"]
+        assert perms["allow"] == []
+        assert perms["ask"] == []
+
+
+class TestDisplayClaudePermissions:
+    def test_shows_counts(self):
+        perms = {"deny": ["Bash(rm *)"], "ask": ["Write"], "allow": ["Read"], "defaultMode": None}
+        output = []
+        has_any = _display_claude_permissions(perms, output.append)
+        assert has_any is True
+        full = "\n".join(output)
+        assert "Denied:" in full
+        assert "1 rule" in full
+        assert "Ask:" in full
+        assert "Allowed:" in full
+
+    def test_no_permissions(self):
+        perms = {"deny": [], "ask": [], "allow": [], "defaultMode": None}
+        output = []
+        has_any = _display_claude_permissions(perms, output.append)
+        assert has_any is False
+        full = "\n".join(output)
+        assert "No custom permissions" in full
+
+    def test_shows_default_mode(self):
+        perms = {"deny": [], "ask": [], "allow": ["Bash"], "defaultMode": "acceptEdits"}
+        output = []
+        has_any = _display_claude_permissions(perms, output.append)
+        assert has_any is True
+        full = "\n".join(output)
+        assert "acceptEdits" in full
+
+
+class TestApplyRecommendedPermissions:
+    def test_applies_recommended_to_empty_settings(self):
+        settings = {}
+        result = _apply_recommended_permissions(settings)
+        perms = result["permissions"]
+        assert perms["allow"] == _RECOMMENDED_PERMISSIONS["allow"]
+        assert perms["deny"] == _RECOMMENDED_PERMISSIONS["deny"]
+        assert perms["ask"] == _RECOMMENDED_PERMISSIONS["ask"]
+        assert perms["defaultMode"] == "acceptEdits"
+
+    def test_preserves_custom_allow_entries(self):
+        settings = {
+            "permissions": {
+                "allow": [
+                    "Bash",  # already in recommended — should not duplicate
+                    "mcp__Figma__create_frame",  # custom — should be preserved
+                    "Bash(rclone ls*)",  # custom — should be preserved
+                ],
+            }
+        }
+        result = _apply_recommended_permissions(settings)
+        perms = result["permissions"]
+        # Recommended entries present
+        assert "Bash" in perms["allow"]
+        assert "Read" in perms["allow"]
+        assert "Bash(git log*)" in perms["allow"]
+        # Custom entries preserved
+        assert "mcp__Figma__create_frame" in perms["allow"]
+        assert "Bash(rclone ls*)" in perms["allow"]
+        # No duplicates of recommended entries
+        assert perms["allow"].count("Bash") == 1
+
+    def test_overwrites_deny_and_ask(self):
+        """Existing deny/ask are replaced entirely by the recommended set."""
+        settings = {
+            "permissions": {
+                "deny": ["SomethingCustom"],
+                "ask": ["AnotherCustom"],
+            }
+        }
+        result = _apply_recommended_permissions(settings)
+        perms = result["permissions"]
+        assert perms["deny"] == _RECOMMENDED_PERMISSIONS["deny"]
+        assert perms["ask"] == _RECOMMENDED_PERMISSIONS["ask"]
+        assert "SomethingCustom" not in perms["deny"]
+        assert "AnotherCustom" not in perms["ask"]
+
+    def test_preserves_other_settings_keys(self):
+        settings = {
+            "env": {"FOO": "bar"},
+            "hooks": {"PreToolUse": [{"matcher": "", "hooks": []}]},
+            "permissions": {"allow": ["Read"]},
+        }
+        result = _apply_recommended_permissions(settings)
+        assert result["env"] == {"FOO": "bar"}
+        assert result["hooks"] == {"PreToolUse": [{"matcher": "", "hooks": []}]}
+
+    def test_recommended_has_core_tools(self):
+        """Sanity check that recommended permissions include expected entries."""
+        assert "Bash" in _RECOMMENDED_PERMISSIONS["allow"]
+        assert "Edit" in _RECOMMENDED_PERMISSIONS["allow"]
+        assert "Read" in _RECOMMENDED_PERMISSIONS["allow"]
+        assert "Write" in _RECOMMENDED_PERMISSIONS["allow"]
+        assert "WebFetch" in _RECOMMENDED_PERMISSIONS["allow"]
+        assert "WebSearch" in _RECOMMENDED_PERMISSIONS["allow"]
+
+    def test_recommended_denies_catastrophic_rm(self):
+        for path in ["/", "/*", "~", "~/*", "$HOME", "$HOME/*"]:
+            assert f"Bash(rm -rf {path})" in _RECOMMENDED_PERMISSIONS["deny"]
+
+    def test_recommended_asks_destructive_git(self):
+        assert "Bash(git reset --hard *)" in _RECOMMENDED_PERMISSIONS["ask"]
+        assert "Bash(git push --force *)" in _RECOMMENDED_PERMISSIONS["ask"]
+        assert "Bash(git branch -D *)" in _RECOMMENDED_PERMISSIONS["ask"]
+
+
+class TestPermissionsSetupStep:
+    """Test the permissions step in run_setup."""
+
+    @patch("cross.setup._backup_claude_settings", return_value=True)
+    @patch("cross.setup._write_claude_settings")
+    @patch("cross.setup._read_claude_settings")
+    @patch("cross.setup._install_permission_hook", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=["claude"])
+    @patch("cross.setup._detect_shell_rc", return_value=None)
+    @patch("cross.setup.sys")
+    def test_apply_recommended(
+        self, mock_sys, mock_shell_rc, mock_agents, mock_perm_hook, mock_read, mock_write, mock_backup, tmp_path
+    ):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        mock_read.return_value = {"permissions": {"allow": ["Read"]}}
+
+        # none LLM, N email, N slack, Y wrappers, Y perm hook, Y apply perms, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y", "Y"])
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result.get("permissions_applied") == "recommended"
+        mock_backup.assert_called_once()
+        mock_write.assert_called_once()
+        written_settings = mock_write.call_args[0][0]
+        perms = written_settings["permissions"]
+        assert "Bash" in perms["allow"]
+        assert "Bash(rm -rf /)" in perms["deny"]
+        assert "Bash(git reset --hard *)" in perms["ask"]
+        assert perms["defaultMode"] == "acceptEdits"
+
+    @patch("cross.setup._backup_claude_settings", return_value=True)
+    @patch("cross.setup._write_claude_settings")
+    @patch("cross.setup._read_claude_settings")
+    @patch("cross.setup._install_permission_hook", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=["claude"])
+    @patch("cross.setup._detect_shell_rc", return_value=None)
+    @patch("cross.setup.sys")
+    def test_apply_preserves_custom_entries(
+        self, mock_sys, mock_shell_rc, mock_agents, mock_perm_hook, mock_read, mock_write, mock_backup, tmp_path
+    ):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        mock_read.return_value = {"permissions": {"allow": ["mcp__Figma__create_frame", "Bash(rclone ls*)"]}}
+
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y", "Y"])
+        output = []
+        run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        written_settings = mock_write.call_args[0][0]
+        perms = written_settings["permissions"]
+        assert "mcp__Figma__create_frame" in perms["allow"]
+        assert "Bash(rclone ls*)" in perms["allow"]
+
+    @patch("cross.setup._read_claude_settings")
+    @patch("cross.setup._install_permission_hook", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=["claude"])
+    @patch("cross.setup._detect_shell_rc", return_value=None)
+    @patch("cross.setup.sys")
+    def test_decline_keeps_current(self, mock_sys, mock_shell_rc, mock_agents, mock_perm_hook, mock_read, tmp_path):
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        mock_read.return_value = {"permissions": {"allow": ["Read"]}}
+
+        # none LLM, N email, N slack, Y wrappers, Y perm hook, N decline perms, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "n", "Y"])
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result.get("permissions_applied") is None
+        full_output = "\n".join(str(o) for o in output)
+        assert "Keeping current permissions" in full_output
+
+    @patch("cross.setup._backup_claude_settings", return_value=True)
+    @patch("cross.setup._write_claude_settings")
+    @patch("cross.setup._read_claude_settings")
+    @patch("cross.setup._install_permission_hook", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=["claude"])
+    @patch("cross.setup._detect_shell_rc", return_value=None)
+    @patch("cross.setup.sys")
+    def test_show_then_apply(
+        self, mock_sys, mock_shell_rc, mock_agents, mock_perm_hook, mock_read, mock_write, mock_backup, tmp_path
+    ):
+        """User types 'show' to review, then 'Y' to apply."""
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        mock_read.return_value = {}
+
+        # none LLM, N email, N slack, Y wrappers, Y perm hook, "show", Y apply, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "show", "Y", "Y"])
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result.get("permissions_applied") == "recommended"
+        mock_write.assert_called_once()
+        # Verify the 'show' output included permission details
+        full_output = "\n".join(str(o) for o in output)
+        assert "Allow:" in full_output
+        assert "Deny:" in full_output
+        assert "Ask:" in full_output
+
+    @patch("cross.setup._read_claude_settings")
+    @patch("cross.setup._install_permission_hook", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=["claude"])
+    @patch("cross.setup._detect_shell_rc", return_value=None)
+    @patch("cross.setup.sys")
+    def test_show_then_decline(self, mock_sys, mock_shell_rc, mock_agents, mock_perm_hook, mock_read, tmp_path):
+        """User types 'show' to review, then 'n' to decline."""
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+        mock_read.return_value = {}
+
+        # none LLM, N email, N slack, Y wrappers, Y perm hook, "show", n decline, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "show", "n", "Y"])
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result.get("permissions_applied") is None
+
+    @patch("cross.setup._read_claude_settings", return_value=None)
+    @patch("cross.setup._install_permission_hook", return_value=True)
+    @patch("cross.setup._detect_agents", return_value=["claude"])
+    @patch("cross.setup._detect_shell_rc", return_value=None)
+    @patch("cross.setup.sys")
+    def test_unreadable_settings_skips(self, mock_sys, mock_shell_rc, mock_agents, mock_perm_hook, mock_read, tmp_path):
+        """If settings.json can't be parsed, skip the permissions step entirely."""
+        mock_sys.platform = "linux"
+        cross_dir = tmp_path / ".cross"
+
+        # none LLM, N email, N slack, Y wrappers, Y perm hook, Y auto-update
+        inputs = iter(["none", "N", "N", "Y", "Y", "Y"])
+        output = []
+        result = run_setup(
+            cross_dir=cross_dir,
+            input_fn=lambda p: next(inputs),
+            getpass_fn=lambda p: "",
+            print_fn=output.append,
+        )
+
+        assert result.get("permissions_applied") is None
+
+
+class TestBackupClaudeSettings:
+    def test_creates_backup(self, tmp_path):
+        settings_file = tmp_path / "settings.json"
+        backup_file = tmp_path / "settings.pre-cross.json"
+        settings_file.write_text('{"permissions": {"allow": ["Read"]}}')
+        output = []
+        with (
+            patch("cross.setup._CLAUDE_SETTINGS", settings_file),
+            patch("cross.setup._CLAUDE_SETTINGS_BACKUP", backup_file),
+        ):
+            result = _backup_claude_settings(output.append)
+        assert result is True
+        assert backup_file.exists()
+        assert backup_file.read_text() == '{"permissions": {"allow": ["Read"]}}'
+        assert any("Backed up" in s for s in output)
+
+    def test_does_not_overwrite_existing_backup(self, tmp_path):
+        settings_file = tmp_path / "settings.json"
+        backup_file = tmp_path / "settings.pre-cross.json"
+        settings_file.write_text('{"new": true}')
+        backup_file.write_text('{"original": true}')
+        output = []
+        with (
+            patch("cross.setup._CLAUDE_SETTINGS", settings_file),
+            patch("cross.setup._CLAUDE_SETTINGS_BACKUP", backup_file),
+        ):
+            result = _backup_claude_settings(output.append)
+        assert result is True
+        # Backup should still have original content
+        assert backup_file.read_text() == '{"original": true}'
+        assert any("already exists" in s for s in output)
+
+    def test_no_settings_file(self, tmp_path):
+        settings_file = tmp_path / "settings.json"  # does not exist
+        backup_file = tmp_path / "settings.pre-cross.json"
+        output = []
+        with (
+            patch("cross.setup._CLAUDE_SETTINGS", settings_file),
+            patch("cross.setup._CLAUDE_SETTINGS_BACKUP", backup_file),
+        ):
+            result = _backup_claude_settings(output.append)
+        assert result is False
+        assert not backup_file.exists()
+
+
+class TestRestoreClaudeSettings:
+    def test_restores_from_backup(self, tmp_path):
+        settings_file = tmp_path / "settings.json"
+        backup_file = tmp_path / "settings.pre-cross.json"
+        settings_file.write_text('{"modified": true}')
+        backup_file.write_text('{"original": true}')
+        output = []
+        with (
+            patch("cross.setup._CLAUDE_SETTINGS", settings_file),
+            patch("cross.setup._CLAUDE_SETTINGS_BACKUP", backup_file),
+        ):
+            result = _restore_claude_settings(output.append)
+        assert result is True
+        assert settings_file.read_text() == '{"original": true}'
+        assert any("Restored" in s for s in output)
+
+    def test_no_backup_to_restore(self, tmp_path):
+        backup_file = tmp_path / "settings.pre-cross.json"  # does not exist
+        output = []
+        with patch("cross.setup._CLAUDE_SETTINGS_BACKUP", backup_file):
+            result = _restore_claude_settings(output.append)
+        assert result is False
+        assert any("No backup found" in s for s in output)
+
+
+class TestPermissionsCLICommand:
+    @patch("cross.setup._write_claude_settings")
+    @patch("cross.setup._backup_claude_settings", return_value=True)
+    @patch("cross.setup._read_claude_settings", return_value={"permissions": {"allow": ["Read"]}})
+    def test_recommended_subcommand(self, mock_read, mock_backup, mock_write):
+        from cross.cli import _run_permissions
+
+        args = MagicMock()
+        args.perms_agent = "claude"
+        args.perms_action = "recommended"
+        result = _run_permissions(args)
+        assert result == 0
+        mock_backup.assert_called_once()
+        mock_write.assert_called_once()
+
+    @patch("cross.setup._restore_claude_settings", return_value=True)
+    def test_restore_subcommand(self, mock_restore):
+        from cross.cli import _run_permissions
+
+        args = MagicMock()
+        args.perms_agent = "claude"
+        args.perms_action = "restore"
+        result = _run_permissions(args)
+        assert result == 0
+        mock_restore.assert_called_once()
+
+    @patch("cross.setup._restore_claude_settings", return_value=False)
+    def test_restore_no_backup_returns_1(self, mock_restore):
+        from cross.cli import _run_permissions
+
+        args = MagicMock()
+        args.perms_agent = "claude"
+        args.perms_action = "restore"
+        result = _run_permissions(args)
+        assert result == 1
+
+    def test_show_subcommand(self):
+        from cross.cli import _run_permissions
+
+        args = MagicMock()
+        args.perms_agent = "claude"
+        args.perms_action = "show"
+        result = _run_permissions(args)
+        assert result == 0
+
+    @patch("cross.setup._read_claude_settings", return_value={})
+    def test_claude_no_action_shows_usage(self, mock_read):
+        from cross.cli import _run_permissions
+
+        args = MagicMock()
+        args.perms_agent = "claude"
+        args.perms_action = None
+        result = _run_permissions(args)
+        assert result == 0
+
+    def test_no_agent_shows_usage(self):
+        from cross.cli import _run_permissions
+
+        args = MagicMock()
+        args.perms_agent = None
+        result = _run_permissions(args)
+        assert result == 0

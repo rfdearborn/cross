@@ -64,6 +64,15 @@ def main():
     deny_p = pending_sub.add_parser("deny", help="Deny a pending escalation")
     deny_p.add_argument("tool_use_id", help="Tool use ID to deny")
 
+    # cross permissions claude [recommended|restore|show]
+    perms_p = sub.add_parser("permissions", help="Manage agent permission settings")
+    perms_agent_sub = perms_p.add_subparsers(dest="perms_agent")
+    claude_perms_p = perms_agent_sub.add_parser("claude", help="Manage Claude Code permissions for cross")
+    claude_perms_sub = claude_perms_p.add_subparsers(dest="perms_action")
+    claude_perms_sub.add_parser("recommended", help="Apply recommended cross permissions (backs up current settings)")
+    claude_perms_sub.add_parser("restore", help="Restore pre-cross permissions from backup")
+    claude_perms_sub.add_parser("show", help="Show the recommended permission set")
+
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -106,6 +115,8 @@ def main():
         sys.exit(_run_update(local_path=args.path, from_head=args.head))
     elif args.command == "pending":
         sys.exit(_run_pending(args))
+    elif args.command == "permissions":
+        sys.exit(_run_permissions(args))
     else:
         parser.print_help()
 
@@ -277,6 +288,61 @@ def _run_pending(args) -> int:
     print("  cross pending approve <tool_use_id>")
     print("  cross pending deny <tool_use_id>")
     return 0
+
+
+def _run_permissions(args) -> int:
+    """Manage Claude Code permissions for cross."""
+    from cross.setup import (
+        _apply_recommended_permissions,
+        _backup_claude_settings,
+        _read_claude_settings,
+        _restore_claude_settings,
+        _show_recommended_permissions,
+        _write_claude_settings,
+    )
+
+    agent = getattr(args, "perms_agent", None)
+
+    if agent != "claude":
+        print("Usage:")
+        print("  cross permissions claude [recommended|restore|show]")
+        return 0
+
+    action = getattr(args, "perms_action", None)
+
+    if action == "recommended":
+        cc_settings = _read_claude_settings(print)
+        if cc_settings is None:
+            return 1
+        _backup_claude_settings(print)
+        cc_settings = _apply_recommended_permissions(cc_settings)
+        _write_claude_settings(cc_settings)
+        print("Recommended permissions applied to ~/.claude/settings.json.")
+        print("Restore original settings with: cross permissions claude restore")
+        return 0
+
+    elif action == "restore":
+        return 0 if _restore_claude_settings(print) else 1
+
+    elif action == "show":
+        _show_recommended_permissions(print)
+        return 0
+
+    else:
+        # `cross permissions claude` with no subcommand — show current state and usage
+        cc_settings = _read_claude_settings(print)
+        if cc_settings is not None:
+            from cross.setup import _display_claude_permissions, _get_claude_permissions
+
+            perms = _get_claude_permissions(cc_settings)
+            print("Current Claude Code permissions:")
+            _display_claude_permissions(perms, print)
+        print()
+        print("Usage:")
+        print("  cross permissions claude recommended  — apply recommended cross permissions")
+        print("  cross permissions claude restore      — restore pre-cross permissions from backup")
+        print("  cross permissions claude show         — show the recommended permission set")
+        return 0
 
 
 _PID_FILE = os.path.join(os.path.expanduser(settings.config_dir), "daemon.pid")

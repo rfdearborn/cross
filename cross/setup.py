@@ -308,6 +308,7 @@ def _patch_openclaw_gateway(print_fn) -> bool:
 
 
 _CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+_CLAUDE_SETTINGS_BACKUP = Path.home() / ".claude" / "settings.pre-cross.json"
 _HOOK_MARKER = "claude_code_hook.py"
 _PERMISSION_HOOK_MARKER = "permission_hook.py"
 
@@ -327,6 +328,61 @@ def _write_claude_settings(settings: dict):
     """Write Claude Code settings.json."""
     _CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     _CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def _backup_claude_settings(print_fn) -> bool:
+    """Back up current settings.json to settings.pre-cross.json.
+
+    Only creates the backup if settings.json exists and a backup doesn't
+    already exist (to avoid overwriting the original with an already-modified
+    version on re-runs of setup).
+    """
+    if not _CLAUDE_SETTINGS.exists():
+        return False
+    if _CLAUDE_SETTINGS_BACKUP.exists():
+        print_fn(f"  Backup already exists: {_CLAUDE_SETTINGS_BACKUP}")
+        return True
+    try:
+        import shutil
+
+        shutil.copy2(_CLAUDE_SETTINGS, _CLAUDE_SETTINGS_BACKUP)
+        print_fn(f"  Backed up settings to {_CLAUDE_SETTINGS_BACKUP}")
+        return True
+    except OSError as e:
+        print_fn(f"  Warning: could not back up settings: {e}")
+        return False
+
+
+def _restore_claude_settings(print_fn) -> bool:
+    """Restore settings.json from settings.pre-cross.json backup."""
+    if not _CLAUDE_SETTINGS_BACKUP.exists():
+        print_fn("No backup found. Nothing to restore.")
+        return False
+    try:
+        import shutil
+
+        shutil.copy2(_CLAUDE_SETTINGS_BACKUP, _CLAUDE_SETTINGS)
+        print_fn(f"Restored settings from {_CLAUDE_SETTINGS_BACKUP}")
+        return True
+    except OSError as e:
+        print_fn(f"Error restoring settings: {e}")
+        return False
+
+
+def _show_recommended_permissions(print_fn):
+    """Print the full recommended permissions for review."""
+    print_fn("")
+    print_fn("  Allow:")
+    for entry in _RECOMMENDED_PERMISSIONS["allow"]:
+        print_fn(f"    {entry}")
+    print_fn("  Deny:")
+    for entry in _RECOMMENDED_PERMISSIONS["deny"]:
+        print_fn(f"    {entry}")
+    print_fn("  Ask:")
+    for entry in _RECOMMENDED_PERMISSIONS["ask"]:
+        print_fn(f"    {entry}")
+    print_fn(f"  defaultMode: {_RECOMMENDED_PERMISSIONS['defaultMode']}")
+    print_fn("")
 
 
 def _install_gate_hook(print_fn) -> bool:
@@ -576,6 +632,220 @@ def _uninstall_codex_hook(print_fn) -> bool:
     _CODEX_HOOKS_FILE.write_text(json.dumps(config, indent=2) + "\n")
     print_fn("  Codex hook removed.")
     return True
+
+
+# Recommended Claude Code permissions for cross users.
+# With cross gating tool calls, users can safely allow core tools and only
+# deny catastrophic operations.  The "ask" list covers destructive-but-legit
+# operations that deserve a manual confirmation even with cross running.
+_RECOMMENDED_PERMISSIONS: dict = {
+    "allow": [
+        # Core tools
+        "Bash",
+        "Edit",
+        "Read",
+        "WebFetch",
+        "WebSearch",
+        "Write",
+        # Safe read-only commands
+        "Bash(curl*)",
+        "Bash(ls*)",
+        "Bash(cat*)",
+        "Bash(head*)",
+        "Bash(tail*)",
+        "Bash(grep*)",
+        "Bash(rg*)",
+        "Bash(find*)",
+        "Bash(pwd*)",
+        "Bash(echo*)",
+        "Bash(wc*)",
+        "Bash(diff*)",
+        "Bash(sort*)",
+        "Bash(uniq*)",
+        "Bash(file*)",
+        "Bash(stat*)",
+        "Bash(du*)",
+        "Bash(df*)",
+        "Bash(which*)",
+        "Bash(env*)",
+        "Bash(printenv*)",
+        "Bash(ps*)",
+        "Bash(jq*)",
+        "Bash(awk*)",
+        "Bash(tr*)",
+        "Bash(cut*)",
+        # Read-only git
+        "Bash(git log*)",
+        "Bash(git status*)",
+        "Bash(git diff*)",
+        "Bash(git show*)",
+        "Bash(git branch*)",
+        "Bash(git remote*)",
+        # Read-only GitHub CLI
+        "Bash(gh pr list*)",
+        "Bash(gh pr view*)",
+        "Bash(gh pr diff*)",
+        "Bash(gh pr checks*)",
+        "Bash(gh pr status*)",
+        "Bash(gh issue list*)",
+        "Bash(gh issue view*)",
+        "Bash(gh repo view*)",
+        "Bash(gh run list*)",
+        "Bash(gh run view*)",
+        "Bash(gh release list*)",
+        "Bash(gh release view*)",
+        "Bash(gh workflow list*)",
+        "Bash(gh workflow view*)",
+        # Read-only Docker
+        "Bash(docker ps*)",
+        "Bash(docker images*)",
+        "Bash(docker logs*)",
+        "Bash(docker inspect*)",
+        "Bash(docker stats*)",
+        "Bash(docker info*)",
+        "Bash(docker network ls*)",
+        "Bash(docker volume ls*)",
+        "Bash(docker compose ps*)",
+        "Bash(docker compose logs*)",
+        # Read-only package managers
+        "Bash(npm list*)",
+        "Bash(npm ls*)",
+        "Bash(npm info*)",
+        "Bash(npm view*)",
+        "Bash(npm outdated*)",
+        "Bash(npm audit*)",
+        "Bash(pip list*)",
+        "Bash(pip show*)",
+        "Bash(pip freeze*)",
+    ],
+    "deny": [
+        # Catastrophic recursive deletes — keep blocked even with cross
+        "Bash(rm -rf /)",
+        "Bash(rm -rf /*)",
+        "Bash(rm -rf ~)",
+        "Bash(rm -rf ~/*)",
+        "Bash(rm -rf $HOME)",
+        "Bash(rm -rf $HOME/*)",
+        "Bash(rm -fr /)",
+        "Bash(rm -fr /*)",
+        "Bash(rm -fr ~)",
+        "Bash(rm -fr ~/*)",
+        "Bash(rm -fr $HOME)",
+        "Bash(rm -fr $HOME/*)",
+        "Bash(rm -Rf /)",
+        "Bash(rm -Rf /*)",
+        "Bash(rm -Rf ~)",
+        "Bash(rm -Rf ~/*)",
+        "Bash(rm -Rf $HOME)",
+        "Bash(rm -Rf $HOME/*)",
+        "Bash(rm -r -f /)",
+        "Bash(rm -r -f /*)",
+        "Bash(rm -r -f ~)",
+        "Bash(rm -r -f ~/*)",
+        "Bash(rm -r -f $HOME)",
+        "Bash(rm -r -f $HOME/*)",
+        "Bash(rm --recursive --force /)",
+        "Bash(rm --recursive --force /*)",
+        "Bash(rm --recursive --force ~)",
+        "Bash(rm --recursive --force ~/*)",
+        "Bash(rm --recursive --force $HOME)",
+        "Bash(rm --recursive --force $HOME/*)",
+    ],
+    "ask": [
+        # Destructive git operations
+        "Bash(git reset --hard *)",
+        "Bash(git clean -f *)",
+        "Bash(git clean -fd *)",
+        "Bash(git clean -ffd *)",
+        "Bash(git restore .)",
+        "Bash(git restore *)",
+        "Bash(git stash drop *)",
+        "Bash(git stash clear)",
+        "Bash(git branch -D *)",
+        "Bash(git config --global *)",
+        "Bash(git config --system *)",
+        "Bash(git push --force *)",
+        "Bash(git push --force-with-lease *)",
+        "Bash(git push * main)",
+        "Bash(git push * master)",
+        # Destructive GitHub CLI operations
+        "Bash(gh pr review *)",
+        "Bash(gh pr merge *)",
+        "Bash(gh pr close *)",
+        "Bash(gh issue close *)",
+        # Shell config edits
+        "Edit(~/.zshrc)",
+        "Edit(~/.bashrc)",
+        "Edit(~/.zprofile)",
+        "Edit(~/.profile)",
+        "Edit(**/.claude/settings.json)",
+    ],
+    "defaultMode": "acceptEdits",
+}
+
+
+def _get_claude_permissions(settings: dict) -> dict:
+    """Extract the current permissions from Claude Code settings.
+
+    Returns a dict with 'allow', 'deny', 'ask' lists and 'defaultMode'.
+    """
+    perms = settings.get("permissions", {})
+    return {
+        "allow": perms.get("allow", []),
+        "deny": perms.get("deny", []),
+        "ask": perms.get("ask", []),
+        "defaultMode": perms.get("defaultMode"),
+    }
+
+
+def _display_claude_permissions(perms: dict, print_fn) -> bool:
+    """Display current Claude Code permissions. Returns True if any custom permissions exist."""
+    has_any = bool(perms["deny"] or perms["ask"] or perms["allow"] or perms["defaultMode"])
+
+    if perms["deny"]:
+        print_fn(f"  Denied:  {len(perms['deny'])} rule(s)")
+    if perms["ask"]:
+        print_fn(f"  Ask:     {len(perms['ask'])} rule(s)")
+    if perms["allow"]:
+        print_fn(f"  Allowed: {len(perms['allow'])} rule(s)")
+    if perms["defaultMode"]:
+        print_fn(f"  Mode:    {perms['defaultMode']}")
+    if not has_any:
+        print_fn("  No custom permissions configured.")
+
+    return has_any
+
+
+def _apply_recommended_permissions(settings: dict) -> dict:
+    """Apply the recommended cross-friendly permissions to Claude Code settings.
+
+    Merges the recommended allow/deny/ask lists with any existing user rules,
+    preserving user-specific entries (e.g. MCP tools) that aren't in the
+    recommended set.
+    """
+    existing_perms = settings.get("permissions", {})
+    existing_allow = existing_perms.get("allow", [])
+
+    # Start with the recommended permissions
+    new_allow = list(_RECOMMENDED_PERMISSIONS["allow"])
+    new_deny = list(_RECOMMENDED_PERMISSIONS["deny"])
+    new_ask = list(_RECOMMENDED_PERMISSIONS["ask"])
+
+    # Preserve user-specific allow entries not covered by recommended
+    # (e.g. MCP tools, custom Bash patterns)
+    recommended_set = set(_RECOMMENDED_PERMISSIONS["allow"])
+    for entry in existing_allow:
+        if entry not in recommended_set:
+            new_allow.append(entry)
+
+    settings["permissions"] = {
+        "allow": new_allow,
+        "deny": new_deny,
+        "ask": new_ask,
+        "defaultMode": _RECOMMENDED_PERMISSIONS["defaultMode"],
+    }
+
+    return settings
 
 
 def run_setup(
@@ -910,6 +1180,38 @@ def run_setup(
         if perm_answer not in ("n", "no"):
             result["permission_hook_installed"] = _install_permission_hook(print_fn)
         print_fn("")
+
+        # ── Step 7a2: Offer recommended Claude Code permissions ──
+        cc_settings = _read_claude_settings(print_fn)
+        if cc_settings is not None:
+            perms = _get_claude_permissions(cc_settings)
+            print_fn("Your current Claude Code permissions:")
+            _display_claude_permissions(perms, print_fn)
+            print_fn("")
+            print_fn("cross offers a recommended permission config for monitored sessions:")
+            print_fn("  - Allows core tools (Bash, Edit, Read, Write, etc.) and safe read-only commands")
+            print_fn("  - Denies only catastrophic operations (rm -rf /, ~, $HOME)")
+            print_fn("  - Asks before destructive git ops, force pushes, and shell config edits")
+            print_fn("  - Sets defaultMode to acceptEdits")
+            print_fn("  - Preserves any custom entries (e.g. MCP tools) from your current config")
+            print_fn("  Your current settings will be backed up and can be restored with:")
+            print_fn("    cross permissions claude restore")
+            loosen_answer = input_fn("Apply recommended permissions? (Y/n/show): ").strip().lower()
+
+            if loosen_answer == "show":
+                _show_recommended_permissions(print_fn)
+                loosen_answer = input_fn("Apply these permissions? (Y/n): ").strip().lower()
+
+            if loosen_answer not in ("n", "no"):
+                _backup_claude_settings(print_fn)
+                cc_settings = _apply_recommended_permissions(cc_settings)
+                _write_claude_settings(cc_settings)
+                result["permissions_applied"] = "recommended"
+                print_fn("  Recommended permissions applied to ~/.claude/settings.json.")
+            else:
+                result["permissions_applied"] = None
+                print_fn("  Keeping current permissions.")
+            print_fn("")
 
     # ── Step 7b: Claude Code gate hook (Desktop/Cowork only) ──
     if sys.platform == "darwin" and _is_claude_desktop_installed():
