@@ -570,6 +570,34 @@ DASHBOARD_HTML = (
     font-size: 12px;
     flex-shrink: 0;
     width: 72px;
+    position: relative;
+    cursor: default;
+  }
+  .event-row .time .datetime-tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-secondary, #1b1b1b);
+    color: var(--text, #e0e0e0);
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    white-space: nowrap;
+    z-index: 1000;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .event-row .time .datetime-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--border, #333);
   }
   .event-row .badge {
     display: inline-block;
@@ -875,6 +903,32 @@ DASHBOARD_HTML = (
     return d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
   }
 
+  function fullDateTime(ts) {
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString([], {weekday: "short", year: "numeric", month: "short", day: "numeric"})
+      + " " + d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+  }
+
+  // Delayed hover tooltip for time elements
+  (function() {
+    var hoverTimer = null;
+    var activeTooltip = null;
+    document.addEventListener("mouseenter", function(e) {
+      var el = e.target.closest(".event-row .time");
+      if (!el) return;
+      hoverTimer = setTimeout(function() {
+        var tip = el.querySelector(".datetime-tooltip");
+        if (tip) { tip.style.display = "block"; activeTooltip = tip; }
+      }, 300);
+    }, true);
+    document.addEventListener("mouseleave", function(e) {
+      var el = e.target.closest(".event-row .time");
+      if (!el) return;
+      clearTimeout(hoverTimer);
+      if (activeTooltip) { activeTooltip.style.display = "none"; activeTooltip = null; }
+    }, true);
+  })();
+
   function truncate(s, n) {
     if (!s) return "";
     s = String(s);
@@ -1042,8 +1096,9 @@ DASHBOARD_HTML = (
     row.dataset.type = label.startsWith("gate:") ? "gate" : label;
     row.dataset.agent = agent;
     row.dataset.search = (agent + " " + label + " " + full).toLowerCase();
+    var evTs = ev.ts || Date.now()/1000;
     row.innerHTML =
-      '<span class="time">' + formatTime(ev.ts || Date.now()/1000) + '</span>'
+      '<span class="time">' + formatTime(evTs) + '<span class="datetime-tooltip">' + escHtml(fullDateTime(evTs)) + '</span></span>'
       + '<span class="agent">' + escHtml(agent) + '</span>'
       + '<span class="badge ' + badgeClass(ev) + '">' + badgeLabel(ev) + '</span>'
       + '<span class="detail">' + escHtml(truncate(full, 120)) + '</span>';
