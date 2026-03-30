@@ -3,6 +3,10 @@
 Loads instructions from a markdown file (default: ~/.cross/instructions.md).
 Re-reads the file on each access if the mtime has changed, so edits take
 effect without restarting the daemon.
+
+Supports per-project instructions via ``<project>/.cross/instructions.md``.
+Project instructions are additive to global instructions, but global
+instructions take precedence when there is a conflict.
 """
 
 from __future__ import annotations
@@ -70,6 +74,68 @@ class CustomInstructions:
         if current_mtime != self._last_mtime:
             logger.info("Custom instructions file changed, reloading...")
             self._load()
+
+
+class ProjectInstructionsCache:
+    """Cache of per-project instruction files, keyed by project root.
+
+    Looks for ``<cwd>/.cross/instructions.md``.  Hot-reloads when the file
+    changes, just like the global :class:`CustomInstructions`.
+    """
+
+    def __init__(self):
+        self._cache: dict[str, tuple[float, str]] = {}  # path -> (mtime, content)
+
+    def get(self, cwd: str) -> str:
+        """Return project instructions for *cwd*, or ``""`` if none exist."""
+        if not cwd:
+            return ""
+        path = Path(cwd) / ".cross" / "instructions.md"
+        cached = self._cache.get(str(path))
+
+        if not path.exists():
+            if cached:
+                del self._cache[str(path)]
+            return ""
+
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return cached[1] if cached else ""
+
+        if cached and cached[0] == mtime:
+            return cached[1]
+
+        try:
+            content = path.read_text(encoding="utf-8")
+            self._cache[str(path)] = (mtime, content)
+            logger.info(f"Loaded project instructions from {path} ({len(content)} chars)")
+            return content
+        except OSError as e:
+            logger.warning(f"Failed to read project instructions from {path}: {e}")
+            return cached[1] if cached else ""
+
+
+def merge_instructions(global_content: str, project_content: str) -> str:
+    """Merge global and project instructions.
+
+    Both are included; global instructions appear first and are marked as
+    higher-priority so the LLM knows to prefer them on conflict.
+    """
+    g = global_content.strip()
+    p = project_content.strip()
+    if not g and not p:
+        return ""
+    if not p:
+        return g
+    if not g:
+        return p
+    return (
+        g
+        + "\n\n--- Project-Specific Instructions (lower priority than global) ---\n"
+        + p
+        + "\n--- End Project-Specific Instructions ---"
+    )
 
 
 def format_instructions_block(instructions: str) -> str:

@@ -1,6 +1,7 @@
 """Tests for the denylist gate."""
 
 import json
+import os
 import time
 
 import pytest
@@ -9,8 +10,8 @@ from cross.evaluator import Action, GateRequest
 from cross.gates.denylist import DenylistGate, _dir_mtime
 
 
-def _req(tool_name: str, tool_input: dict) -> GateRequest:
-    return GateRequest(tool_name=tool_name, tool_input=tool_input)
+def _req(tool_name: str, tool_input: dict, cwd: str = "") -> GateRequest:
+    return GateRequest(tool_name=tool_name, tool_input=tool_input, cwd=cwd)
 
 
 class TestDestructiveCommands:
@@ -1275,4 +1276,180 @@ class TestHotReload:
         """Gate without rules_dir never attempts reload."""
         gate = DenylistGate(rules_dir=None, include_defaults=False)
         r = await gate.evaluate(_req("Bash", {"command": "anything"}))
+        assert r.action == Action.ALLOW
+
+
+class TestProjectRules:
+    """Tests for per-project rules loaded from <cwd>/.cross/rules.d/."""
+
+    @pytest.mark.anyio
+    async def test_project_rules_loaded(self, tmp_path):
+        """Project rules in <cwd>/.cross/rules.d/ are applied."""
+        project_dir = tmp_path / "myproject"
+        project_rules = project_dir / ".cross" / "rules.d"
+        project_rules.mkdir(parents=True)
+        (project_rules / "project.yaml").write_text(
+            "rules:\n"
+            "  - name: block-deploy\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    contains:\n"
+            "      - deploy-prod\n"
+        )
+
+        gate = DenylistGate(include_defaults=False)
+        r = await gate.evaluate(_req("Bash", {"command": "deploy-prod"}, cwd=str(project_dir)))
+        assert r.action == Action.BLOCK
+
+    @pytest.mark.anyio
+    async def test_project_rules_not_applied_without_cwd(self, tmp_path):
+        """Without cwd, project rules are not loaded."""
+        project_dir = tmp_path / "myproject"
+        project_rules = project_dir / ".cross" / "rules.d"
+        project_rules.mkdir(parents=True)
+        (project_rules / "project.yaml").write_text(
+            "rules:\n"
+            "  - name: block-deploy\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    contains:\n"
+            "      - deploy-prod\n"
+        )
+
+        gate = DenylistGate(include_defaults=False)
+        r = await gate.evaluate(_req("Bash", {"command": "deploy-prod"}))
+        assert r.action == Action.ALLOW
+
+    @pytest.mark.anyio
+    async def test_global_rules_override_project_rules(self, tmp_path):
+        """Global user rules take precedence over project rules with the same name."""
+        global_rules = tmp_path / "global_rules.d"
+        global_rules.mkdir()
+        (global_rules / "global.yaml").write_text(
+            "rules:\n"
+            "  - name: my-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: review\n"
+            "    contains:\n"
+            "      - test-conflict\n"
+        )
+
+        project_dir = tmp_path / "myproject"
+        project_rules = project_dir / ".cross" / "rules.d"
+        project_rules.mkdir(parents=True)
+        (project_rules / "project.yaml").write_text(
+            "rules:\n"
+            "  - name: my-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    contains:\n"
+            "      - test-conflict\n"
+        )
+
+        gate = DenylistGate(rules_dir=global_rules, include_defaults=False)
+        r = await gate.evaluate(_req("Bash", {"command": "test-conflict"}, cwd=str(project_dir)))
+        # Global says REVIEW, project says BLOCK — global wins (project rule skipped)
+        assert r.action == Action.REVIEW
+
+    @pytest.mark.anyio
+    async def test_project_rules_additive(self, tmp_path):
+        """Project rules add new rules alongside global ones."""
+        global_rules = tmp_path / "global_rules.d"
+        global_rules.mkdir()
+        (global_rules / "global.yaml").write_text(
+            "rules:\n"
+            "  - name: global-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: review\n"
+            "    contains:\n"
+            "      - global-match\n"
+        )
+
+        project_dir = tmp_path / "myproject"
+        project_rules = project_dir / ".cross" / "rules.d"
+        project_rules.mkdir(parents=True)
+        (project_rules / "project.yaml").write_text(
+            "rules:\n"
+            "  - name: project-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    contains:\n"
+            "      - project-match\n"
+        )
+
+        gate = DenylistGate(rules_dir=global_rules, include_defaults=False)
+        # Global rule still works
+        r = await gate.evaluate(_req("Bash", {"command": "global-match"}, cwd=str(project_dir)))
+        assert r.action == Action.REVIEW
+        # Project rule also works
+        r = await gate.evaluate(_req("Bash", {"command": "project-match"}, cwd=str(project_dir)))
+        assert r.action == Action.BLOCK
+
+    @pytest.mark.anyio
+    async def test_project_rules_hot_reload(self, tmp_path):
+        """Project rules hot-reload when files change."""
+        project_dir = tmp_path / "myproject"
+        project_rules = project_dir / ".cross" / "rules.d"
+        project_rules.mkdir(parents=True)
+        rule_file = project_rules / "project.yaml"
+        rule_file.write_text(
+            "rules:\n"
+            "  - name: hot-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    contains:\n"
+            "      - hot-match-v1\n"
+        )
+
+        gate = DenylistGate(include_defaults=False)
+        r = await gate.evaluate(_req("Bash", {"command": "hot-match-v1"}, cwd=str(project_dir)))
+        assert r.action == Action.BLOCK
+
+        # Update the rule
+        time.sleep(0.05)
+        rule_file.write_text(
+            "rules:\n"
+            "  - name: hot-rule\n"
+            "    tools: [Bash]\n"
+            "    field: command\n"
+            "    action: block\n"
+            "    contains:\n"
+            "      - hot-match-v2\n"
+        )
+        os.utime(rule_file, (time.time() + 1, time.time() + 1))
+        os.utime(project_rules, (time.time() + 1, time.time() + 1))
+
+        r = await gate.evaluate(_req("Bash", {"command": "hot-match-v1"}, cwd=str(project_dir)))
+        assert r.action == Action.ALLOW
+        r = await gate.evaluate(_req("Bash", {"command": "hot-match-v2"}, cwd=str(project_dir)))
+        assert r.action == Action.BLOCK
+
+    @pytest.mark.anyio
+    async def test_project_disable_ignored(self, tmp_path):
+        """Project disable lists cannot weaken default safety rules."""
+        project_dir = tmp_path / "myproject"
+        project_rules = project_dir / ".cross" / "rules.d"
+        project_rules.mkdir(parents=True)
+        (project_rules / "weaken.yaml").write_text("disable:\n  - destructive-rm\n")
+
+        gate = DenylistGate()  # includes defaults
+        # Default destructive-rm rule should still fire despite project disable
+        r = await gate.evaluate(_req("Bash", {"command": "rm -rf /"}, cwd=str(project_dir)))
+        assert r.action == Action.REVIEW
+
+    @pytest.mark.anyio
+    async def test_no_project_rules_dir(self, tmp_path):
+        """No error when project has no .cross/rules.d/ directory."""
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+
+        gate = DenylistGate(include_defaults=False)
+        r = await gate.evaluate(_req("Bash", {"command": "anything"}, cwd=str(project_dir)))
         assert r.action == Action.ALLOW
