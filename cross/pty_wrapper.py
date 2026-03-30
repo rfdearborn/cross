@@ -6,10 +6,12 @@ import errno
 import fcntl
 import os
 import pty
+import queue
 import select
 import signal
 import sys
 import termios
+import threading
 import tty
 from dataclasses import dataclass, field
 from typing import Callable
@@ -27,6 +29,11 @@ class PTYSession:
     _original_termios: list | None = field(default=None, repr=False)
     _output_callbacks: list[IOCallback] = field(default_factory=list, repr=False)
     _input_callbacks: list[IOCallback] = field(default_factory=list, repr=False)
+    # Interactive prompt queues (set by CLI when prompt support is needed)
+    prompt_queue: queue.Queue | None = field(default=None, repr=False)
+    prompt_response_queue: queue.Queue | None = field(default=None, repr=False)
+    # Set by relay thread to dismiss an active prompt (resolved from another surface)
+    prompt_dismiss: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def on_output(self, cb: IOCallback):
         """Register a callback for agent output (stdout)."""
@@ -120,6 +127,14 @@ class PTYSession:
         watch_fds = [fd for fd in [stdin_fd, master] if fd >= 0]
 
         while True:
+            # Check for pending interactive prompts
+            if self.prompt_queue is not None:
+                try:
+                    prompt_data = self.prompt_queue.get_nowait()
+                    self._handle_prompt(prompt_data, stdin_fd, stdout_fd, master)
+                except queue.Empty:
+                    pass
+
             try:
                 rfds, _, _ = select.select(watch_fds, [], [], 0.1)
             except (select.error, ValueError):
@@ -182,3 +197,78 @@ class PTYSession:
                         break
                 except ChildProcessError:
                     break
+
+    def _handle_prompt(self, prompt_data: dict, stdin_fd: int, stdout_fd: int, master_fd: int):
+        """Take over the I/O loop for an interactive prompt.
+
+        Buffers agent output while the prompt is active so the TUI
+        doesn't overwrite the menu. Flushes buffered output when done.
+        """
+        from cross.pty_prompt import clear_prompt, parse_key, render_prompt
+
+        options = prompt_data.get("options", ["Allow", "Deny"])
+        title = prompt_data.get("title", "")
+        body = prompt_data.get("body", "")
+        selected = 0
+        buffered_output: list[bytes] = []
+
+        self.prompt_dismiss.clear()
+        num_lines = render_prompt(title, body, options, selected, stdout_fd)
+
+        while True:
+            # Check if prompt was dismissed externally (approved via dashboard/Slack)
+            if self.prompt_dismiss.is_set():
+                clear_prompt(num_lines, stdout_fd)
+                self.prompt_dismiss.clear()
+                break
+
+            try:
+                rfds, _, _ = select.select([fd for fd in [stdin_fd, master_fd] if fd >= 0], [], [], 0.1)
+            except (select.error, ValueError):
+                break
+
+            # Buffer agent output (don't write to terminal — prompt is showing)
+            if master_fd in rfds:
+                try:
+                    data = os.read(master_fd, 16384)
+                    if data:
+                        buffered_output.append(data)
+                except OSError:
+                    break
+
+            # Handle user keystrokes for prompt navigation
+            if stdin_fd >= 0 and stdin_fd in rfds:
+                data = os.read(stdin_fd, 16384)
+                if not data:
+                    break
+                key = parse_key(data)
+
+                if key == "up":
+                    selected = max(0, selected - 1)
+                    num_lines = render_prompt(title, body, options, selected, stdout_fd)
+                elif key == "down":
+                    selected = min(len(options) - 1, selected + 1)
+                    num_lines = render_prompt(title, body, options, selected, stdout_fd)
+                elif key == "enter":
+                    clear_prompt(num_lines, stdout_fd)
+                    if self.prompt_response_queue is not None:
+                        self.prompt_response_queue.put(
+                            {
+                                "type": "prompt_response",
+                                "prompt_id": prompt_data.get("prompt_id", ""),
+                                "choice": options[selected],
+                            }
+                        )
+                    break
+                elif key in ("escape", "quit"):
+                    clear_prompt(num_lines, stdout_fd)
+                    break
+
+        # Flush buffered agent output + fire callbacks
+        for buf in buffered_output:
+            os.write(stdout_fd, buf)
+            for cb in self._output_callbacks:
+                try:
+                    cb(buf)
+                except Exception:
+                    pass

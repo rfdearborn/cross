@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     activity_threshold_seconds: float = 30.0  # seconds before agent pill shows as stopped
     permission_notify_delay: float = 10.0  # seconds before notifying about pending permission prompt
 
+    # PTY terminal notifications (ANSI banners in the agent's terminal)
+    pty_notifications_enabled: bool = True
+
     # Native desktop notifications (macOS, via terminal-notifier)
     native_notifications_enabled: bool = False
 
