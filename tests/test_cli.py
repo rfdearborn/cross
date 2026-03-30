@@ -387,6 +387,7 @@ class TestStartWsRelay:
         info = MagicMock()
         info.session_id = "abc123"
         info.pty_session = MagicMock()
+        info.pty_session.prompt_response_queue = None
         output_queue = queue.Queue()
         log = logging.getLogger("test")
 

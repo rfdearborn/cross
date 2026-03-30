@@ -11,7 +11,7 @@ Full coverage for cross/ansi.py:
 - Edge cases (empty input, only ANSI codes, only decorations, mixed content)
 """
 
-from cross.ansi import strip_ansi
+from cross.ansi import format_notification, strip_ansi
 
 
 class TestBasicANSIStripping:
@@ -256,3 +256,46 @@ class TestEdgeCases:
         data = b"\x1b[?25l\x1b[1m\x1b[36mClaude\x1b[0m > I'll read that file for you.\x1b[?25h"
         result = strip_ansi(data)
         assert result == "Claude > I'll read that file for you."
+
+
+class TestFormatNotification:
+    """Verify OSC 9 terminal notification formatting."""
+
+    def test_osc9_structure(self):
+        notif = format_notification("Gate HALT: Bash", style="error")
+        assert notif.startswith("\033]9;")  # OSC 9 prefix
+        assert notif.endswith("\a")  # BEL terminator
+        assert "Gate HALT: Bash" in notif
+
+    def test_cross_prefix(self):
+        notif = format_notification("Title")
+        assert "cross:" in notif
+
+    def test_error_icon(self):
+        notif = format_notification("Title", style="error")
+        assert "\U0001f6d1" in notif  # stop sign
+
+    def test_warning_icon(self):
+        notif = format_notification("Title", style="warning")
+        assert "\u26a0\ufe0f" in notif  # warning sign
+
+    def test_alert_icon(self):
+        notif = format_notification("Title", style="alert")
+        assert "\U0001f514" in notif  # bell
+
+    def test_unknown_style_falls_back_to_error(self):
+        notif = format_notification("Test", style="nonexistent")
+        assert "\U0001f6d1" in notif  # stop sign fallback
+
+    def test_body_included(self):
+        notif = format_notification("Title", body="Some reason here")
+        assert "Some reason here" in notif
+
+    def test_empty_body_omitted(self):
+        notif = format_notification("Title")
+        assert " — " not in notif
+
+    def test_body_truncated(self):
+        long_body = "x" * 300
+        notif = format_notification("Title", body=long_body)
+        assert "..." in notif

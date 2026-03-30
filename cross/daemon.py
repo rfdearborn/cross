@@ -69,6 +69,8 @@ _permission_pending: dict[str, dict] = {}  # session_id -> {tool_desc, ts}
 _permission_notify_tasks: dict[str, asyncio.Task] = {}  # session_id -> delayed notify task
 # Event loop reference (for thread-safe callbacks)
 _event_loop: asyncio.AbstractEventLoop | None = None
+# Active PTY prompts: tool_use_id -> session_id (for cross-surface dismiss)
+_active_pty_prompts: dict[str, str] = {}
 
 
 def _detect_hooked_agents() -> set[str]:
@@ -381,6 +383,18 @@ async def api_session_ws(ws: WebSocket):
                     if _email:
                         _email.handle_pty_output(session_id, text)
 
+            elif msg_type == "prompt_response":
+                # User responded to an interactive PTY prompt
+                prompt_id = msg.get("prompt_id", "")
+                choice = msg.get("choice", "")
+                if prompt_id and choice:
+                    from cross.proxy import resolve_gate_approval
+
+                    _active_pty_prompts.pop(prompt_id, None)
+                    approved = choice.lower() == "allow"
+                    resolve_gate_approval(prompt_id, approved, "terminal")
+                    logger.info(f"PTY prompt resolved: {prompt_id} → {choice}")
+
     except WebSocketDisconnect:
         logger.info(f"Session WS disconnected: {session_id}")
     except Exception as e:
@@ -397,6 +411,49 @@ async def _inject_to_session(session_id: str, text: str):
             await ws.send_json({"type": "inject", "text": text})
         except Exception as e:
             logger.warning(f"Failed to inject to session {session_id}: {e}")
+
+
+async def _notify_to_session(session_id: str, text: str):
+    """Send a display-only notification to a wrap process's PTY via WebSocket.
+
+    Unlike _inject_to_session (which simulates keyboard input to the agent),
+    this sends a 'notify' message that the wrapper writes to stdout — visible
+    to the human but invisible to the agent.
+    """
+    ws = _session_ws.get(session_id)
+    if ws:
+        try:
+            await ws.send_json({"type": "notify", "text": text})
+        except Exception as e:
+            logger.debug(f"Failed to notify session {session_id}: {e}")
+
+
+async def _prompt_to_session(session_id: str, prompt_data: dict):
+    """Send an interactive prompt to a wrap process's PTY via WebSocket.
+
+    The wrapper renders arrow-key-navigable choices in the terminal.
+    The user's response comes back as a 'prompt_response' message.
+    """
+    ws = _session_ws.get(session_id)
+    if ws:
+        prompt_id = prompt_data.get("prompt_id", "")
+        if prompt_id:
+            _active_pty_prompts[prompt_id] = session_id
+        try:
+            await ws.send_json(prompt_data)
+        except Exception as e:
+            logger.debug(f"Failed to send prompt to session {session_id}: {e}")
+            _active_pty_prompts.pop(prompt_id, None)
+
+
+async def _dismiss_pty_prompt(session_id: str, prompt_id: str):
+    """Dismiss an active PTY prompt (resolved from dashboard/Slack/email)."""
+    ws = _session_ws.get(session_id)
+    if ws:
+        try:
+            await ws.send_json({"type": "dismiss_prompt", "prompt_id": prompt_id})
+        except Exception as e:
+            logger.debug(f"Failed to dismiss prompt in session {session_id}: {e}")
 
 
 async def _delayed_inject(session_id: str, text: str):
@@ -998,7 +1055,14 @@ async def on_startup():
     # Register dashboard plugin (always active — no config gating)
     from cross.proxy import resolve_gate_approval as _resolve_gate
 
-    _dashboard = DashboardPlugin(event_store=store, resolve_approval_callback=_resolve_gate)
+    def _resolve_gate_and_dismiss(tool_use_id, approved, username):
+        """Resolve gate approval and dismiss any active PTY prompt for it."""
+        _resolve_gate(tool_use_id, approved, username)
+        session_id = _active_pty_prompts.pop(tool_use_id, None)
+        if session_id and _event_loop:
+            asyncio.run_coroutine_threadsafe(_dismiss_pty_prompt(session_id, tool_use_id), _event_loop)
+
+    _dashboard = DashboardPlugin(event_store=store, resolve_approval_callback=_resolve_gate_and_dismiss)
     event_bus.subscribe(_dashboard.handle_event)
     event_bus.subscribe(_clear_permission_on_activity)
     logger.info("Dashboard active at /cross/dashboard")
@@ -1033,6 +1097,16 @@ async def on_startup():
         set_browser_check(lambda: len(_dashboard._ws_clients) > 0)
         event_bus.subscribe(notify_event)
         logger.info("Native desktop notifications active")
+
+    # Register PTY terminal notifications and interactive prompts
+    if settings.pty_notifications_enabled:
+        from cross.plugins.pty_notifier import handle_event as pty_notify_event
+        from cross.plugins.pty_notifier import set_notify_callback, set_prompt_callback
+
+        set_notify_callback(_notify_to_session)
+        set_prompt_callback(_prompt_to_session)
+        event_bus.subscribe(pty_notify_event)
+        logger.info("PTY terminal notifications active")
 
     # Set up gate chain
     if settings.gating_enabled:
@@ -1174,11 +1248,10 @@ async def on_startup():
     # Register Email plugin
     if settings.email_from and settings.email_to:
         from cross.plugins.email import EmailPlugin
-        from cross.proxy import resolve_gate_approval as _resolve_gate_email
 
         _email = EmailPlugin(
             inject_callback=_inject_to_session,
-            resolve_approval_callback=_resolve_gate_email,
+            resolve_approval_callback=_resolve_gate_and_dismiss,
             resolve_permission_callback=resolve_permission,
             event_loop=asyncio.get_running_loop(),
             conversation_store=_conversation_store,
@@ -1194,12 +1267,11 @@ async def on_startup():
     # Register Slack plugin
     if settings.slack_bot_token and settings.slack_app_token:
         from cross.plugins.slack import SlackPlugin
-        from cross.proxy import resolve_gate_approval
 
         _slack = SlackPlugin(
             inject_callback=_inject_to_session,
             spawn_callback=_spawn_session,
-            resolve_approval_callback=resolve_gate_approval,
+            resolve_approval_callback=_resolve_gate_and_dismiss,
             resolve_permission_callback=resolve_permission,
             event_loop=asyncio.get_running_loop(),
             conversation_store=_conversation_store,

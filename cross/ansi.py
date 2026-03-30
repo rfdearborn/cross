@@ -27,6 +27,34 @@ _CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1a\x1c-\x1f\x7f]")
 _DECORATION_RE = re.compile(r"[╌─━┌┐└┘├┤┬┴┼╭╮╯╰│║═]+")
 
 
+# Icons used in OSC 9 notification text
+_NOTIFICATION_ICONS: dict[str, str] = {
+    "error": "\U0001f6d1",  # stop sign
+    "warning": "\u26a0\ufe0f",  # warning
+    "alert": "\U0001f514",  # bell
+}
+
+
+def format_notification(title: str, body: str = "", style: str = "error") -> str:
+    """Format a terminal notification using OSC 9.
+
+    OSC 9 is processed by the terminal emulator (iTerm2, Kitty, Ghostty,
+    Warp, Windows Terminal) and shown as a native toast/tab notification.
+    It does NOT interfere with full-screen TUI apps like Claude Code or
+    Codex, which is why we use this instead of inline ANSI banners.
+
+    Returns an OSC 9 escape sequence ready to write to the terminal.
+    """
+    icon = _NOTIFICATION_ICONS.get(style, _NOTIFICATION_ICONS["error"])
+    text = f"{icon} cross: {title}"
+    if body:
+        if len(body) > 200:
+            body = body[:200] + "..."
+        text += f" — {body}"
+    # OSC 9 ; <text> BEL — iTerm2/Kitty/Ghostty terminal notification
+    return f"\033]9;{text}\a"
+
+
 def strip_ansi(data: bytes) -> str:
     """Strip ANSI escape codes, control characters, and decoration from terminal output."""
     text = data.decode("utf-8", errors="replace")

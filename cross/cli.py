@@ -660,6 +660,10 @@ def _run_wrap(argv: list[str], log: logging.Logger) -> int:
     # Connect WebSocket for bidirectional I/O relay
     _start_ws_relay(daemon_url, info, output_queue, log)
 
+    # Set up interactive prompt queues (daemon → I/O loop → daemon)
+    info.pty_session.prompt_queue = queue.Queue()
+    info.pty_session.prompt_response_queue = queue.Queue()
+
     # Register PTY I/O callbacks
     info.pty_session.on_output(lambda data: _on_pty_output(data, output_queue))
 
@@ -745,13 +749,39 @@ def _start_ws_relay(daemon_url: str, info, output_queue: queue.Queue, log: loggi
                         except queue.Empty:
                             pass
 
-                        # Receive inject messages from daemon (Slack -> PTY)
+                        # Check for prompt responses (non-blocking)
+                        prq = getattr(info.pty_session, "prompt_response_queue", None)
+                        if prq is not None:
+                            try:
+                                response = prq.get_nowait()
+                                ws.send(json.dumps(response))
+                                log.info(f"Prompt response: {response.get('choice', '')}")
+                            except queue.Empty:
+                                pass
+
+                        # Receive messages from daemon
                         try:
                             msg = ws.recv(timeout=0.2)
                             data = json.loads(msg)
                             if data.get("type") == "inject" and info.pty_session:
                                 info.pty_session.inject_input(data["text"].encode())
                                 log.info(f"Injected from daemon: {data['text'][:50]}")
+                            elif data.get("type") == "notify":
+                                # Display-only: write to real terminal, not PTY master
+                                try:
+                                    os.write(sys.stdout.fileno(), data["text"].encode())
+                                except OSError:
+                                    pass
+                            elif data.get("type") == "prompt" and info.pty_session:
+                                # Interactive prompt — queue for I/O loop
+                                pq = getattr(info.pty_session, "prompt_queue", None)
+                                if pq is not None:
+                                    pq.put(data)
+                                    log.info(f"Prompt queued: {data.get('title', '')[:50]}")
+                            elif data.get("type") == "dismiss_prompt" and info.pty_session:
+                                # Prompt resolved from another surface — dismiss it
+                                info.pty_session.prompt_dismiss.set()
+                                log.info("Prompt dismissed by daemon")
                         except TimeoutError:
                             continue
                         except Exception:
