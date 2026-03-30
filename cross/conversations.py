@@ -151,7 +151,7 @@ class ConversationStore:
         self,
         gate_llm_config: LLMConfig | None = None,
         sentinel_llm_config: LLMConfig | None = None,
-        get_custom_instructions: Callable[..., str] | None = None,
+        get_custom_instructions: Callable[[str], str] | None = None,
     ):
         self._gate_config = gate_llm_config
         self._sentinel_config = sentinel_llm_config

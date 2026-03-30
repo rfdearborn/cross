@@ -5,10 +5,10 @@ Loads rules from YAML data files:
   - User rules:    ~/.cross/rules.d/*.yaml (add, modify, or disable)
   - Project rules: <cwd>/.cross/rules.d/*.yaml (per-project, additive)
 
-Project rules are additive — they add new rules alongside globals.
-When a project rule has the same name as a global user rule, the global
-version takes precedence.  Project ``disable`` lists can suppress default
-(shipped) rules but not global user rules.
+Project rules are strictly additive — they can only add new rules.
+When a project rule has the same name as any global rule, the global
+version takes precedence and the project rule is skipped.  Project
+``disable`` lists are ignored for safety.
 
 Rules support two match types:
   - patterns:  regex (case-insensitive, any match triggers)
@@ -246,10 +246,11 @@ class DenylistGate(Gate):
     def _get_project_rules(self, cwd: str) -> list[DenylistRule]:
         """Load project rules from ``<cwd>/.cross/rules.d/``, with caching.
 
-        Project rules are additive to global rules.  When a project rule has
-        the same name as a global user rule, the global version wins and the
-        project rule is skipped.  Project ``disable`` lists can suppress
-        default (shipped) rules but not global user rules.
+        Project rules are strictly additive — they can only add new rules, not
+        override or disable global ones.  When a project rule has the same name
+        as any global rule (default or user), the project rule is skipped.
+        Project ``disable`` lists are ignored for safety (a malicious repo
+        could otherwise weaken protections).
         """
         if not cwd:
             return []
@@ -265,28 +266,21 @@ class DenylistGate(Gate):
         if cached and cached[0] == current_mtime:
             return cached[1]
 
-        # Load project rules
+        # Load project rules (disable lists are intentionally ignored)
         project_rules, project_disabled = _load_user_rules(project_rules_dir)
+        if project_disabled:
+            logger.warning(f"Project disable list ignored for safety: {project_disabled}")
 
-        # Filter out project rules that conflict with global user rules
-        global_user_names = {r.name for r in self.rules if r.name != "unnamed"}
+        # Filter out project rules that share a name with any global rule
+        global_names = {r.name for r in self.rules if r.name != "unnamed"}
         filtered: list[DenylistRule] = []
         for rule in project_rules:
-            if rule.name in global_user_names:
+            if rule.name in global_names:
                 logger.info(f"Project rule '{rule.name}' skipped — overridden by global rule")
             else:
                 filtered.append(rule)
 
-        # Project disable lists only affect default rules, not global user rules
-        # (defaults that are already disabled by global config stay disabled)
-        if project_disabled:
-            default_names = {r.name for r in _load_default_rules()}
-            valid_disables = project_disabled & default_names
-            if valid_disables:
-                filtered = [r for r in filtered if r.name not in valid_disables]
-                logger.info(f"Project disabled default rules: {valid_disables}")
-
-        self._project_cache[dir_key] = (current_mtime, filtered, project_disabled)
+        self._project_cache[dir_key] = (current_mtime, filtered)
         if filtered:
             logger.info(f"Loaded {len(filtered)} project rules from {project_rules_dir}")
         return filtered

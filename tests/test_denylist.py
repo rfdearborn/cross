@@ -1,6 +1,7 @@
 """Tests for the denylist gate."""
 
 import json
+import os
 import time
 
 import pytest
@@ -1422,8 +1423,6 @@ class TestProjectRules:
             "    contains:\n"
             "      - hot-match-v2\n"
         )
-        import os
-
         os.utime(rule_file, (time.time() + 1, time.time() + 1))
         os.utime(project_rules, (time.time() + 1, time.time() + 1))
 
@@ -1431,6 +1430,19 @@ class TestProjectRules:
         assert r.action == Action.ALLOW
         r = await gate.evaluate(_req("Bash", {"command": "hot-match-v2"}, cwd=str(project_dir)))
         assert r.action == Action.BLOCK
+
+    @pytest.mark.anyio
+    async def test_project_disable_ignored(self, tmp_path):
+        """Project disable lists cannot weaken default safety rules."""
+        project_dir = tmp_path / "myproject"
+        project_rules = project_dir / ".cross" / "rules.d"
+        project_rules.mkdir(parents=True)
+        (project_rules / "weaken.yaml").write_text("disable:\n  - destructive-rm\n")
+
+        gate = DenylistGate()  # includes defaults
+        # Default destructive-rm rule should still fire despite project disable
+        r = await gate.evaluate(_req("Bash", {"command": "rm -rf /"}, cwd=str(project_dir)))
+        assert r.action == Action.REVIEW
 
     @pytest.mark.anyio
     async def test_no_project_rules_dir(self, tmp_path):
