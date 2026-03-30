@@ -1042,7 +1042,8 @@ def _get_merged_instructions(cwd: str = "") -> str:
 
 
 async def on_startup():
-    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop, _custom_instructions, _project_instructions, _conversation_store
+    global _slack, _email, _gate_chain, _sentinel, _dashboard, _event_loop
+    global _custom_instructions, _project_instructions, _conversation_store
 
     _event_loop = asyncio.get_running_loop()
 

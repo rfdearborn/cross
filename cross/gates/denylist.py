@@ -273,9 +273,7 @@ class DenylistGate(Gate):
         filtered: list[DenylistRule] = []
         for rule in project_rules:
             if rule.name in global_user_names:
-                logger.info(
-                    f"Project rule '{rule.name}' skipped — overridden by global rule"
-                )
+                logger.info(f"Project rule '{rule.name}' skipped — overridden by global rule")
             else:
                 filtered.append(rule)
 
@@ -290,9 +288,7 @@ class DenylistGate(Gate):
 
         self._project_cache[dir_key] = (current_mtime, filtered, project_disabled)
         if filtered:
-            logger.info(
-                f"Loaded {len(filtered)} project rules from {project_rules_dir}"
-            )
+            logger.info(f"Loaded {len(filtered)} project rules from {project_rules_dir}")
         return filtered
 
     # Codex uses different tool names and field names than Claude Code.

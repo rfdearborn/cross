@@ -1423,6 +1423,7 @@ class TestProjectRules:
             "      - hot-match-v2\n"
         )
         import os
+
         os.utime(rule_file, (time.time() + 1, time.time() + 1))
         os.utime(project_rules, (time.time() + 1, time.time() + 1))
 
