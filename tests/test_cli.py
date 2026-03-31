@@ -331,8 +331,9 @@ class TestEndSession:
         _end_session("http://localhost:8080", info, log)
 
 
+@patch("cross.cli._register_session")
 class TestStartWsRelay:
-    def test_returns_thread(self):
+    def test_returns_thread(self, _mock_register):
         from cross.cli import _start_ws_relay
 
         info = MagicMock()
@@ -349,7 +350,7 @@ class TestStartWsRelay:
         assert thread is not None
         assert thread.daemon is True
 
-    def test_relay_sends_queued_output(self):
+    def test_relay_sends_queued_output(self, _mock_register):
         """The relay loop should send queued messages over the WebSocket."""
         from cross.cli import _start_ws_relay
 
@@ -378,7 +379,7 @@ class TestStartWsRelay:
         assert sent_data["type"] == "pty_output"
         assert sent_data["text"] == "hello"
 
-    def test_relay_injects_received_messages(self):
+    def test_relay_injects_received_messages(self, _mock_register):
         """The relay loop should inject received 'inject' messages into the PTY."""
         import json
 
@@ -405,7 +406,7 @@ class TestStartWsRelay:
 
         info.pty_session.inject_input.assert_called_once_with(b"injected text")
 
-    def test_relay_ws_url_conversion(self):
+    def test_relay_ws_url_conversion(self, _mock_register):
         """The relay should convert http:// to ws:// in the daemon URL."""
         from cross.cli import _start_ws_relay
 
