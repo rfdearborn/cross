@@ -803,6 +803,9 @@ def _start_ws_relay(daemon_url: str, info, output_queue: queue.Queue, log: loggi
         max_backoff = 30
         while True:
             try:
+                # Re-register session on each connect — daemon may have restarted
+                # and lost in-memory session state.
+                _register_session(daemon_url, info, log)
                 with websockets.sync.client.connect(ws_url) as ws:
                     backoff = 1  # Reset on successful connect
                     log.info("WebSocket relay connected")
