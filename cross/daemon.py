@@ -106,11 +106,19 @@ def _detect_running_agents() -> dict[str, list[int]]:
     Claude Desktop Code sessions are reported separately as "claude (desktop)"
     so they can be distinguished from CLI sessions in the dashboard.
     """
-    # Pattern per agent — more specific than just the name to avoid false positives
+    # Pattern per agent.
+    # Note: on macOS, process names can be full paths (e.g. /Users/.../bin/claude)
+    # so -x (exact match on process name) can miss them.  For claude/codex we
+    # fall back to -f (match against full command line) when -x finds nothing.
     agent_patterns = {
         "claude": ["-x", "claude"],  # exact binary name match
         "codex": ["-x", "codex"],  # OpenAI Codex CLI
         "openclaw": ["-f", "openclaw-gateway"],  # runs as openclaw-gateway
+    }
+    # Broader fallback patterns for when -x misses full-path process names
+    agent_fallback_patterns = {
+        "claude": ["-f", "/claude( |$)"],  # match /path/to/claude in args
+        "codex": ["-f", "/codex( |$)"],
     }
 
     own_pid = str(os.getpid())
@@ -126,14 +134,28 @@ def _detect_running_agents() -> dict[str, list[int]]:
                 pids = [int(p) for p in proc.stdout.strip().splitlines() if p != own_pid]
                 if pids:
                     result[agent] = pids
+            # Fallback: on macOS, process names can be full paths (e.g.
+            # /Users/.../.local/bin/claude) so -x misses them.  Try -f.
+            if agent not in result and agent in agent_fallback_patterns:
+                proc2 = subprocess.run(
+                    ["pgrep"] + agent_fallback_patterns[agent],
+                    capture_output=True,
+                    text=True,
+                )
+                if proc2.returncode == 0 and proc2.stdout.strip():
+                    pids = [int(p) for p in proc2.stdout.strip().splitlines() if p != own_pid]
+                    if pids:
+                        result[agent] = pids
         except (OSError, ValueError):
             continue
 
-    # Distinguish Claude Desktop Code sessions from CLI sessions
+    # Filter and classify claude PIDs
     if "claude" in result:
         cli_pids = []
         desktop_pids = []
         for pid in result["claude"]:
+            if _is_headless_claude(pid):
+                continue  # skip sentinel / internal `claude -p` processes
             if _is_desktop_pid(pid):
                 desktop_pids.append(pid)
             else:
@@ -166,6 +188,29 @@ def _is_cursor_embedded_codex(pid: int) -> bool:
         )
         if proc.returncode == 0:
             return ".cursor/" in proc.stdout
+    except OSError:
+        pass
+    return False
+
+
+def _is_headless_claude(pid: int) -> bool:
+    """Check if a claude PID is a headless ``claude -p`` process (e.g. sentinel).
+
+    These are internal cross LLM calls, not interactive agent sessions.
+    """
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            args = proc.stdout.strip()
+            # Match `claude -p` or `claude --model ... -p` patterns
+            # but not interactive sessions that happen to have -p elsewhere
+            parts = args.split()
+            if len(parts) >= 2 and (parts[0].endswith("/claude") or parts[0] == "claude"):
+                return "-p" in parts[1:3]
     except OSError:
         pass
     return False

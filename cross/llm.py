@@ -377,6 +377,7 @@ async def _complete_cli(
     # Run from cross config dir so Claude Code session state accumulates there
     cross_dir = os.path.expanduser(cross_settings.config_dir)
 
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cli_args,
@@ -402,12 +403,17 @@ async def _complete_cli(
     except FileNotFoundError:
         logger.warning(f"CLI command not found: '{cmd}'")
         return None
-    except asyncio.TimeoutError:
-        logger.warning(f"CLI '{cmd}' timed out after {timeout_s}s")
-        try:
-            proc.kill()  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
+    except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+        label = "timed out" if isinstance(e, asyncio.TimeoutError) else "cancelled"
+        logger.warning(f"CLI '{cmd}' {label} after {timeout_s}s")
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+        if isinstance(e, asyncio.CancelledError):
+            raise  # re-raise so caller sees cancellation
         return None
     except Exception as e:
         logger.warning(f"CLI '{cmd}' failed: {e}")
