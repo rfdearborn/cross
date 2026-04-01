@@ -716,12 +716,12 @@ DASHBOARD_HTML = (
   /* Filter bar */
   .filter-bar {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     margin-bottom: 12px;
-    flex-wrap: wrap;
     align-items: center;
+    flex-wrap: wrap;
   }
-  .filter-bar input {
+  .filter-bar input[type="text"] {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -731,33 +731,56 @@ DASHBOARD_HTML = (
     outline: none;
     width: 200px;
   }
-  .filter-bar input:focus { border-color: var(--accent); }
-  .filter-bar input::placeholder { color: var(--text-dim); }
-  .filter-pill {
+  .filter-bar input[type="text"]:focus { border-color: var(--accent); }
+  .filter-bar input[type="text"]::placeholder { color: var(--text-dim); }
+  .multiselect {
+    position: relative;
     display: inline-block;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
+  }
+  .multiselect-btn {
+    background: var(--surface);
     border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-dim);
-    transition: all 0.15s;
+    border-radius: 6px;
+    padding: 4px 22px 4px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
     user-select: none;
   }
-  .filter-pill.active {
-    background: var(--accent);
-    color: #fff;
-    border-color: var(--accent);
+  .multiselect-btn:hover { border-color: var(--accent); }
+  .multiselect.open .multiselect-btn { border-color: var(--accent); }
+  .multiselect-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 0;
+    min-width: 100%;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   }
-  .filter-pill:hover { opacity: 0.85; }
-  .filter-sep {
-    width: 1px;
-    height: 18px;
-    background: var(--border);
-    margin: 0 2px;
+  .multiselect.open .multiselect-menu { display: block; }
+  .multiselect-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
   }
+  .multiselect-item:hover { background: var(--border); }
+  .multiselect-item input { margin: 0; cursor: pointer; }
 
   /* Notification modal */
   .notif-modal-overlay {
@@ -862,15 +885,9 @@ DASHBOARD_HTML = (
     <h2>Live Event Feed</h2>
     <div class="filter-bar" id="filter-bar">
       <input type="text" id="filter-search" placeholder="Search events...">
-      <div class="filter-sep"></div>
-      <span id="agent-filters"></span>
-      <div class="filter-sep"></div>
-      <span class="filter-pill active" data-filter="type" data-value="all">all</span>
-      <span class="filter-pill" data-filter="type" data-value="request">request</span>
-      <span class="filter-pill" data-filter="type" data-value="tool call">tool call</span>
-      <span class="filter-pill" data-filter="type" data-value="response">response</span>
-      <span class="filter-pill" data-filter="type" data-value="gate">gate</span>
-      <span class="filter-pill" data-filter="type" data-value="sentinel">sentinel</span>
+      <div class="multiselect" id="ms-level" data-label="Level" data-key="level"></div>
+      <div class="multiselect" id="ms-agent" data-label="Source" data-key="agent"></div>
+      <div class="multiselect" id="ms-type" data-label="Type" data-key="type"></div>
     </div>
     <div id="event-feed" class="event-feed"><p class="empty" id="feed-empty">Waiting for events...</p></div>
   </section>
@@ -1056,6 +1073,26 @@ DASHBOARD_HTML = (
     return t.replace("Event", "").toLowerCase();
   }
 
+  function levelFor(ev) {
+    var t = ev.event_type;
+    if (t === "ErrorEvent") return "error";
+    if (t === "GateDecisionEvent") {
+      var a = ev.action || "allow";
+      if (a === "block") return "block";
+      if (a === "alert") return "alert";
+      if (a === "escalate") return "escalate";
+      return "info";
+    }
+    if (t === "SentinelReviewEvent") {
+      var a = ev.action || "allow";
+      if (a === "halt_session") return "error";
+      if (a === "escalate") return "escalate";
+      if (a === "alert") return "alert";
+      return "info";
+    }
+    return "info";
+  }
+
   function detailText(ev) {
     const t = ev.event_type;
     if (t === "ToolUseEvent") {
@@ -1095,6 +1132,7 @@ DASHBOARD_HTML = (
     // Store filterable data on the element
     row.dataset.type = label.startsWith("gate:") ? "gate" : label;
     row.dataset.agent = agent;
+    row.dataset.level = levelFor(ev);
     row.dataset.search = (agent + " " + label + " " + full).toLowerCase();
     var evTs = ev.ts || Date.now()/1000;
     row.innerHTML =
@@ -1145,7 +1183,7 @@ DASHBOARD_HTML = (
     // Track agent for agent filter pills
     if (agent && !knownAgents.has(agent)) {
       knownAgents.add(agent);
-      addAgentPill(agent);
+      addAgentOption(agent);
     }
     eventFeed.prepend(row);
     while (eventFeed.children.length > MAX_FEED) {
@@ -1154,26 +1192,135 @@ DASHBOARD_HTML = (
     applyFiltersToRow(row);
   }
 
+  // --- Multiselect filter widget ---
+  function initMultiselect(container, values) {
+    var label = container.dataset.label;
+    var btn = document.createElement("div");
+    btn.className = "multiselect-btn";
+    var menu = document.createElement("div");
+    menu.className = "multiselect-menu";
+    container.appendChild(btn);
+    container.appendChild(menu);
+    container._selected = new Set(values);
+    container._allValues = values.slice();
+
+    function render() {
+      menu.innerHTML = "";
+      // "all" toggle
+      var allItem = document.createElement("label");
+      allItem.className = "multiselect-item";
+      allItem.style.borderBottom = "1px solid var(--border)";
+      allItem.style.marginBottom = "2px";
+      allItem.style.paddingBottom = "6px";
+      var allCb = document.createElement("input");
+      allCb.type = "checkbox";
+      allCb.checked = container._selected.size === container._allValues.length;
+      allCb.addEventListener("change", function() {
+        if (allCb.checked) {
+          container._allValues.forEach(function(v) { container._selected.add(v); });
+        } else {
+          container._selected.clear();
+        }
+        // Sync individual checkboxes
+        menu.querySelectorAll("input[type=checkbox]").forEach(function(cb, i) {
+          if (i === 0) return; // skip the all checkbox itself
+          cb.checked = allCb.checked;
+        });
+        updateLabel();
+        applyAllFilters();
+      });
+      allItem.appendChild(allCb);
+      allItem.appendChild(document.createTextNode("all"));
+      menu.appendChild(allItem);
+      // Individual items
+      container._allValues.forEach(function(v) {
+        var item = document.createElement("label");
+        item.className = "multiselect-item";
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = container._selected.has(v);
+        cb.addEventListener("change", function() {
+          if (cb.checked) container._selected.add(v);
+          else container._selected.delete(v);
+          // Sync "all" checkbox
+          allCb.checked = container._selected.size === container._allValues.length;
+          updateLabel();
+          applyAllFilters();
+        });
+        item.appendChild(cb);
+        item.appendChild(document.createTextNode(v));
+        menu.appendChild(item);
+      });
+    }
+
+    function updateLabel() {
+      if (container._selected.size === 0 || container._selected.size === container._allValues.length) {
+        btn.textContent = label + ": all";
+      } else {
+        var sel = [];
+        container._allValues.forEach(function(v) { if (container._selected.has(v)) sel.push(v); });
+        var text = sel.join(", ");
+        btn.textContent = label + ": " + (text.length > 20 ? text.slice(0, 18) + "\u2026" : text);
+      }
+    }
+
+    container._render = render;
+    container._updateLabel = updateLabel;
+    render();
+    updateLabel();
+
+    btn.addEventListener("click", function(e) {
+      e.stopPropagation();
+      // Close other open multiselects
+      document.querySelectorAll(".multiselect.open").forEach(function(ms) {
+        if (ms !== container) ms.classList.remove("open");
+      });
+      container.classList.toggle("open");
+    });
+  }
+
+  // Close menus on outside click
+  document.addEventListener("click", function() {
+    document.querySelectorAll(".multiselect.open").forEach(function(ms) {
+      ms.classList.remove("open");
+    });
+  });
+  // Prevent menu clicks from closing
+  document.querySelectorAll(".multiselect").forEach(function(ms) {
+    ms.addEventListener("click", function(e) { e.stopPropagation(); });
+  });
+
   // --- Filtering ---
+  var levelValues = ["info", "alert", "block", "escalate", "error"];
+  var typeValues = ["request", "tool call", "response", "gate", "sentinel"];
+  var msLevel = document.getElementById("ms-level");
+  var msAgent = document.getElementById("ms-agent");
+  var msType = document.getElementById("ms-type");
+  initMultiselect(msLevel, levelValues);
+  initMultiselect(msAgent, []);
+  initMultiselect(msType, typeValues);
+
   const knownAgents = new Set();
-  let activeTypeFilter = "all";
-  let activeAgentFilter = "all";
   let searchQuery = "";
 
-  function addAgentPill(agent) {
-    var pill = document.createElement("span");
-    pill.className = "filter-pill";
-    pill.dataset.filter = "agent";
-    pill.dataset.value = agent;
-    pill.textContent = agent;
-    pill.addEventListener("click", function() { toggleFilter(pill); });
-    document.getElementById("agent-filters").appendChild(pill);
+  function addAgentOption(agent) {
+    msAgent._allValues.push(agent);
+    msAgent._selected.add(agent);
+    msAgent._render();
+    msAgent._updateLabel();
+  }
+
+  function matchesFilter(ms, value) {
+    // If all selected (or none deselected), show everything
+    if (ms._selected.size === 0 || ms._selected.size === ms._allValues.length) return true;
+    return ms._selected.has(value);
   }
 
   function applyFiltersToRow(row) {
     var show = true;
-    if (activeTypeFilter !== "all" && row.dataset.type !== activeTypeFilter) show = false;
-    if (activeAgentFilter !== "all" && row.dataset.agent !== activeAgentFilter) show = false;
+    if (!matchesFilter(msLevel, row.dataset.level)) show = false;
+    if (!matchesFilter(msAgent, row.dataset.agent)) show = false;
+    if (!matchesFilter(msType, row.dataset.type)) show = false;
     if (searchQuery && row.dataset.search.indexOf(searchQuery) < 0) show = false;
     row.classList.toggle("hidden", !show);
   }
@@ -1183,40 +1330,11 @@ DASHBOARD_HTML = (
     for (var i = 0; i < rows.length; i++) applyFiltersToRow(rows[i]);
   }
 
-  function toggleFilter(pill) {
-    var group = pill.dataset.filter;
-    var value = pill.dataset.value;
-    // Deactivate siblings
-    document.querySelectorAll('.filter-pill[data-filter="' + group + '"]').forEach(function(p) {
-      p.classList.remove("active");
-    });
-    pill.classList.add("active");
-    if (group === "type") activeTypeFilter = value;
-    if (group === "agent") activeAgentFilter = value;
-    applyAllFilters();
-  }
-
-  // Wire up type filter pills
-  document.querySelectorAll('.filter-pill[data-filter="type"]').forEach(function(pill) {
-    pill.addEventListener("click", function() { toggleFilter(pill); });
-  });
-
   // Wire up search
   document.getElementById("filter-search").addEventListener("input", function(e) {
     searchQuery = e.target.value.toLowerCase();
     applyAllFilters();
   });
-
-  // Add "all" agent pill
-  (function() {
-    var allPill = document.createElement("span");
-    allPill.className = "filter-pill active";
-    allPill.dataset.filter = "agent";
-    allPill.dataset.value = "all";
-    allPill.textContent = "all";
-    allPill.addEventListener("click", function() { toggleFilter(allPill); });
-    document.getElementById("agent-filters").appendChild(allPill);
-  })();
 
   // --- Browser Notifications ---
   const notifBtn = document.getElementById("notif-btn");
