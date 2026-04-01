@@ -278,7 +278,7 @@ def get_agent_status() -> dict[str, Any]:
         pid = session.get("pid")
         last_activity = _session_last_activity.get(sid, 0)
         active = (now - last_activity) < settings.activity_threshold_seconds if last_activity else False
-        monitored.append({"agent": agent, "project": project, "label": label, "active": active})
+        monitored.append({"agent": agent, "project": project, "label": label, "active": active, "session_id": sid})
         if pid:
             monitored_pids.add(int(pid))
 
