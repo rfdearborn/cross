@@ -126,9 +126,17 @@ class TestDetectRunningAgents:
         assert "claude" not in result or own_pid not in [str(p) for p in result.get("claude", [])]
 
 
+def _mock_kill_alive(pid, sig):
+    """Simulate all test PIDs as alive for os.kill(pid, 0) liveness checks."""
+    if sig == 0:
+        return  # process is "alive"
+    raise ProcessLookupError
+
+
+@patch("cross.daemon.os.kill", side_effect=_mock_kill_alive)
 class TestGetAgentStatus:
     @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
-    def test_session_shows_as_monitored(self, mock_detect):
+    def test_session_shows_as_monitored(self, mock_detect, _mock_kill):
         _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
         status = get_agent_status()
         assert status["monitored_count"] == 1
@@ -136,13 +144,13 @@ class TestGetAgentStatus:
         assert status["unmonitored_count"] == 0
 
     @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
-    def test_unmonitored_agent_detected(self, mock_detect):
+    def test_unmonitored_agent_detected(self, mock_detect, _mock_kill):
         status = get_agent_status()
         assert status["unmonitored_count"] == 1
         assert status["unmonitored"][0]["agent"] == "claude"
 
     @patch("cross.daemon._detect_running_agents", return_value={"openclaw": [5678]})
-    def test_gate_agent_shows_as_monitored(self, mock_detect):
+    def test_gate_agent_shows_as_monitored(self, mock_detect, _mock_kill):
         _gate_agents.add("openclaw")
         status = get_agent_status()
         assert status["monitored_count"] == 1
@@ -150,21 +158,23 @@ class TestGetAgentStatus:
         assert status["unmonitored_count"] == 0
 
     @patch("cross.daemon._detect_running_agents", return_value={})
-    def test_stale_session_cleaned_up(self, mock_detect):
+    def test_stale_session_cleaned_up(self, mock_detect, mock_kill):
+        # Override the class-level mock: PID 9999 is dead
+        mock_kill.side_effect = ProcessLookupError
         _sessions["s1"] = {"agent": "claude", "project": "old", "pid": 9999}
         status = get_agent_status()
         assert status["monitored_count"] == 0
         assert "s1" not in _sessions
 
     @patch("cross.daemon._detect_running_agents", return_value={})
-    def test_stale_gate_agent_cleaned_up(self, mock_detect):
+    def test_stale_gate_agent_cleaned_up(self, mock_detect, _mock_kill):
         _gate_agents.add("openclaw")
         status = get_agent_status()
         assert "openclaw" not in _gate_agents
         assert status["monitored_count"] == 0
 
     @patch("cross.daemon._detect_running_agents", return_value={})
-    def test_no_agents(self, mock_detect):
+    def test_no_agents(self, mock_detect, _mock_kill):
         status = get_agent_status()
         assert status["monitored_count"] == 0
         assert status["unmonitored_count"] == 0
@@ -173,7 +183,7 @@ class TestGetAgentStatus:
         "cross.daemon._detect_running_agents",
         return_value={"claude": [1234], "openclaw": [5678]},
     )
-    def test_mixed_monitored_and_unmonitored(self, mock_detect):
+    def test_mixed_monitored_and_unmonitored(self, mock_detect, _mock_kill):
         _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
         status = get_agent_status()
         assert status["monitored_count"] == 1
@@ -184,7 +194,7 @@ class TestGetAgentStatus:
         "cross.daemon._detect_running_agents",
         return_value={"claude": [1234], "claude (desktop)": [5678]},
     )
-    def test_desktop_session_shows_as_unmonitored(self, mock_detect):
+    def test_desktop_session_shows_as_unmonitored(self, mock_detect, _mock_kill):
         """CLI session monitored via wrap, Desktop session shown as unmonitored."""
         _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
         status = get_agent_status()
@@ -196,14 +206,14 @@ class TestGetAgentStatus:
         "cross.daemon._detect_running_agents",
         return_value={"claude (desktop)": [5678]},
     )
-    def test_desktop_only_shows_as_unmonitored(self, mock_detect):
+    def test_desktop_only_shows_as_unmonitored(self, mock_detect, _mock_kill):
         status = get_agent_status()
         assert status["monitored_count"] == 0
         assert status["unmonitored_count"] == 1
         assert status["unmonitored"][0]["agent"] == "claude (desktop)"
 
     @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
-    def test_active_agent_has_active_true(self, mock_detect):
+    def test_active_agent_has_active_true(self, mock_detect, _mock_kill):
         """Agent with recent activity should be marked active."""
         _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
         record_session_activity("s1")
@@ -211,7 +221,7 @@ class TestGetAgentStatus:
         assert status["monitored"][0]["active"] is True
 
     @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
-    def test_idle_agent_has_active_false(self, mock_detect):
+    def test_idle_agent_has_active_false(self, mock_detect, _mock_kill):
         """Agent with no recent activity should be marked inactive."""
         _sessions["s1"] = {"agent": "claude", "project": "cross", "pid": 1234}
         # No activity recorded
@@ -219,7 +229,7 @@ class TestGetAgentStatus:
         assert status["monitored"][0]["active"] is False
 
     @patch("cross.daemon._detect_running_agents", return_value={"claude": [1234]})
-    def test_stale_activity_has_active_false(self, mock_detect):
+    def test_stale_activity_has_active_false(self, mock_detect, _mock_kill):
         """Agent with old activity should be marked inactive."""
         import time
 

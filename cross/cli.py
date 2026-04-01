@@ -756,6 +756,7 @@ def _register_session(daemon_url: str, info, log: logging.Logger):
                 "project": info.project,
                 "cwd": info.cwd,
                 "started_at": info.started_at,
+                "pid": os.getpid(),
             },
             timeout=5,
         )
