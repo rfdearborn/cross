@@ -242,21 +242,20 @@ def get_agent_status() -> dict[str, Any]:
     running = _detect_running_agents()
     running_agent_names = set(running.keys())
 
-    # Clean up stale sessions: drop if agent process no longer running,
-    # then deduplicate by agent+project (keep newest per group).
-    stale = [sid for sid, s in _sessions.items() if s.get("agent") not in running_agent_names]
-    # Deduplicate: for each agent+project, keep only the newest session
-    groups: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    # Clean up stale sessions: if the session has a PID, check that specific
+    # process; otherwise fall back to checking if any agent of that type is running.
+    stale = []
     for sid, s in _sessions.items():
-        if sid in stale:
-            continue
-        key = (s.get("agent", ""), s.get("project", ""))
-        groups.setdefault(key, []).append((sid, s.get("started_at", 0)))
-    for entries in groups.values():
-        if len(entries) > 1:
-            entries.sort(key=lambda x: x[1], reverse=True)
-            for sid, _ in entries[1:]:
+        pid = s.get("pid")
+        if pid:
+            try:
+                os.kill(int(pid), 0)  # check if process is alive
+            except (ProcessLookupError, ValueError):
                 stale.append(sid)
+            except PermissionError:
+                pass  # process exists but we can't signal it
+        elif s.get("agent") not in running_agent_names:
+            stale.append(sid)
     for sid in stale:
         del _sessions[sid]
 
