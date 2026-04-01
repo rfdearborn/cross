@@ -781,6 +781,19 @@ DASHBOARD_HTML = (
   }
   .multiselect-item:hover { background: var(--border); }
   .multiselect-item input { margin: 0; cursor: pointer; }
+  .multiselect-item .only-btn {
+    margin-left: auto;
+    color: var(--accent);
+    font-size: 11px;
+    opacity: 0;
+    pointer-events: none;
+    cursor: pointer;
+  }
+  .multiselect-item:hover .only-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .multiselect-item .only-btn:hover { text-decoration: underline; }
 
   /* Notification modal */
   .notif-modal-overlay {
@@ -1249,6 +1262,19 @@ DASHBOARD_HTML = (
         });
         item.appendChild(cb);
         item.appendChild(document.createTextNode(v));
+        var onlyBtn = document.createElement("span");
+        onlyBtn.className = "only-btn";
+        onlyBtn.textContent = "Only";
+        onlyBtn.addEventListener("click", function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          container._selected.clear();
+          container._selected.add(v);
+          render();
+          updateLabel();
+          applyAllFilters();
+        });
+        item.appendChild(onlyBtn);
         menu.appendChild(item);
       });
     }
