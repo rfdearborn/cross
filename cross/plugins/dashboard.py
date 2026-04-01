@@ -1771,11 +1771,21 @@ DASHBOARD_HTML = (
   const agentStatusEl = document.getElementById("agent-status");
 
   function renderStatus(data) {
+    // Count duplicate labels to disambiguate with short session ID
+    var labelCounts = {};
+    for (var i = 0; i < data.monitored.length; i++) {
+      var lbl = data.monitored[i].label;
+      labelCounts[lbl] = (labelCounts[lbl] || 0) + 1;
+    }
     var html = "";
     for (var i = 0; i < data.monitored.length; i++) {
       var m = data.monitored[i];
       var state = m.active ? "active" : "stopped";
-      html += '<span class="agent-chip monitored ' + state + '"><span class="dot"></span>' + escHtml(m.label) + '</span>';
+      var display = m.label;
+      if (labelCounts[m.label] > 1 && m.session_id) {
+        display += " (" + m.session_id.slice(0, 4) + ")";
+      }
+      html += '<span class="agent-chip monitored ' + state + '"><span class="dot"></span>' + escHtml(display) + '</span>';
     }
     for (var i = 0; i < data.unmonitored.length; i++) {
       var u = data.unmonitored[i];
