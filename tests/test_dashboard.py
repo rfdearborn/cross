@@ -433,6 +433,10 @@ class TestNotificationParity:
             events.add(("ErrorEvent", "*"))
         return events
 
+    @pytest.mark.skipif(
+        not __import__("importlib").util.find_spec("slack_sdk"),
+        reason="slack_sdk not installed",
+    )
     def test_browser_covers_all_slack_notification_events(self):
         """Browser notifications should fire for every event that Slack notifies on."""
         slack_events = self._extract_slack_notified_events()
